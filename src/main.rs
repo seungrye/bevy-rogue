@@ -31,7 +31,7 @@ fn main() {
             ..default()
         }))
         // 게임 관련 플러그인들을 추가합니다.
-        .add_plugins(modules::map::bsp::BspMapPlugin)
+        .add_plugins(modules::map::MapPlugin { algorithm: modules::map::MapAlgorithm::Bsp })
         .add_plugins(modules::player::PlayerPlugin)
         .add_plugins(modules::trigger::TriggerPlugin)
         .add_plugins(modules::ui::GameUiPlugin)
