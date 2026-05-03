@@ -101,7 +101,7 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
                 ..default()
             },
             Monster { name: name.to_string(), tile_x: cx, tile_y: cy },
-            CombatStats { hp, max_hp: hp, attack: atk, defense: def },
+            CombatStats { hp, max_hp: hp, mp: 0, max_mp: 0, attack: atk, defense: def },
         ));
     }
 }

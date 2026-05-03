@@ -9,10 +9,27 @@ use crate::modules::{
     ui::LogMessage,
 };
 use bevy::prelude::*;
+use bevy::sprite::Anchor;
 
 pub const PLAYER_HP: i32 = 30;
+pub const PLAYER_MP: i32 = 20;
 pub const PLAYER_ATK: i32 = 5;
 pub const PLAYER_DEF: i32 = 1;
+
+const BAR_WIDTH: f32 = 14.0;
+const BAR_HEIGHT: f32 = 2.0;
+const BAR_X: f32 = -BAR_WIDTH / 2.0;
+const HP_BAR_Y: f32 = 11.0;
+const MP_BAR_Y: f32 = 14.0;
+
+#[derive(Component)] struct HpBarFill;
+#[derive(Component)] struct MpBarFill;
+
+pub fn hp_color(ratio: f32) -> Color {
+    if ratio > 0.5 { Color::GREEN }
+    else if ratio > 0.25 { Color::YELLOW }
+    else { Color::RED }
+}
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PlayerSystemSet {
@@ -74,8 +91,44 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, map_res:
             ..default()
         },
         Player,
-        CombatStats { hp: PLAYER_HP, max_hp: PLAYER_HP, attack: PLAYER_ATK, defense: PLAYER_DEF },
-    ));
+        CombatStats {
+            hp: PLAYER_HP, max_hp: PLAYER_HP,
+            mp: PLAYER_MP, max_mp: PLAYER_MP,
+            attack: PLAYER_ATK, defense: PLAYER_DEF,
+        },
+    )).with_children(|parent| {
+        let bg = Color::rgba(0.15, 0.15, 0.15, 0.9);
+        // HP 바 배경
+        parent.spawn(SpriteBundle {
+            sprite: Sprite { custom_size: Some(Vec2::new(BAR_WIDTH, BAR_HEIGHT)), color: bg, anchor: Anchor::CenterLeft, ..default() },
+            transform: Transform::from_xyz(BAR_X, HP_BAR_Y, 0.1),
+            ..default()
+        });
+        // HP 바 전경
+        parent.spawn((
+            SpriteBundle {
+                sprite: Sprite { custom_size: Some(Vec2::new(BAR_WIDTH, BAR_HEIGHT)), color: Color::GREEN, anchor: Anchor::CenterLeft, ..default() },
+                transform: Transform::from_xyz(BAR_X, HP_BAR_Y, 0.2),
+                ..default()
+            },
+            HpBarFill,
+        ));
+        // MP 바 배경
+        parent.spawn(SpriteBundle {
+            sprite: Sprite { custom_size: Some(Vec2::new(BAR_WIDTH, BAR_HEIGHT)), color: bg, anchor: Anchor::CenterLeft, ..default() },
+            transform: Transform::from_xyz(BAR_X, MP_BAR_Y, 0.1),
+            ..default()
+        });
+        // MP 바 전경
+        parent.spawn((
+            SpriteBundle {
+                sprite: Sprite { custom_size: Some(Vec2::new(BAR_WIDTH, BAR_HEIGHT)), color: Color::rgb(0.2, 0.5, 1.0), anchor: Anchor::CenterLeft, ..default() },
+                transform: Transform::from_xyz(BAR_X, MP_BAR_Y, 0.2),
+                ..default()
+            },
+            MpBarFill,
+        ));
+    });
 }
 
 fn player_movement(
@@ -224,11 +277,49 @@ fn update_fov(
     if elapsed.as_micros() > 0 { info!("FOV: {:?}", elapsed); }
 }
 
+fn update_player_bars(
+    player_query: Query<&CombatStats, (With<Player>, Changed<CombatStats>)>,
+    mut hp_query: Query<&mut Sprite, (With<HpBarFill>, Without<MpBarFill>)>,
+    mut mp_query: Query<&mut Sprite, (With<MpBarFill>, Without<HpBarFill>)>,
+) {
+    let Ok(stats) = player_query.get_single() else { return };
+
+    if let Ok(mut sprite) = hp_query.get_single_mut() {
+        let ratio = (stats.hp as f32 / stats.max_hp as f32).clamp(0.0, 1.0);
+        sprite.custom_size = Some(Vec2::new(BAR_WIDTH * ratio, BAR_HEIGHT));
+        sprite.color = hp_color(ratio);
+    }
+    if let Ok(mut sprite) = mp_query.get_single_mut() {
+        let ratio = if stats.max_mp > 0 {
+            (stats.mp as f32 / stats.max_mp as f32).clamp(0.0, 1.0)
+        } else { 0.0 };
+        sprite.custom_size = Some(Vec2::new(BAR_WIDTH * ratio, BAR_HEIGHT));
+    }
+}
+
 pub struct PlayerPlugin;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hp_color_green_above_half() {
+        assert_eq!(hp_color(1.0), Color::GREEN);
+        assert_eq!(hp_color(0.51), Color::GREEN);
+    }
+
+    #[test]
+    fn hp_color_yellow_quarter_to_half() {
+        assert_eq!(hp_color(0.5), Color::YELLOW);
+        assert_eq!(hp_color(0.26), Color::YELLOW);
+    }
+
+    #[test]
+    fn hp_color_red_at_or_below_quarter() {
+        assert_eq!(hp_color(0.25), Color::RED);
+        assert_eq!(hp_color(0.0), Color::RED);
+    }
 
     #[test]
     fn tick_hold_immediate_on_just_pressed() {
@@ -284,6 +375,7 @@ impl Plugin for PlayerPlugin {
                 smooth_player_lerp.after(PlayerSystemSet::Movement),
                 update_fov.after(smooth_player_lerp),
                 camera_follow_player.after(update_fov),
+                update_player_bars,
                 respawn_player_on_regen.after(MapSystemSet::ExecuteRegen),
             ));
     }
