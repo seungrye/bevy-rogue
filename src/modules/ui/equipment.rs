@@ -15,6 +15,9 @@ const BOW_ICON:    &str = "\u{E978}";
 const ARMOR_ICON:  &str = "\u{EA96}";
 const POTION_ICON: &str = "\u{EA72}";
 
+const PANEL_WIDTH: f32 = 260.0;
+const FONT_SIZE:   f32 = 13.5;
+
 #[derive(Resource, Default)]
 pub struct EquipmentUiState {
     pub cursor: usize,
@@ -45,37 +48,30 @@ fn setup_equipment_panel(mut commands: Commands, asset_server: Res<AssetServer>)
     commands.spawn((
         NodeBundle {
             style: Style {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
                 position_type: PositionType::Absolute,
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
+                right: Val::Px(0.0),
+                top: Val::Px(0.0),
+                bottom: Val::Px(0.0),
+                width: Val::Px(PANEL_WIDTH),
+                padding: UiRect::all(Val::Px(10.0)),
+                flex_direction: FlexDirection::Column,
+                overflow: Overflow::clip(),
                 ..default()
             },
+            background_color: Color::rgba(0.0, 0.05, 0.0, 0.97).into(),
             z_index: ZIndex::Global(100),
             visibility: Visibility::Hidden,
             ..default()
         },
         EquipmentPanel,
-    )).with_children(|root| {
-        root.spawn(NodeBundle {
-            style: Style {
-                min_width: Val::Px(320.0),
-                padding: UiRect::all(Val::Px(18.0)),
-                flex_direction: FlexDirection::Column,
-                ..default()
-            },
-            background_color: Color::rgba(0.05, 0.05, 0.08, 0.95).into(),
-            ..default()
-        }).with_children(|panel| {
-            panel.spawn((
-                TextBundle::from_section(
-                    "",
-                    TextStyle { font, font_size: 16.0, color: Color::WHITE },
-                ),
-                EquipmentPanelContent,
-            ));
-        });
+    )).with_children(|panel| {
+        panel.spawn((
+            TextBundle::from_section(
+                "",
+                TextStyle { font, font_size: FONT_SIZE, color: Color::WHITE },
+            ),
+            EquipmentPanelContent,
+        ));
     });
 }
 
@@ -215,75 +211,115 @@ pub(crate) fn build_panel_sections(
     kr_font: &Handle<Font>,
     rpg_font: &Handle<Font>,
 ) -> Vec<TextSection> {
-    let kr  = |v: &str| ts(v, kr_font.clone(), 16.0, Color::WHITE);
-    let dim = |v: &str, c: Color| ts(v, rpg_font.clone(), 16.0, c);
+    let kr  = |v: &str, c: Color| ts(v,  kr_font.clone(),  FONT_SIZE, c);
+    let ico = |v: &str, c: Color| ts(v,  rpg_font.clone(), FONT_SIZE, c);
 
-    let mut sections = vec![
-        kr("=== 장비 관리 ===\n↑↓: 선택  Enter: 장착/사용  E·Esc: 닫기\n\n"),
-    ];
+    // Cogmind 색상 팔레트 (녹색 계열)
+    let c_header   = Color::rgba(0.3, 1.0, 0.3, 1.0);
+    let c_category = Color::rgba(0.55, 0.75, 0.55, 0.9);
+    let c_active   = Color::rgba(0.45, 0.95, 0.45, 1.0);
+    let c_stat     = Color::rgba(0.3,  1.0,  0.3,  1.0);
+    let c_inactive = Color::rgba(0.28, 0.28, 0.28, 0.9);
+    let c_cursor   = Color::rgba(1.0,  1.0,  0.2,  1.0);
+    let c_normal   = Color::rgba(0.82, 0.82, 0.82, 1.0);
+    let c_equipped = Color::rgba(0.3,  1.0,  0.3,  1.0);
+    let c_sep      = Color::rgba(0.2,  0.45, 0.2,  0.8);
+    let c_hint     = Color::rgba(0.3,  0.5,  0.3,  0.85);
 
-    let (weapon_icon_str, weapon_icon_color) = match equipment.weapon {
-        Some(WeaponKind::Sword) => (WEAPON_ICON, Color::rgba(1.0, 1.0, 0.5, 1.0)),
-        Some(WeaponKind::Spear) => (SPEAR_ICON,  Color::rgba(1.0, 1.0, 0.5, 1.0)),
-        Some(WeaponKind::Bow)   => (BOW_ICON,    Color::rgba(1.0, 1.0, 0.5, 1.0)),
-        None                    => (WEAPON_ICON, Color::rgba(1.0, 1.0, 0.5, 0.3)),
-    };
-    let weapon_status = match equipment.weapon {
-        None    => "없음\n".to_string(),
-        Some(w) => format!("{} (ATK {})\n", w.display_name(), weapon_attack(w)),
-    };
-    sections.push(dim(&format!("{} ", weapon_icon_str), weapon_icon_color));
-    sections.push(ts(weapon_status, kr_font.clone(), 16.0, Color::rgba(1.0, 1.0, 0.5, 0.9)));
+    let mut s: Vec<TextSection> = Vec::new();
 
-    let armor_icon_color = if equipment.armor.is_some() {
-        Color::rgba(0.5, 0.7, 1.0, 1.0)
-    } else {
-        Color::rgba(0.5, 0.7, 1.0, 0.3)
-    };
-    let armor_status = match equipment.armor {
-        None    => "없음\n\n--- 인벤토리 ---\n".to_string(),
-        Some(a) => format!("{} (+{}DEF)\n\n--- 인벤토리 ---\n", a.display_name(), armor_defense_bonus(a)),
-    };
-    sections.push(dim(&format!("{} ", ARMOR_ICON), armor_icon_color));
-    sections.push(ts(armor_status, kr_font.clone(), 16.0, Color::rgba(0.5, 0.7, 1.0, 0.9)));
+    // ── PARTS 헤더 ──
+    s.push(kr("/ P A R T S /\n",         c_header));
+    s.push(kr("─────────────────────\n", c_sep));
+
+    // 무기 슬롯
+    s.push(kr(" W e a p o n\n", c_category));
+    match equipment.weapon {
+        None => {
+            s.push(ico(&format!("  {} ", WEAPON_ICON), c_inactive));
+            s.push(kr("없음\n",                        c_inactive));
+        }
+        Some(w) => {
+            let icon_str = match w {
+                WeaponKind::Sword => WEAPON_ICON,
+                WeaponKind::Spear => SPEAR_ICON,
+                WeaponKind::Bow   => BOW_ICON,
+            };
+            let atk = weapon_attack(w);
+            let bar = "|".repeat(atk as usize);
+            s.push(ico(&format!("  {} ", icon_str),                        c_active));
+            s.push(kr(&format!("{}  ({})", w.display_name(), bar),         c_active));
+            s.push(kr(&format!("  ATK {}\n", atk),                        c_stat));
+        }
+    }
+
+    // 방어구 슬롯
+    s.push(kr("\n A r m o r\n", c_category));
+    match equipment.armor {
+        None => {
+            s.push(ico(&format!("  {} ", ARMOR_ICON), c_inactive));
+            s.push(kr("없음\n",                        c_inactive));
+        }
+        Some(a) => {
+            let def = armor_defense_bonus(a);
+            let bar = "|".repeat((def * 3) as usize);
+            s.push(ico(&format!("  {} ", ARMOR_ICON),                      c_active));
+            s.push(kr(&format!("{}  ({})", a.display_name(), bar),         c_active));
+            s.push(kr(&format!("  +{}DEF\n", def),                        c_stat));
+        }
+    }
+
+    // ── INVENTORY 헤더 ──
+    s.push(kr("\n/ I N V E N T O R Y /\n", c_header));
+    s.push(kr("─────────────────────\n",   c_sep));
 
     let total = inventory.items.len() + inventory.consumables.len();
     if total == 0 {
-        sections.push(kr("  (비어있음)"));
+        s.push(kr("  (비어있음)\n", c_inactive));
     } else {
         let mut weapon_marked = false;
         let mut armor_marked  = false;
         for (i, inv_item) in inventory.items.iter().enumerate() {
-            let prefix = if i == cursor { "> " } else { "  " };
+            let (sel, color) = if i == cursor { (">", c_cursor) } else { (" ", c_normal) };
             let equipped = match inv_item.kind {
                 ItemKind::Weapon(w) if equipment.weapon == Some(w) && !weapon_marked => {
-                    weapon_marked = true; " [장착]"
+                    weapon_marked = true; true
                 }
                 ItemKind::Armor(a) if equipment.armor == Some(a) && !armor_marked => {
-                    armor_marked = true; " [장착]"
+                    armor_marked = true; true
                 }
-                _ => "",
+                _ => false,
             };
             let stat = match inv_item.kind {
                 ItemKind::Weapon(w) => format!(" (ATK {})", weapon_attack(w)),
                 ItemKind::Armor(a)  => format!(" (+{}DEF)", armor_defense_bonus(a)),
                 _                   => String::new(),
             };
-            let icon = item_kind_icon(&inv_item.kind);
-            sections.push(ts(prefix, kr_font.clone(), 16.0, Color::WHITE));
-            sections.push(dim(&format!("{} ", icon), Color::rgba(1.0, 0.9, 0.6, 0.8)));
-            sections.push(ts(format!("{}{}{}\n", inv_item.kind.display_name(), stat, equipped), kr_font.clone(), 16.0, Color::WHITE));
+            let icon_str = item_kind_icon(&inv_item.kind);
+            s.push(kr(&format!("{} {} ", sel, i + 1),                     color));
+            s.push(ico(&format!("{} ", icon_str),                          color));
+            s.push(kr(&format!("{}{}", inv_item.kind.display_name(), stat), color));
+            if equipped {
+                s.push(kr("  [장착]\n", c_equipped));
+            } else {
+                s.push(kr("\n", color));
+            }
         }
         let base = inventory.items.len();
         for (i, (ck, count)) in inventory.consumables.iter().enumerate() {
-            let prefix = if base + i == cursor { "> " } else { "  " };
-            sections.push(ts(prefix, kr_font.clone(), 16.0, Color::WHITE));
-            sections.push(dim(&format!("{} ", POTION_ICON), Color::rgba(1.0, 0.4, 0.4, 0.8)));
-            sections.push(ts(format!("{} x{}\n", ck.display_name(), count), kr_font.clone(), 16.0, Color::WHITE));
+            let idx = base + i;
+            let (sel, color) = if idx == cursor { (">", c_cursor) } else { (" ", c_normal) };
+            s.push(kr(&format!("{} {} ", sel, idx + 1),            color));
+            s.push(ico(&format!("{} ", POTION_ICON),                color));
+            s.push(kr(&format!("{}  x{}\n", ck.display_name(), count), color));
         }
     }
 
-    sections
+    // 푸터
+    s.push(kr("\n─────────────────────\n",          c_sep));
+    s.push(kr("↑↓ 이동  Enter 장착/사용\nEsc·E 닫기", c_hint));
+
+    s
 }
 
 pub(crate) fn build_panel_text(
