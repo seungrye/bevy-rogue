@@ -13,6 +13,7 @@ QuestDef(
             ],
             on_interact: [AdvancePhase("active")],
             auto_advance: None,
+            objective: Some("장로의 부탁을 들어주기로 했다."),
         ),
         "active": QuestPhaseDef(
             dialog: ["아직 보석을 찾지 못했나요? 던전 2층을 살펴보시오."],
@@ -21,6 +22,7 @@ QuestDef(
                 condition: HasItem("eternal_gem"),
                 next_phase: "ready",
             )),
+            objective: Some("숲을 지나 던전 2층에서 영원의 보석을 찾아라."),
         ),
         "ready": QuestPhaseDef(
             dialog: [
@@ -33,11 +35,13 @@ QuestDef(
                 AdvancePhase("done"),
             ],
             auto_advance: None,
+            objective: Some("마을 장로에게 영원의 보석을 가져다 주어라."),
         ),
         "done": QuestPhaseDef(
             dialog: ["덕분에 마을이 평화로워졌소. 감사합니다."],
             on_interact: [],
             auto_advance: None,
+            objective: Some("퀘스트 완료!"),
         ),
     },
 

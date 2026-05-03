@@ -26,6 +26,8 @@ pub struct QuestPhaseDef {
     #[serde(default)]
     pub on_interact: Vec<QuestAction>,
     pub auto_advance: Option<AutoAdvance>,
+    #[serde(default)]
+    pub objective: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -303,6 +305,7 @@ mod tests {
                     dialog: vec!["대화".into()],
                     on_interact: vec![QuestAction::AdvancePhase("active".into())],
                     auto_advance: None,
+                    objective: None,
                 });
                 m.insert("active".into(), QuestPhaseDef {
                     dialog: vec!["아직".into()],
@@ -311,6 +314,7 @@ mod tests {
                         condition: QuestCondition::HasItem("eternal_gem".into()),
                         next_phase: "ready".into(),
                     }),
+                    objective: Some("영원의 보석을 찾아라".into()),
                 });
                 m
             },

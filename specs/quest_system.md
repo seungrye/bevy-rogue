@@ -98,6 +98,21 @@ QuestDef(
 - [x] 이미 수집한 퀘스트 아이템은 재스폰 안 됨 (`QuestState.spawned` HashSet)
 - [ ] 퀘스트 진행상황은 `save/progress.ron` 에 저장·복원 (추후 구현)
 
+## 퀘스트 패널 (Q 키)
+
+- Q 키로 토글, 좌측 상단 고정
+- 패널 폭: 미니맵 폭과 동일 (`MINIMAP_DISPLAY_SIZE + 10 = 190px`)
+- 배경: 다크 그린 (`rgba(0, 0.05, 0, 0.97)`)
+- `QuestState.phases` 에 등록된 퀘스트만 표시 (NPC 첫 대화 이후)
+- 퀘스트별 표시 항목: 제목 + 현재 목표(`objective`) + 완료 여부
+- 완료(`done` 페이즈) 퀘스트는 흐린 색으로 표시
+
+### QuestPhaseDef 추가 필드
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `objective` | `Option<String>` | 퀘스트 로그에 표시할 목표 문구 |
+
 ## 구현 세부사항
 
 - `Villager` 컴포넌트에 `quest_id: Option<String>`, `quest_dialogue_idx: usize` 추가
