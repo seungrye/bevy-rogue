@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use crate::modules::{
     item::{PlayerInventory, ItemKind, QuestItemKind, InventoryItem, Item},
-    map::{MapResource, TILE_SIZE, tile_to_world_coords},
+    map::{MapResource, TILE_SIZE, tile_to_world_coords, UsedSpawnTiles, random_floor_tile_in_room},
     zone::{ZoneId, SpawnQuestPortalEvent},
 };
 
@@ -459,8 +459,11 @@ fn spawn_quest_items(
     map_res: Res<MapResource>,
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    mut used_spawn: ResMut<UsedSpawnTiles>,
 ) {
     if !map_res.is_changed() { return; }
+
+    let mut rng = rand::thread_rng();
 
     for (quest_id, quest_def) in &registry.quests {
         let current_phase = match state.phases.get(quest_id) {
@@ -475,9 +478,16 @@ fn spawn_quest_items(
 
             let Some(kind) = item_id_to_kind(&spawn.item) else { continue };
             let map = &map_res.0;
-            let (tx, ty) = map.rooms.last()
-                .map(|r| r.center())
-                .unwrap_or((map.width / 2, map.height / 2));
+
+            // 플레이어 스폰 방(첫 번째)을 제외한 방에서 랜덤 배치.
+            // 가용 방이 없으면 마지막 방으로 폴백.
+            let rooms = &map.rooms;
+            let candidate_rooms: Vec<_> = if rooms.len() > 1 { rooms[1..].iter().collect() } else { rooms.iter().collect() };
+
+            let (tx, ty) = candidate_rooms.iter()
+                .flat_map(|r| random_floor_tile_in_room(r, map, &mut used_spawn.0, &mut rng))
+                .next()
+                .unwrap_or_else(|| map.rooms.last().map(|r| r.center()).unwrap_or((map.width / 2, map.height / 2)));
 
             let pos = tile_to_world_coords(tx, ty);
             let font = asset_server.load("fonts/FiraMono-Medium.ttf");

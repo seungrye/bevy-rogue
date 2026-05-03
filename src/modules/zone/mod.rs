@@ -7,6 +7,7 @@ use crate::modules::{
         world_to_tile_coords, GlobalTurn,
     },
     player::{MovingTo, PlayerSystemSet},
+    map::{UsedSpawnTiles, random_floor_tile_in_room},
     combat_feedback::{BloodStain, Z_BLOOD},
 };
 
@@ -291,10 +292,12 @@ fn spawn_portals_after_apply(
     portal_q: Query<(), With<ZonePortal>>,
     map_res: Res<MapResource>,
     named_config: Res<NamedZoneConfig>,
+    mut used_spawn: ResMut<UsedSpawnTiles>,
 ) {
     if !map_res.is_changed() { return; }
     if !portal_q.is_empty() { return; }  // 이미 스폰됨
 
+    let mut rng = rand::thread_rng();
     let map = &map_res.0;
     let font = asset_server.load("fonts/FiraMono-Medium.ttf");
 
@@ -316,7 +319,7 @@ fn spawn_portals_after_apply(
 
     for (dir, target) in portals {
         let is_quest_portal = matches!(target, ZoneId::Named(_));
-        if let Some((px, py)) = portal_tile(map, &dir) {
+        if let Some((px, py)) = portal_tile(map, &dir, &mut used_spawn.0, &mut rng) {
             let coord = tile_to_world_coords(px, py);
             let glyph = dir.glyph();
             let color = if is_quest_portal {
@@ -352,6 +355,7 @@ fn handle_spawn_quest_portal(
     map_res: Res<MapResource>,
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    mut used_spawn: ResMut<UsedSpawnTiles>,
 ) {
     for event in ev.read() {
         // 이미 등록된 Named 존은 중복 생성하지 않는다
@@ -362,9 +366,10 @@ fn handle_spawn_quest_portal(
             origin: world.current.clone(),
         });
 
+        let mut rng = rand::thread_rng();
         let map = &map_res.0;
         let dir = PortalDirection::StairDown;
-        if let Some((px, py)) = portal_tile(map, &dir) {
+        if let Some((px, py)) = portal_tile(map, &dir, &mut used_spawn.0, &mut rng) {
             let coord = tile_to_world_coords(px, py);
             let font = asset_server.load("fonts/FiraMono-Medium.ttf");
             commands.spawn((
@@ -473,8 +478,14 @@ fn zone_portals(zone: &ZoneId) -> Vec<(PortalDirection, ZoneId)> {
     }
 }
 
-/// PortalDirection 에 따른 포털 타일 위치를 찾는다
-fn portal_tile(map: &Map, dir: &PortalDirection) -> Option<(usize, usize)> {
+/// PortalDirection 에 따른 포털 타일 위치를 찾는다.
+/// StairDown/StairUp 은 해당 방의 랜덤 Floor 타일에 배치하며, used 에 기록해 중복을 방지한다.
+fn portal_tile(
+    map: &Map,
+    dir: &PortalDirection,
+    used: &mut std::collections::HashSet<(usize, usize)>,
+    rng: &mut impl rand::Rng,
+) -> Option<(usize, usize)> {
     match dir {
         PortalDirection::North => {
             let cx = map.width / 2;
@@ -494,14 +505,15 @@ fn portal_tile(map: &Map, dir: &PortalDirection) -> Option<(usize, usize)> {
             }
             None
         }
-        PortalDirection::StairDown | PortalDirection::StairUp => {
-            // 마지막 방의 중앙에 배치
-            let room = if *dir == PortalDirection::StairDown {
-                map.rooms.last()
-            } else {
-                map.rooms.first()
-            };
-            room.map(|r| r.center())
+        PortalDirection::StairDown => {
+            // 마지막 방의 랜덤 Floor 타일
+            map.rooms.last().and_then(|r| random_floor_tile_in_room(r, map, used, rng))
+                .or_else(|| map.rooms.last().map(|r| r.center()))
+        }
+        PortalDirection::StairUp => {
+            // 첫 번째 방의 랜덤 Floor 타일 (플레이어 스폰 위치는 used 에 이미 예약됨)
+            map.rooms.first().and_then(|r| random_floor_tile_in_room(r, map, used, rng))
+                .or_else(|| map.rooms.first().map(|r| r.center()))
         }
     }
 }

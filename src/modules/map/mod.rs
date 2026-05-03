@@ -175,6 +175,11 @@ pub struct ApplyMapEvent {
 #[derive(Resource, Default)]
 pub struct MonsterTiles(pub std::collections::HashSet<(usize, usize)>);
 
+/// 현재 맵에서 이미 스폰에 사용된 타일 집합.
+/// 맵 교체 시 초기화되며, 아이템·포탈 스폰 시스템이 중복 배치를 피하기 위해 공유한다.
+#[derive(Resource, Default)]
+pub struct UsedSpawnTiles(pub std::collections::HashSet<(usize, usize)>);
+
 // --- System Set ---
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -219,6 +224,7 @@ impl Plugin for MapPlugin {
             .init_resource::<GlobalTurn>()
             .init_resource::<OccupiedTiles>()
             .init_resource::<MonsterTiles>()
+            .init_resource::<UsedSpawnTiles>()
             .add_event::<RegenerateMapEvent>()
             .add_event::<ApplyMapEvent>()
             .add_event::<PlayerRespawnEvent>()
@@ -407,6 +413,7 @@ fn execute_apply(
     mut player_respawn: EventWriter<PlayerRespawnEvent>,
     mut villager_respawn: EventWriter<VillagerRespawnEvent>,
     mut monster_respawn: EventWriter<MonsterRespawnEvent>,
+    mut used_spawn: ResMut<UsedSpawnTiles>,
 ) {
     for ev in events.read() {
         for entity in tile_query.iter() {
@@ -438,6 +445,11 @@ fn execute_apply(
         }
 
         let (sx, sy) = ev.spawn_pos.unwrap_or_else(|| find_spawn_point(map));
+
+        // 맵 교체마다 스폰 타일 집합 초기화 — 플레이어 위치는 미리 예약
+        used_spawn.0.clear();
+        used_spawn.0.insert((sx, sy));
+
         let rooms = map.rooms.clone();
         let map_type = map.map_type;
         commands.insert_resource(MapResource(map.clone()));
@@ -485,6 +497,25 @@ pub fn world_to_tile_coords(world_pos: Vec3) -> (usize, usize) {
     let x = ((world_pos.x + ow + TILE_SIZE / 2.0) / TILE_SIZE).floor() as usize;
     let y = ((world_pos.y + oh + TILE_SIZE / 2.0) / TILE_SIZE).floor() as usize;
     (x.clamp(0, MAP_WIDTH - 1), y.clamp(0, MAP_HEIGHT - 1))
+}
+
+/// 방 안의 Floor 타일 중 `used` 에 없는 타일을 무작위로 하나 골라 반환한다.
+/// 선택된 타일은 `used` 에 추가되어 이후 호출에서 중복 선택이 방지된다.
+pub fn random_floor_tile_in_room(
+    room: &Rect,
+    map: &Map,
+    used: &mut std::collections::HashSet<(usize, usize)>,
+    rng: &mut impl rand::Rng,
+) -> Option<(usize, usize)> {
+    use rand::seq::SliceRandom;
+    let mut candidates: Vec<(usize, usize)> = (room.x1..=room.x2)
+        .flat_map(|x| (room.y1..=room.y2).map(move |y| (x, y)))
+        .filter(|&(x, y)| map.get_tile(x, y) == MapTile::Floor && !used.contains(&(x, y)))
+        .collect();
+    candidates.shuffle(rng);
+    let &(x, y) = candidates.first()?;
+    used.insert((x, y));
+    Some((x, y))
 }
 
 pub fn is_line_of_sight_clear(map: &Map, x0: i32, y0: i32, x1: i32, y1: i32) -> bool {
