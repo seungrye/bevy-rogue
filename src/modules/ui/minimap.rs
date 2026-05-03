@@ -14,12 +14,27 @@ use crate::modules::{
 pub const MINIMAP_RADIUS: i32 = 20;
 pub const MINIMAP_SIDE: u32 = (MINIMAP_RADIUS * 2 + 1) as u32;
 pub const MINIMAP_DISPLAY_SIZE: f32 = 180.0;
+const MINIMAP_MIN_SIZE: f32 = 80.0;
+const MINIMAP_MAX_SIZE: f32 = 280.0;
+const MINIMAP_ZOOM_STEP: f32 = 20.0;
 
 #[derive(Resource)]
 pub struct MinimapImage(pub Handle<Image>);
 
+#[derive(Resource)]
+pub struct MinimapConfig {
+    pub display_size: f32,
+}
+
+impl Default for MinimapConfig {
+    fn default() -> Self { Self { display_size: MINIMAP_DISPLAY_SIZE } }
+}
+
 #[derive(Component)]
 pub struct MinimapOverlay;
+
+#[derive(Component)]
+struct MinimapImageNode;
 
 #[derive(Component)]
 pub(super) struct GeneratorNameText;
@@ -28,11 +43,12 @@ pub struct MinimapPlugin;
 
 impl Plugin for MinimapPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (
-            setup_minimap,
-            spawn_minimap_overlay.after(setup_minimap),
-        ))
-        .add_systems(Update, (update_minimap, toggle_minimap, update_generator_name));
+        app.init_resource::<MinimapConfig>()
+            .add_systems(Startup, (
+                setup_minimap,
+                spawn_minimap_overlay.after(setup_minimap),
+            ))
+            .add_systems(Update, (update_minimap, toggle_minimap, update_generator_name, zoom_minimap));
     }
 }
 
@@ -68,6 +84,7 @@ fn spawn_minimap_overlay(
     minimap_res: Res<MinimapImage>,
     asset_server: Res<AssetServer>,
     registry: Res<MapGeneratorRegistry>,
+    config: Res<MinimapConfig>,
 ) {
     let font = asset_server.load("fonts/NanumSquareNeo-bRg.ttf");
     commands.spawn((
@@ -86,15 +103,18 @@ fn spawn_minimap_overlay(
         },
         MinimapOverlay,
     )).with_children(|parent| {
-        parent.spawn(ImageBundle {
-            style: Style {
-                width: Val::Px(MINIMAP_DISPLAY_SIZE),
-                height: Val::Px(MINIMAP_DISPLAY_SIZE),
+        parent.spawn((
+            ImageBundle {
+                style: Style {
+                    width: Val::Px(config.display_size),
+                    height: Val::Px(config.display_size),
+                    ..default()
+                },
+                image: minimap_res.0.clone().into(),
                 ..default()
             },
-            image: minimap_res.0.clone().into(),
-            ..default()
-        });
+            MinimapImageNode,
+        ));
         parent.spawn((
             TextBundle::from_section(
                 registry.current_name(),
@@ -107,6 +127,30 @@ fn spawn_minimap_overlay(
             TextStyle { font, font_size: 11.0, color: Color::GRAY },
         ));
     });
+}
+
+pub fn apply_zoom(current: f32, delta: f32) -> f32 {
+    (current + delta).clamp(MINIMAP_MIN_SIZE, MINIMAP_MAX_SIZE)
+}
+
+fn zoom_minimap(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut config: ResMut<MinimapConfig>,
+    mut q: Query<&mut Style, With<MinimapImageNode>>,
+) {
+    let ctrl = keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
+    if !ctrl { return; }
+
+    let zoom_in  = keyboard.just_pressed(KeyCode::Equal) || keyboard.just_pressed(KeyCode::NumpadAdd);
+    let zoom_out = keyboard.just_pressed(KeyCode::Minus) || keyboard.just_pressed(KeyCode::NumpadSubtract);
+
+    let delta = if zoom_in { MINIMAP_ZOOM_STEP } else if zoom_out { -MINIMAP_ZOOM_STEP } else { return };
+    config.display_size = apply_zoom(config.display_size, delta);
+
+    if let Ok(mut style) = q.get_single_mut() {
+        style.width  = Val::Px(config.display_size);
+        style.height = Val::Px(config.display_size);
+    }
 }
 
 fn update_generator_name(
@@ -255,6 +299,31 @@ mod tests {
     fn display_size_is_positive() {
         assert!(MINIMAP_DISPLAY_SIZE > 0.0);
         assert!(MINIMAP_SIDE > 0);
+    }
+
+    #[test]
+    fn zoom_increases_by_step() {
+        assert_eq!(apply_zoom(180.0, MINIMAP_ZOOM_STEP), 200.0);
+    }
+
+    #[test]
+    fn zoom_decreases_by_step() {
+        assert_eq!(apply_zoom(180.0, -MINIMAP_ZOOM_STEP), 160.0);
+    }
+
+    #[test]
+    fn zoom_clamps_at_max() {
+        assert_eq!(apply_zoom(MINIMAP_MAX_SIZE, MINIMAP_ZOOM_STEP), MINIMAP_MAX_SIZE);
+    }
+
+    #[test]
+    fn zoom_clamps_at_min() {
+        assert_eq!(apply_zoom(MINIMAP_MIN_SIZE, -MINIMAP_ZOOM_STEP), MINIMAP_MIN_SIZE);
+    }
+
+    #[test]
+    fn default_size_is_within_bounds() {
+        assert!(MINIMAP_MIN_SIZE <= MINIMAP_DISPLAY_SIZE && MINIMAP_DISPLAY_SIZE <= MINIMAP_MAX_SIZE);
     }
 
     #[test]
