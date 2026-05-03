@@ -8,6 +8,11 @@
             "type": "command",
             "command": "bash .claude/hooks/tdd-check.sh",
             "statusMessage": "TDD 커밋 검사 중..."
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/spec-commit-check.sh",
+            "statusMessage": "스펙 커밋 검사 중..."
           }
         ]
       },
