@@ -15,6 +15,31 @@ pub enum PlayerSystemSet {
 }
 
 const LERP_SPEED: f32 = 7.5;
+const INITIAL_HOLD_DELAY: f32 = 0.12;
+
+#[derive(Resource, Default)]
+pub struct MoveHoldState {
+    pub dir: IVec2,
+    pub elapsed: f32,
+}
+
+/// 방향키 홀드 상태를 관리하고 이동 가능 여부를 반환한다.
+/// just_pressed=true이고 정지 상태에서 처음 누른 경우 즉시 true, 방향 전환 시 false.
+pub fn tick_hold(state: &mut MoveHoldState, dir: IVec2, just_pressed: bool, dt: f32) -> bool {
+    if dir == IVec2::ZERO {
+        state.dir = IVec2::ZERO;
+        state.elapsed = 0.0;
+        return false;
+    }
+    if dir != state.dir {
+        let from_stopped = state.dir == IVec2::ZERO;
+        state.dir = dir;
+        state.elapsed = 0.0;
+        return from_stopped && just_pressed;
+    }
+    state.elapsed += dt;
+    state.elapsed >= INITIAL_HOLD_DELAY
+}
 
 #[derive(Component)]
 pub struct Player;
@@ -50,6 +75,8 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, map_res:
 fn player_movement(
     mut commands: Commands,
     keyboard_input: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+    mut hold_state: ResMut<MoveHoldState>,
     player_query: Query<(Entity, &Transform), (With<Player>, Without<MovingTo>)>,
     map_res: Res<MapResource>,
     occupied: Res<OccupiedTiles>,
@@ -58,11 +85,20 @@ fn player_movement(
     mut log_writer: EventWriter<LogMessage>,
 ) {
     let Ok((entity, transform)) = player_query.get_single() else { return };
-    let mut delta = IVec2::ZERO;
-    if keyboard_input.just_pressed(KeyCode::ArrowLeft)  || keyboard_input.just_pressed(KeyCode::KeyA) { delta.x -= 1; }
-    if keyboard_input.just_pressed(KeyCode::ArrowRight) || keyboard_input.just_pressed(KeyCode::KeyD) { delta.x += 1; }
-    if keyboard_input.just_pressed(KeyCode::ArrowUp)    || keyboard_input.just_pressed(KeyCode::KeyW) { delta.y += 1; }
-    if keyboard_input.just_pressed(KeyCode::ArrowDown)  || keyboard_input.just_pressed(KeyCode::KeyS) { delta.y -= 1; }
+
+    let mut dir = IVec2::ZERO;
+    if keyboard_input.pressed(KeyCode::ArrowLeft)  || keyboard_input.pressed(KeyCode::KeyA) { dir.x -= 1; }
+    if keyboard_input.pressed(KeyCode::ArrowRight) || keyboard_input.pressed(KeyCode::KeyD) { dir.x += 1; }
+    if keyboard_input.pressed(KeyCode::ArrowUp)    || keyboard_input.pressed(KeyCode::KeyW) { dir.y += 1; }
+    if keyboard_input.pressed(KeyCode::ArrowDown)  || keyboard_input.pressed(KeyCode::KeyS) { dir.y -= 1; }
+
+    let just_pressed = keyboard_input.just_pressed(KeyCode::ArrowLeft) || keyboard_input.just_pressed(KeyCode::KeyA)
+        || keyboard_input.just_pressed(KeyCode::ArrowRight) || keyboard_input.just_pressed(KeyCode::KeyD)
+        || keyboard_input.just_pressed(KeyCode::ArrowUp) || keyboard_input.just_pressed(KeyCode::KeyW)
+        || keyboard_input.just_pressed(KeyCode::ArrowDown) || keyboard_input.just_pressed(KeyCode::KeyS);
+
+    if !tick_hold(&mut hold_state, dir, just_pressed, time.delta_seconds()) { return; }
+    let delta = hold_state.dir;
     if delta == IVec2::ZERO { return; }
 
     let (cx, cy) = world_to_tile_coords(transform.translation);
@@ -181,9 +217,59 @@ fn update_fov(
 
 pub struct PlayerPlugin;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tick_hold_immediate_on_just_pressed() {
+        let mut state = MoveHoldState::default();
+        assert!(tick_hold(&mut state, IVec2::new(-1, 0), true, 0.016));
+    }
+
+    #[test]
+    fn tick_hold_no_move_before_delay() {
+        let mut state = MoveHoldState::default();
+        let dir = IVec2::new(-1, 0);
+        tick_hold(&mut state, dir, true, 0.0);
+        assert!(!tick_hold(&mut state, dir, false, 0.016));
+    }
+
+    #[test]
+    fn tick_hold_triggers_after_delay() {
+        let mut state = MoveHoldState::default();
+        let dir = IVec2::new(-1, 0);
+        tick_hold(&mut state, dir, true, 0.0);
+        let triggered = (0..20).any(|_| tick_hold(&mut state, dir, false, 0.016));
+        assert!(triggered, "INITIAL_HOLD_DELAY 이후 연속 이동이 시작돼야 한다");
+    }
+
+    #[test]
+    fn tick_hold_resets_on_key_release() {
+        let mut state = MoveHoldState::default();
+        let dir = IVec2::new(-1, 0);
+        tick_hold(&mut state, dir, true, 0.0);
+        tick_hold(&mut state, IVec2::ZERO, false, 0.016);
+        assert_eq!(state.dir, IVec2::ZERO);
+        assert_eq!(state.elapsed, 0.0);
+    }
+
+    #[test]
+    fn tick_hold_resets_on_direction_change() {
+        let mut state = MoveHoldState::default();
+        let dir = IVec2::new(-1, 0);
+        tick_hold(&mut state, dir, true, 0.0);
+        for _ in 0..10 { tick_hold(&mut state, dir, false, 0.016); }
+        let result = tick_hold(&mut state, IVec2::new(1, 0), false, 0.016);
+        assert!(!result, "방향 전환 직후에는 이동하지 않아야 한다");
+        assert_eq!(state.elapsed, 0.0, "방향 전환 시 타이머가 리셋돼야 한다");
+    }
+}
+
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_player.after(draw_map))
+        app.init_resource::<MoveHoldState>()
+            .add_systems(Startup, spawn_player.after(draw_map))
             .add_systems(Update, (
                 player_movement.in_set(PlayerSystemSet::Movement),
                 smooth_player_lerp.after(PlayerSystemSet::Movement),
