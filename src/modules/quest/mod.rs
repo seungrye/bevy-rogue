@@ -171,23 +171,125 @@ impl Plugin for QuestPlugin {
 
 fn load_quests(mut registry: ResMut<QuestRegistry>) {
     let Ok(dir) = std::fs::read_dir("assets/quests") else {
-        warn!("assets/quests 디렉터리를 찾을 수 없습니다.");
-        return;
+        error!("[치명적] assets/quests 디렉터리를 찾을 수 없습니다. 게임을 시작할 수 없습니다.");
+        std::process::exit(1);
     };
+
+    let mut has_error = false;
+
     for entry in dir.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("ron") { continue; }
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            warn!("퀘스트 파일 읽기 실패: {:?}", path);
-            continue;
-        };
-        match ron::de::from_str::<QuestDef>(&text) {
-            Ok(def) => {
-                info!("퀘스트 로드: {} ({})", def.title, def.id);
-                registry.quests.insert(def.id.clone(), def);
+
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                error!("[퀘스트 오류] {:?} 읽기 실패: {}", path, e);
+                has_error = true;
+                continue;
             }
-            Err(e) => warn!("퀘스트 파싱 오류 {:?}: {}", path, e),
+        };
+
+        let def = match ron::de::from_str::<QuestDef>(&text) {
+            Ok(d) => d,
+            Err(e) => {
+                error!("[퀘스트 오류] {:?} RON 파싱 실패:\n  {}", path, e);
+                has_error = true;
+                continue;
+            }
+        };
+
+        // 시맨틱 검증
+        let errors = validate_quest_def(&def);
+        if !errors.is_empty() {
+            for msg in &errors {
+                error!("[퀘스트 오류] {:?} — {}", path, msg);
+            }
+            has_error = true;
+            continue;
         }
+
+        info!("퀘스트 로드: {} ({})", def.title, def.id);
+        registry.quests.insert(def.id.clone(), def);
+    }
+
+    if has_error {
+        error!("[치명적] 퀘스트 파일에 오류가 있습니다. 위 오류를 수정한 후 다시 실행하세요.");
+        std::process::exit(1);
+    }
+}
+
+/// QuestDef 의 내부 일관성을 검증하고 오류 메시지 목록을 반환한다
+pub fn validate_quest_def(def: &QuestDef) -> Vec<String> {
+    let mut errors = Vec::new();
+
+    // initial_phase 존재 확인
+    if !def.phases.contains_key(&def.initial_phase) {
+        errors.push(format!(
+            "initial_phase '{}' 이 phases 에 없습니다", def.initial_phase
+        ));
+    }
+
+    for (phase_id, phase) in &def.phases {
+        // on_interact AdvancePhase 참조 확인
+        for action in &phase.on_interact {
+            collect_action_errors(action, &def.phases, phase_id, &mut errors);
+        }
+        // auto_advance next_phase 참조 확인
+        for auto in &phase.auto_advance {
+            if !def.phases.contains_key(&auto.next_phase) {
+                errors.push(format!(
+                    "페이즈 '{}': auto_advance next_phase '{}' 이 없습니다",
+                    phase_id, auto.next_phase
+                ));
+            }
+        }
+    }
+
+    // spawns 아이템 ID 확인
+    for spawn in &def.spawns {
+        if item_id_to_kind(&spawn.item).is_none() {
+            errors.push(format!(
+                "spawns: item_id '{}' 를 인식할 수 없습니다", spawn.item
+            ));
+        }
+        if !def.phases.contains_key(&spawn.phase) {
+            errors.push(format!(
+                "spawns: phase '{}' 이 phases 에 없습니다", spawn.phase
+            ));
+        }
+    }
+
+    errors
+}
+
+fn collect_action_errors(
+    action: &QuestAction,
+    phases: &HashMap<String, QuestPhaseDef>,
+    phase_id: &str,
+    errors: &mut Vec<String>,
+) {
+    match action {
+        QuestAction::AdvancePhase(next) => {
+            if !phases.contains_key(next) {
+                errors.push(format!(
+                    "페이즈 '{}': AdvancePhase('{}') 이 없습니다", phase_id, next
+                ));
+            }
+        }
+        QuestAction::GiveItem(id) | QuestAction::RemoveItem(id) | QuestAction::DespawnWorldItem(id) => {
+            if item_id_to_kind(id).is_none() {
+                errors.push(format!(
+                    "페이즈 '{}': item_id '{}' 를 인식할 수 없습니다", phase_id, id
+                ));
+            }
+        }
+        QuestAction::Branch { if_true, if_false, .. } => {
+            for a in if_true.iter().chain(if_false.iter()) {
+                collect_action_errors(a, phases, phase_id, errors);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -759,5 +861,57 @@ mod tests {
         assert_eq!(actions.len(), 2);
         assert!(matches!(&actions[0], QuestAction::DespawnWorldItem(id) if id == "prologue_daggers"));
         assert!(matches!(&actions[1], QuestAction::DespawnWorldItem(id) if id == "prologue_bowtorch"));
+    }
+
+    // ── assets/quests/*.ron 파일 통합 검증 ──────────────────────────────────
+
+    fn load_all_quest_defs() -> Vec<(String, QuestDef)> {
+        let dir = std::fs::read_dir("assets/quests")
+            .expect("assets/quests 디렉터리가 존재해야 한다");
+        let mut defs = Vec::new();
+        for entry in dir.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("ron") { continue; }
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{:?} 읽기 실패: {}", path, e));
+            let def = ron::de::from_str::<QuestDef>(&text)
+                .unwrap_or_else(|e| panic!("{:?} 파싱 실패: {}", path, e));
+            defs.push((path.to_string_lossy().into_owned(), def));
+        }
+        assert!(!defs.is_empty(), "assets/quests 에 .ron 파일이 하나 이상 있어야 한다");
+        defs
+    }
+
+    #[test]
+    fn all_quest_files_parse_without_error() {
+        // 파일 존재 + RON 파싱 성공 여부만 검증
+        let defs = load_all_quest_defs();
+        assert!(defs.len() >= 4, "prologue + 3 route 퀘스트 최소 4개여야 한다");
+    }
+
+    #[test]
+    fn all_quest_files_pass_semantic_validation() {
+        for (path, def) in load_all_quest_defs() {
+            let errors = validate_quest_def(&def);
+            assert!(
+                errors.is_empty(),
+                "{} 시맨틱 검증 실패:\n{}",
+                path,
+                errors.join("\n")
+            );
+        }
+    }
+
+    #[test]
+    fn all_quest_item_ids_are_recognized() {
+        for (path, def) in load_all_quest_defs() {
+            for spawn in &def.spawns {
+                assert!(
+                    item_id_to_kind(&spawn.item).is_some(),
+                    "{}: spawns 의 item_id '{}' 가 item_id_to_kind 에 없다",
+                    path, spawn.item
+                );
+            }
+        }
     }
 }

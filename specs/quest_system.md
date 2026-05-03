@@ -114,6 +114,8 @@ QuestDef(
 - [x] 마지막 대화 줄에서 Interact(이동키/Esc) 시 `on_interact` 액션 실행
 - [x] `auto_advance` 는 Vec 순서로 평가, 첫 번째 충족 조건이 단계를 전진시킨다
 - [x] `AutoAdvance.actions` 는 조건 발동 직후 실행 (DespawnWorldItem, RemoveItem, SetFlag 지원)
+- [x] `assets/quests/*.ron` 파일 전체를 테스트에서 파싱·시맨틱 검증 (페이즈 참조, 아이템 ID, initial_phase)
+- [x] 앱 시작(Startup)에 파싱·시맨틱 오류 발생 시 `error!` 로그 출력 후 즉시 종료 (`std::process::exit(1)`)
 - [x] `PhaseIs` 조건은 `QuestState` 를 참조해 다른 퀘스트의 단계를 비교한다
 - [x] `Branch` 액션은 중첩 가능하며 런타임 조건에 따라 액션 목록을 선택한다
 - [x] `QuestSpawn` 은 해당 `phase` 활성 + 해당 `zone` 진입 시 아이템 스폰
