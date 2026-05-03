@@ -11,7 +11,7 @@ use crate::modules::{
 };
 
 /// 미니맵의 가시 범위 (반경 타일 수)
-pub const MINIMAP_RADIUS: i32 = 24;
+pub const MINIMAP_RADIUS: i32 = 20;
 /// 미니맵의 한 변의 길이 (타일 수, 지름)
 pub const MINIMAP_SIDE: u32 = (MINIMAP_RADIUS * 2 + 1) as u32;
 
@@ -60,11 +60,15 @@ fn update_minimap(
     player_query: Query<&Transform, With<Player>>,
     mut last_pos: Local<Option<IVec2>>,
 ) {
+    // 맵이 교체되면 강제 갱신
+    if map_res.is_changed() {
+        *last_pos = None;
+    }
+
     if let Ok(player_transform) = player_query.get_single() {
         let (player_x, player_y) = crate::modules::map::world_to_tile_coords(player_transform.translation);
         let current_pos = IVec2::new(player_x as i32, player_y as i32);
-        
-        // 타일 기반 위치 변화 감지 (최적화)
+
         if Some(current_pos) == *last_pos {
             return;
         }
@@ -101,13 +105,13 @@ fn update_minimap(
                         [255, 255, 0, 255] // 플레이어: 노랑
                     } else if is_visible {
                         match map.tiles[idx] {
-                            MapTile::Wall => [150, 150, 150, 255], // 실시간 벽: 밝은 회색
-                            MapTile::Floor => [255, 255, 255, 255], // 실시간 바닥: 하양
+                            MapTile::Wall => [255, 255, 255, 255], // 실시간 벽: 짙은 청회색 (대비 강화)
+                            MapTile::Floor => [255, 255, 255, 125], // 실시간 바닥: 하양
                         }
                     } else if is_revealed {
                         match map.tiles[idx] {
-                            MapTile::Wall => [40, 40, 40, 255],   // 탐험된 벽: 어두운 회색
-                            MapTile::Floor => [80, 80, 80, 255],  // 탐험된 바닥: 회색
+                            MapTile::Wall => [255, 255, 255, 255],    // 탐험된 벽: 어두운 청회색 (시인성 증가)
+                            MapTile::Floor => [255, 255, 255, 125], // 탐험된 바닥: 중간 밝기의 청회색
                         }
                     } else {
                         [0, 0, 0, 255] // 미정복 지역: 검정

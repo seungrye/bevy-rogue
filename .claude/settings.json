@@ -1,0 +1,20 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; echo \"$f\" | grep -qE '\\.rs$' && cargo test; } 2>/dev/null || true",
+            "timeout": 120,
+            "statusMessage": "테스트 실행 중..."
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {
+    "andrej-karpathy-skills@karpathy-skills": true
+  }
+}
