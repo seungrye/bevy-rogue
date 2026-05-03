@@ -3,7 +3,7 @@ use rand::Rng;
 use crate::modules::map::{tile_to_world_coords, TILE_SIZE, PlayerActedEvent};
 
 pub const HIT_FLASH_DURATION: f32 = 0.15;
-const Z_BLOOD: f32 = 0.5;
+pub const Z_BLOOD: f32 = 0.5;
 const BLOOD_LIFETIME_MIN: u32 = 15;
 const BLOOD_LIFETIME_MAX: u32 = 30;
 

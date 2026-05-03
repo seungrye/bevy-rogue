@@ -219,6 +219,7 @@ impl Plugin for MapPlugin {
         }
 
         app.insert_resource(registry)
+            .init_resource::<GlobalTurn>()
             .init_resource::<OccupiedTiles>()
             .init_resource::<MonsterTiles>()
             .add_event::<RegenerateMapEvent>()
@@ -242,11 +243,19 @@ impl Plugin for MapPlugin {
                 execute_apply
                     .in_set(MapSystemSet::ExecuteRegen),
                 update_tile_visibility.after(MapSystemSet::ExecuteRegen),
+                increment_global_turn,
             ));
     }
 }
 
 // --- Systems ---
+
+fn increment_global_turn(
+    mut events: EventReader<PlayerActedEvent>,
+    mut turn: ResMut<GlobalTurn>,
+) {
+    for _ in events.read() { turn.0 += 1; }
+}
 
 fn create_and_store_map(mut commands: Commands, registry: Res<MapGeneratorRegistry>) {
     let map = registry.current()
@@ -466,6 +475,9 @@ fn find_spawn_point(map: &Map) -> (usize, usize) {
 pub const MAP_WIDTH: usize = 80;
 pub const MAP_HEIGHT: usize = 50;
 pub const TILE_SIZE: f32 = 16.0;
+
+#[derive(Resource, Default)]
+pub struct GlobalTurn(pub u64);
 
 // --- Coords ---
 

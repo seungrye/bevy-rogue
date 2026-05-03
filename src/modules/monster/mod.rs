@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 use rand::{Rng, rngs::ThreadRng};
 use crate::modules::{
     map::{
@@ -13,6 +13,8 @@ use crate::modules::{
     ui::LogMessage,
     combat_feedback::CombatFeedbackEvent,
     item::ItemDropEvent,
+    zone::{WorldState, ZoneId},
+    map::GlobalTurn,
 };
 
 const Z_MONSTER: f32 = 0.8;
@@ -32,7 +34,17 @@ pub struct Monster {
     pub tile_y: usize,
     pub vision_radius: i32,
     pub alert_turns: u32,
+    pub slot_idx: usize,
 }
+
+#[derive(Clone)]
+pub struct MonsterSlot {
+    pub data_idx: usize,
+    pub respawn_at_turn: Option<u64>,
+}
+
+#[derive(Resource, Default)]
+pub struct ZoneMonsterState(pub HashMap<ZoneId, Vec<MonsterSlot>>);
 
 pub fn can_see_player(
     mx: usize, my: usize,
@@ -50,7 +62,8 @@ pub struct MonsterPlugin;
 
 impl Plugin for MonsterPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_on_startup.after(draw_map))
+        app.init_resource::<ZoneMonsterState>()
+            .add_systems(Startup, spawn_on_startup.after(draw_map))
             .add_systems(PreUpdate, sync_monster_tiles)
             .add_systems(Update, (
                 respawn_on_regen.after(MapSystemSet::ExecuteRegen),
@@ -76,10 +89,15 @@ fn spawn_on_startup(
     mut commands: Commands,
     map_res: Res<MapResource>,
     asset_server: Res<AssetServer>,
+    mut zone_state: ResMut<ZoneMonsterState>,
+    world: Res<WorldState>,
 ) {
     let map = map_res.map();
     if map.map_type == MapType::Dungeon {
-        do_spawn(&mut commands, &map.rooms.clone(), &asset_server);
+        let zone_id = world.current.clone();
+        let slots = init_zone_monster_slots(&map.rooms);
+        zone_state.0.insert(zone_id, slots.clone());
+        spawn_from_slots(&mut commands, &map.rooms, &slots, 0, &asset_server);
     }
 }
 
@@ -88,62 +106,87 @@ fn respawn_on_regen(
     mut events: EventReader<MonsterRespawnEvent>,
     monster_query: Query<Entity, With<Monster>>,
     asset_server: Res<AssetServer>,
+    world: Res<WorldState>,
+    global_turn: Res<GlobalTurn>,
+    mut zone_state: ResMut<ZoneMonsterState>,
 ) {
     for event in events.read() {
         for entity in monster_query.iter() {
             commands.entity(entity).despawn();
         }
-        if event.map_type == MapType::Dungeon {
-            do_spawn(&mut commands, &event.rooms, &asset_server);
+        if event.map_type != MapType::Dungeon { continue; }
+
+        let zone_id = world.current.clone();
+
+        // 처음 방문이면 슬롯 초기화
+        if !zone_state.0.contains_key(&zone_id) {
+            zone_state.0.insert(zone_id.clone(), init_zone_monster_slots(&event.rooms));
         }
+
+        // 만료된 리스폰 슬롯을 alive 상태로 전환
+        if let Some(slots) = zone_state.0.get_mut(&zone_id) {
+            for slot in slots.iter_mut() {
+                if let Some(t) = slot.respawn_at_turn {
+                    if t <= global_turn.0 { slot.respawn_at_turn = None; }
+                }
+            }
+        }
+
+        let slots = zone_state.0[&zone_id].clone();
+        spawn_from_slots(&mut commands, &event.rooms, &slots, global_turn.0, &asset_server);
     }
 }
 
-fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer) {
-    if rooms.is_empty() { return; }
+fn init_zone_monster_slots(rooms: &[Rect]) -> Vec<MonsterSlot> {
+    rooms.iter().skip(1).take(10).enumerate()
+        .map(|(i, _)| MonsterSlot { data_idx: i % MONSTER_DATA.len(), respawn_at_turn: None })
+        .collect()
+}
+
+fn spawn_from_slots(
+    commands: &mut Commands,
+    rooms: &[Rect],
+    slots: &[MonsterSlot],
+    global_turn: u64,
+    asset_server: &AssetServer,
+) {
     let font = asset_server.load("fonts/FiraMono-Medium.ttf");
     let mut rng = rand::thread_rng();
 
-    // 첫 방(플레이어 스폰)을 건너뛰고 최대 10개 방에만 스폰
-    for room in rooms.iter().skip(1).take(10) {
-        let count = rng.gen_range(1..=2usize);
-        let mut placed: HashSet<(usize, usize)> = HashSet::new();
+    for (slot_idx, (slot, room)) in slots.iter().zip(rooms.iter().skip(1)).enumerate() {
+        if let Some(t) = slot.respawn_at_turn {
+            if t > global_turn { continue; }
+        }
+        let data = MONSTER_DATA[slot.data_idx];
+        let (name, glyph, color, hp, atk, def, vis, spd) = (data.0, data.1, data.2, data.3, data.4, data.5, data.6, data.7);
 
-        for j in 0..count {
-            let data = MONSTER_DATA[j % MONSTER_DATA.len()];
-            let (name, glyph, color, hp, atk, def, vis, spd) = (data.0, data.1, data.2, data.3, data.4, data.5, data.6, data.7);
-
-            // 방 안에서 겹치지 않는 빈 타일 찾기 (최대 10회 시도)
+        let (tx, ty) = {
             let mut tile = room.center();
             for _ in 0..10 {
-                let tx = rng.gen_range(room.x1..room.x2);
-                let ty = rng.gen_range(room.y1..room.y2);
-                if !placed.contains(&(tx, ty)) {
-                    tile = (tx, ty);
-                    break;
-                }
+                let x = rng.gen_range(room.x1..room.x2);
+                let y = rng.gen_range(room.y1..room.y2);
+                tile = (x, y);
+                break;
             }
-            let (tx, ty) = tile;
-            if placed.contains(&(tx, ty)) { continue; } // 자리 없으면 스킵
-            placed.insert((tx, ty));
+            tile
+        };
 
-            let coord = tile_to_world_coords(tx, ty);
-            commands.spawn((
-                Text2dBundle {
-                    text: Text::from_section(glyph, TextStyle {
-                        font: font.clone(),
-                        font_size: TILE_SIZE,
-                        color: Color::rgb(color[0], color[1], color[2]),
-                    }),
-                    transform: Transform::from_xyz(coord.x, coord.y, Z_MONSTER),
-                    ..default()
-                },
-                Monster { name: name.to_string(), tile_x: tx, tile_y: ty, vision_radius: vis, alert_turns: 0 },
-                CombatStats { hp, max_hp: hp, mp: 0, max_mp: 0, attack: atk, defense: def },
-                Speed::new(spd),
-                MoveQueue::default(),
-            ));
-        }
+        let coord = tile_to_world_coords(tx, ty);
+        commands.spawn((
+            Text2dBundle {
+                text: Text::from_section(glyph, TextStyle {
+                    font: font.clone(),
+                    font_size: TILE_SIZE,
+                    color: Color::rgb(color[0], color[1], color[2]),
+                }),
+                transform: Transform::from_xyz(coord.x, coord.y, Z_MONSTER),
+                ..default()
+            },
+            Monster { name: name.to_string(), tile_x: tx, tile_y: ty, vision_radius: vis, alert_turns: 0, slot_idx },
+            CombatStats { hp, max_hp: hp, mp: 0, max_mp: 0, attack: atk, defense: def },
+            Speed::new(spd),
+            MoveQueue::default(),
+        ));
     }
 }
 
@@ -310,10 +353,20 @@ fn smooth_monster_move(
 fn cleanup_dead(
     mut commands: Commands,
     query: Query<(Entity, &Monster, &CombatStats)>,
+    world: Res<WorldState>,
+    global_turn: Res<GlobalTurn>,
+    mut zone_state: ResMut<ZoneMonsterState>,
 ) {
-    for (entity, _monster, stats) in query.iter() {
+    let mut rng = rand::thread_rng();
+    for (entity, monster, stats) in query.iter() {
         if stats.hp <= 0 {
             commands.entity(entity).despawn();
+            let respawn_at = global_turn.0 + rng.gen_range(30u64..=120);
+            if let Some(slots) = zone_state.0.get_mut(&world.current) {
+                if let Some(slot) = slots.get_mut(monster.slot_idx) {
+                    slot.respawn_at_turn = Some(respawn_at);
+                }
+            }
         }
     }
 }

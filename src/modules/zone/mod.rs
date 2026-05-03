@@ -4,9 +4,10 @@ use crate::modules::{
     map::{
         Map, MapResource, MapGeneratorRegistry, ApplyMapEvent,
         MAP_WIDTH, MAP_HEIGHT, MapTile, tile_to_world_coords, TILE_SIZE,
-        world_to_tile_coords,
+        world_to_tile_coords, GlobalTurn,
     },
     player::MovingTo,
+    combat_feedback::{BloodStain, Z_BLOOD},
 };
 
 // ── ZoneId ──────────────────────────────────────────────────────────────────
@@ -36,17 +37,34 @@ impl ZoneId {
     }
 }
 
+// ── ZonePersistentState ──────────────────────────────────────────────────────
+
+#[derive(Clone)]
+pub struct SavedBloodStain {
+    pub tile_x: usize,
+    pub tile_y: usize,
+    pub alpha: f32,
+    pub decay_per_turn: f32,
+}
+
+#[derive(Clone, Default)]
+pub struct ZonePersistentState {
+    pub blood_stains: Vec<SavedBloodStain>,
+    pub left_at_turn: u64,
+}
+
 // ── WorldState ───────────────────────────────────────────────────────────────
 
 #[derive(Resource)]
 pub struct WorldState {
     pub current: ZoneId,
     pub maps: HashMap<ZoneId, Map>,
+    pub zone_state: HashMap<ZoneId, ZonePersistentState>,
 }
 
 impl Default for WorldState {
     fn default() -> Self {
-        Self { current: ZoneId::Town, maps: HashMap::new() }
+        Self { current: ZoneId::Town, maps: HashMap::new(), zone_state: HashMap::new() }
     }
 }
 
@@ -108,6 +126,7 @@ impl Plugin for ZonePlugin {
                 check_portal_collision,
                 handle_zone_transition,
                 spawn_portals_after_apply,
+                restore_blood_stains,
                 discover_portals_in_fov,
             ).chain());
     }
@@ -168,8 +187,26 @@ fn handle_zone_transition(
     portals: Query<Entity, With<ZonePortal>>,
     mut commands: Commands,
     mut log: EventWriter<crate::modules::ui::LogMessage>,
+    blood_query: Query<(Entity, &BloodStain, &Transform)>,
+    global_turn: Res<GlobalTurn>,
 ) {
     for transition in ev.read() {
+        // 혈흔 저장 후 제거 (떠나는 존 기준으로 저장)
+        let from_zone = world.current.clone();
+        let stains: Vec<SavedBloodStain> = blood_query.iter().map(|(_, stain, transform)| {
+            let (tx, ty) = world_to_tile_coords(transform.translation);
+            SavedBloodStain { tile_x: tx, tile_y: ty, alpha: stain.alpha, decay_per_turn: stain.decay_per_turn }
+        }).collect();
+        if !stains.is_empty() {
+            world.zone_state.insert(from_zone, ZonePersistentState {
+                blood_stains: stains,
+                left_at_turn: global_turn.0,
+            });
+        }
+        for (entity, _, _) in blood_query.iter() {
+            commands.entity(entity).despawn();
+        }
+
         // 현재 맵 캐시에 저장
         world.cache_current(map_res.0.clone());
 
@@ -239,6 +276,40 @@ fn spawn_portals_after_apply(
                 ZonePortal { target, arrive_from: dir },
             ));
         }
+    }
+}
+
+/// 존 전환 후 저장된 혈흔을 턴 감소 적용하여 복원한다
+fn restore_blood_stains(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    map_res: Res<MapResource>,
+    mut world: ResMut<WorldState>,
+    global_turn: Res<GlobalTurn>,
+) {
+    if !map_res.is_changed() { return; }
+    let zone = world.current.clone();
+    let Some(state) = world.zone_state.remove(&zone) else { return };
+
+    let turns_passed = global_turn.0.saturating_sub(state.left_at_turn);
+    let font = asset_server.load("fonts/FiraMono-Medium.ttf");
+
+    for stain in state.blood_stains {
+        let adjusted = (stain.alpha - turns_passed as f32 * stain.decay_per_turn).max(0.0);
+        if adjusted <= 0.0 { continue; }
+        let pos = tile_to_world_coords(stain.tile_x, stain.tile_y);
+        commands.spawn((
+            Text2dBundle {
+                text: Text::from_section("%", TextStyle {
+                    font: font.clone(),
+                    font_size: TILE_SIZE,
+                    color: Color::rgba(0.8, 0.0, 0.0, adjusted),
+                }),
+                transform: Transform::from_xyz(pos.x, pos.y, Z_BLOOD),
+                ..default()
+            },
+            BloodStain { alpha: adjusted, decay_per_turn: stain.decay_per_turn },
+        ));
     }
 }
 
