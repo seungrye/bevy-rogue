@@ -9,13 +9,7 @@ use bevy::{
 use crate::modules::{
     map::{Map, MapResource, MapTile, MAP_HEIGHT, MAP_WIDTH, MapGeneratorRegistry},
     player::Player,
-    item::{PlayerEquipment, WeaponKind},
 };
-
-const WEAPON_ICON: &str = "\u{E946}";
-const SPEAR_ICON:  &str = "\u{EAAC}";
-const BOW_ICON:    &str = "\u{E978}";
-const ARMOR_ICON:  &str = "\u{EA96}";
 
 pub const MINIMAP_RADIUS: i32 = 20;
 const WALL_BOOST: f32 = 5.0;
@@ -44,12 +38,6 @@ pub struct MinimapOverlay;
 #[derive(Component)]
 pub(super) struct GeneratorNameText;
 
-#[derive(Component)]
-pub(super) struct WeaponSlotText;
-
-#[derive(Component)]
-pub(super) struct ArmorSlotText;
-
 pub struct MinimapPlugin;
 
 impl Plugin for MinimapPlugin {
@@ -59,7 +47,7 @@ impl Plugin for MinimapPlugin {
                 setup_minimap,
                 spawn_minimap_overlay.after(setup_minimap),
             ))
-            .add_systems(Update, (update_minimap, toggle_minimap, update_generator_name, zoom_minimap, update_equipment_slots));
+            .add_systems(Update, (update_minimap, toggle_minimap, update_generator_name, zoom_minimap));
     }
 }
 
@@ -97,7 +85,6 @@ fn spawn_minimap_overlay(
     registry: Res<MapGeneratorRegistry>,
 ) {
     let font = asset_server.load("fonts/NanumSquareNeo-bRg.ttf");
-    let rpg_font = asset_server.load("fonts/rpg-awesome.ttf");
     commands.spawn((
         NodeBundle {
             style: Style {
@@ -132,39 +119,7 @@ fn spawn_minimap_overlay(
         ));
         parent.spawn(TextBundle::from_section(
             "[Tab] 맵 전환",
-            TextStyle { font: font.clone(), font_size: 11.0, color: Color::GRAY },
-        ));
-        parent.spawn((
-            TextBundle {
-                text: Text::from_sections([
-                    TextSection::new(
-                        format!("{} ", WEAPON_ICON),
-                        TextStyle { font: rpg_font.clone(), font_size: 13.0, color: Color::rgba(1.0, 1.0, 0.5, 0.3) },
-                    ),
-                    TextSection::new(
-                        "-",
-                        TextStyle { font: font.clone(), font_size: 11.0, color: Color::rgba(1.0, 1.0, 0.5, 0.9) },
-                    ),
-                ]),
-                ..default()
-            },
-            WeaponSlotText,
-        ));
-        parent.spawn((
-            TextBundle {
-                text: Text::from_sections([
-                    TextSection::new(
-                        format!("{} ", ARMOR_ICON),
-                        TextStyle { font: rpg_font, font_size: 13.0, color: Color::rgba(0.5, 0.7, 1.0, 0.3) },
-                    ),
-                    TextSection::new(
-                        "-",
-                        TextStyle { font, font_size: 11.0, color: Color::rgba(0.5, 0.7, 1.0, 0.9) },
-                    ),
-                ]),
-                ..default()
-            },
-            ArmorSlotText,
+            TextStyle { font, font_size: 11.0, color: Color::GRAY },
         ));
     });
 }
@@ -350,46 +305,6 @@ fn update_minimap(
     }
 }
 
-fn update_equipment_slots(
-    equipment: Res<PlayerEquipment>,
-    mut weapon_q: Query<&mut Text, (With<WeaponSlotText>, Without<ArmorSlotText>)>,
-    mut armor_q: Query<&mut Text, (With<ArmorSlotText>, Without<WeaponSlotText>)>,
-) {
-    if !equipment.is_changed() { return; }
-    if let Ok(mut text) = weapon_q.get_single_mut() {
-        match equipment.weapon {
-            None => {
-                text.sections[0].value = format!("{} ", WEAPON_ICON);
-                text.sections[0].style.color = Color::rgba(1.0, 1.0, 0.5, 0.3);
-                text.sections[1].value = "-".to_string();
-            }
-            Some(w) => {
-                let icon = match w {
-                    WeaponKind::Sword => WEAPON_ICON,
-                    WeaponKind::Spear => SPEAR_ICON,
-                    WeaponKind::Bow   => BOW_ICON,
-                };
-                text.sections[0].value = format!("{} ", icon);
-                text.sections[0].style.color = Color::rgba(1.0, 1.0, 0.5, 0.9);
-                text.sections[1].value = w.display_name().to_string();
-            }
-        }
-    }
-    if let Ok(mut text) = armor_q.get_single_mut() {
-        match equipment.armor {
-            None => {
-                text.sections[0].value = format!("{} ", ARMOR_ICON);
-                text.sections[0].style.color = Color::rgba(0.5, 0.7, 1.0, 0.3);
-                text.sections[1].value = "-".to_string();
-            }
-            Some(a) => {
-                text.sections[0].value = format!("{} ", ARMOR_ICON);
-                text.sections[0].style.color = Color::rgba(0.5, 0.7, 1.0, 0.9);
-                text.sections[1].value = a.display_name().to_string();
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -602,28 +517,6 @@ mod tests {
     #[test]
     fn toggle_hidden_to_visible() {
         assert_eq!(toggle_visibility(Visibility::Hidden), Visibility::Inherited);
-    }
-
-    #[test]
-    fn weapon_slot_name_text_no_weapon() {
-        use crate::modules::item::PlayerEquipment;
-        let eq = PlayerEquipment { weapon: None, armor: None };
-        let name_text = match eq.weapon {
-            None    => "-".to_string(),
-            Some(w) => w.display_name().to_string(),
-        };
-        assert_eq!(name_text, "-");
-    }
-
-    #[test]
-    fn armor_slot_name_text_no_armor() {
-        use crate::modules::item::PlayerEquipment;
-        let eq = PlayerEquipment { weapon: None, armor: None };
-        let name_text = match eq.armor {
-            None    => "-".to_string(),
-            Some(a) => a.display_name().to_string(),
-        };
-        assert_eq!(name_text, "-");
     }
 
     #[test]
