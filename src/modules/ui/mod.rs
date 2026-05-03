@@ -74,13 +74,13 @@ fn setup_ui(
         parent.spawn((
             TextBundle::from_section(
                 registry.current_name(),
-                TextStyle { font: stat_font.clone(), font_size: 13.0, color: Color::CYAN },
+                TextStyle { font: dialog_font.clone(), font_size: 13.0, color: Color::CYAN },
             ).with_style(Style { margin: UiRect::top(Val::Px(8.0)), ..default() }),
             GeneratorNameText,
         ));
         parent.spawn(TextBundle::from_section(
             "[Tab] 맵 전환",
-            TextStyle { font: stat_font.clone(), font_size: 11.0, color: Color::GRAY },
+            TextStyle { font: dialog_font.clone(), font_size: 11.0, color: Color::GRAY },
         ).with_style(Style { margin: UiRect::top(Val::Px(2.0)), ..default() }));
     });
 
