@@ -14,7 +14,7 @@ pub struct GameUiPlugin;
 impl Plugin for GameUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(minimap::MinimapPlugin)
-            .add_systems(Startup, setup_ui.after(minimap::setup_minimap))
+            .add_systems(Startup, setup_ui)
             .add_event::<LogMessage>()
             .init_resource::<MessageLog>()
             .add_systems(Update, (update_dialog_box, update_generator_name));
@@ -29,7 +29,6 @@ impl Plugin for GameUiPlugin {
 fn setup_ui(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    minimap_image: Res<minimap::MinimapImage>,
     registry: Res<MapGeneratorRegistry>,
 ) {
     let stat_font = asset_server.load("fonts/FiraMono-Medium.ttf");
@@ -50,17 +49,6 @@ fn setup_ui(
         background_color: UI_PANEL_BG_COLOR.into(),
         ..default()
     }).with_children(|parent| {
-        parent.spawn(ImageBundle {
-            style: Style {
-                width: Val::Px(160.0),
-                height: Val::Px(160.0),
-                margin: UiRect::all(Val::Px(10.0)),
-                ..default()
-            },
-            image: minimap_image.0.clone().into(),
-            background_color: Color::rgb(0.1, 0.1, 0.1).into(),
-            ..default()
-        });
         parent.spawn(TextBundle::from_section(
             "Player Stats",
             TextStyle { font: stat_font.clone(), font_size: 24.0, color: Color::WHITE },
