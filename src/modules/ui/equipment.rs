@@ -7,7 +7,7 @@ use crate::modules::{
     player::Player,
     combat::CombatStats,
 };
-use super::LogMessage;
+use super::{LogMessage, minimap::MINIMAP_DISPLAY_SIZE};
 
 const WEAPON_ICON: &str = "\u{E946}";
 const SPEAR_ICON:  &str = "\u{EAAC}";
@@ -15,7 +15,8 @@ const BOW_ICON:    &str = "\u{E978}";
 const ARMOR_ICON:  &str = "\u{EA96}";
 const POTION_ICON: &str = "\u{EA72}";
 
-const PANEL_WIDTH: f32 = 260.0;
+// 미니맵 너비(180) + 오른쪽 여백(5) + 여유(5) = 190
+const PANEL_WIDTH: f32 = MINIMAP_DISPLAY_SIZE + 10.0;
 const FONT_SIZE:   f32 = 13.5;
 
 #[derive(Resource, Default)]
