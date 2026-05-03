@@ -10,7 +10,7 @@ use crate::modules::{
     },
     player::{Player, MovingTo, MoveQueue, PlayerSystemSet, LERP_SPEED},
     ui::{LogMessage, minimap::{DiscoveredMarkers, MarkerKind}},
-    quest::{QuestRegistry, QuestState, KillNpcEvent, DespawnWorldItemEvent, execute_actions},
+    quest::{QuestRegistry, QuestState, KillNpcEvent, DespawnWorldItemEvent, execute_actions, QuestDef},
     item::{PlayerInventory},
     zone::{WorldState, SpawnQuestPortalEvent},
     combat::Speed,
@@ -328,6 +328,7 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
             .collect();
 
         let base_color = Color::rgb(color[0], color[1], color[2]);
+        // 퀘스트 NPC는 항상 노란 '?' 로 시작 (퀘스트 있음) — 수락·진행 시 update_villager_glyph 가 갱신
         let (glyph, display_color) = if quest_id.is_some() {
             ("?", Color::rgb(1.0, 0.9, 0.1))
         } else {
@@ -562,14 +563,64 @@ fn update_villager_glyph(
     if !quest_state.is_changed() { return; }
     for (villager, mut text) in query.iter_mut() {
         let Some(ref qid) = villager.quest_id else { continue };
-        let (glyph, color) = if is_quest_terminal(&registry, &quest_state, qid) {
-            ("v", villager.base_color)
-        } else {
-            ("?", Color::rgb(1.0, 0.9, 0.1))
-        };
+        let Some(def) = registry.get(qid) else { continue };
+        let (glyph, color) = quest_npc_glyph(qid, def, &quest_state, villager.base_color);
         text.sections[0].value = glyph.to_string();
         text.sections[0].style.color = color;
     }
+}
+
+/// 퀘스트 NPC 의 현재 퀘스트 상태에 따라 표시 글리프와 색상을 결정한다
+///
+/// - `?` (노란색) : 퀘스트 있음 — initial_phase 이거나 아직 수락 전
+/// - `?` (초록색) : 퀘스트 수락, 진행 중 — 플레이어가 아이템 수집·이동 중
+/// - `!` (초록색) : 완료 조건 성립 — NPC 에게 돌아와야 함
+/// - `v` (base_color) : 터미널 (퀘스트 완료)
+pub fn quest_npc_glyph(
+    quest_id: &str,
+    def: &QuestDef,
+    state: &QuestState,
+    base_color: Color,
+) -> (&'static str, Color) {
+    let yellow = Color::rgb(1.0, 0.9, 0.1);
+    let green = Color::rgb(0.3, 1.0, 0.6);
+
+    // 터미널 페이즈: 퀘스트 완료
+    if is_quest_terminal_def(def, state, quest_id) {
+        return ("v", base_color);
+    }
+
+    let phase_id = state.phases.get(quest_id);
+
+    // initial_phase 이거나 아직 수락 전 → 퀘스트 있음 (노란 '?')
+    let is_initial = match phase_id {
+        None => true,
+        Some(p) => p == &def.initial_phase,
+    };
+    if is_initial {
+        return ("?", yellow);
+    }
+
+    let Some(pid) = phase_id else {
+        return ("?", yellow);
+    };
+    let Some(phase) = def.phases.get(pid) else {
+        return ("v", base_color);
+    };
+
+    if !phase.on_interact.is_empty() {
+        // 완료 조건 성립 — NPC 에게 아이템 납품·보상 수령 대기
+        ("!", green)
+    } else {
+        // 퀘스트 진행 중 — 플레이어가 이동·탐색·아이템 수집 중
+        ("?", green)
+    }
+}
+
+fn is_quest_terminal_def(def: &QuestDef, state: &QuestState, quest_id: &str) -> bool {
+    let Some(phase_id) = state.phases.get(quest_id) else { return false };
+    let Some(phase) = def.phases.get(phase_id) else { return false };
+    phase.on_interact.is_empty() && phase.auto_advance.is_empty()
 }
 
 #[cfg(test)]
@@ -720,5 +771,101 @@ mod tests {
     fn noin_npc_has_world_fracture_quest() {
         let noin = VILLAGER_DATA.iter().find(|d| d.0 == "노인").expect("노인 NPC가 존재해야 한다");
         assert_eq!(noin.3, Some("world_fracture"), "노인은 world_fracture 퀘스트를 가져야 한다");
+    }
+
+    use crate::modules::quest::{QuestDef, QuestPhaseDef, QuestState, QuestAction, AutoAdvance, QuestCondition};
+    use std::collections::HashMap as HM;
+
+    fn make_test_quest_def() -> QuestDef {
+        // not_started → active → ready → done
+        let mut phases = HM::new();
+        phases.insert("not_started".to_string(), QuestPhaseDef {
+            dialog: vec![],
+            on_interact: vec![QuestAction::AdvancePhase("active".to_string())],
+            auto_advance: vec![],
+            objective: None,
+        });
+        phases.insert("active".to_string(), QuestPhaseDef {
+            dialog: vec![],
+            on_interact: vec![],
+            auto_advance: vec![AutoAdvance {
+                condition: QuestCondition::HasItem("eternal_gem".to_string()),
+                next_phase: "ready".to_string(),
+                actions: vec![],
+            }],
+            objective: None,
+        });
+        phases.insert("ready".to_string(), QuestPhaseDef {
+            dialog: vec![],
+            on_interact: vec![QuestAction::AdvancePhase("done".to_string())],
+            auto_advance: vec![],
+            objective: None,
+        });
+        phases.insert("done".to_string(), QuestPhaseDef {
+            dialog: vec![],
+            on_interact: vec![],
+            auto_advance: vec![],
+            objective: None,
+        });
+        QuestDef {
+            id: "test_quest".to_string(),
+            title: "테스트".to_string(),
+            giver_npc: "장로".to_string(),
+            initial_phase: "not_started".to_string(),
+            phases,
+            spawns: vec![],
+        }
+    }
+
+    fn make_state_at(phase: &str) -> QuestState {
+        let mut s = QuestState::default();
+        s.phases.insert("test_quest".to_string(), phase.to_string());
+        s
+    }
+
+    #[test]
+    fn glyph_yellow_when_quest_not_in_state() {
+        let def = make_test_quest_def();
+        let state = QuestState::default(); // 아무것도 없음
+        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, Color::WHITE);
+        assert_eq!(glyph, "?");
+        assert_eq!(color, Color::rgb(1.0, 0.9, 0.1), "퀘스트 있음 = 노란색");
+    }
+
+    #[test]
+    fn glyph_yellow_when_at_initial_phase() {
+        let def = make_test_quest_def();
+        let state = make_state_at("not_started");
+        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, Color::WHITE);
+        assert_eq!(glyph, "?");
+        assert_eq!(color, Color::rgb(1.0, 0.9, 0.1), "initial_phase = 노란 ?");
+    }
+
+    #[test]
+    fn glyph_green_question_when_in_progress() {
+        let def = make_test_quest_def();
+        let state = make_state_at("active");
+        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, Color::WHITE);
+        assert_eq!(glyph, "?");
+        assert_eq!(color, Color::rgb(0.3, 1.0, 0.6), "퀘스트 수락·진행 중 = 초록 ?");
+    }
+
+    #[test]
+    fn glyph_green_exclamation_when_ready_to_complete() {
+        let def = make_test_quest_def();
+        let state = make_state_at("ready");
+        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, Color::WHITE);
+        assert_eq!(glyph, "!");
+        assert_eq!(color, Color::rgb(0.3, 1.0, 0.6), "완료 조건 성립 = 초록 !");
+    }
+
+    #[test]
+    fn glyph_v_when_terminal() {
+        let def = make_test_quest_def();
+        let state = make_state_at("done");
+        let base = Color::rgb(0.9, 0.8, 0.5);
+        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, base);
+        assert_eq!(glyph, "v");
+        assert_eq!(color, base, "터미널 = v + 기본 색상");
     }
 }
