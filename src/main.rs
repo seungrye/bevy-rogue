@@ -77,7 +77,7 @@ fn main() {
             std::process::exit(1);
         }
         ParseResult::Run { algorithm, glyph_style } => (
-            Some(algorithm.unwrap_or_else(|| "bsp".to_string())),
+            Some(algorithm.unwrap_or_else(|| "organic_village".to_string())),
             glyph_style,
         ),
     };
@@ -105,6 +105,8 @@ fn main() {
         .add_plugins(modules::trigger::TriggerPlugin)
         .add_plugins(modules::ui::GameUiPlugin)
         .add_plugins(modules::villager::VillagerPlugin)
+        .add_plugins(modules::zone::ZonePlugin)
+        .add_plugins(modules::quest::QuestPlugin)
         .run();
 }
 

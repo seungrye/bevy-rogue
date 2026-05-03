@@ -8,6 +8,8 @@ rand = "0.8"
 noise = "0.8"
 # bevy = { version = "0.13", features = ["dynamic_linking"] }
 bevy = { version = "0.13" }
+serde = { version = "1", features = ["derive"] }
+ron = "0.8"
 
 # 개발 빌드(cargo run) 시 의존성(bevy 등)에만 최적화를 활성화합니다.
 # 이는 초기 빌드는 조금 더 오래 걸리게 하지만, 이후의 증분 빌드 속도를 크게 향상시킵니다.

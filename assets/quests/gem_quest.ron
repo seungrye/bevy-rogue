@@ -1,0 +1,51 @@
+QuestDef(
+    id: "gem_quest",
+    title: "잃어버린 보석",
+    giver_npc: "장로",
+    initial_phase: "not_started",
+
+    phases: {
+        "not_started": QuestPhaseDef(
+            dialog: [
+                "오, 모험가여. 부탁이 있소.",
+                "던전 2층에 '영원의 보석'이 숨겨져 있다오.",
+                "그것을 찾아 내게 가져다 주겠소?",
+            ],
+            on_interact: [AdvancePhase("active")],
+            auto_advance: None,
+        ),
+        "active": QuestPhaseDef(
+            dialog: ["아직 보석을 찾지 못했나요? 던전 2층을 살펴보시오."],
+            on_interact: [],
+            auto_advance: Some(AutoAdvance(
+                condition: HasItem("eternal_gem"),
+                next_phase: "ready",
+            )),
+        ),
+        "ready": QuestPhaseDef(
+            dialog: [
+                "오! 보석을 찾아왔군요!",
+                "약속대로 '현자의 돌'을 드리겠소.",
+            ],
+            on_interact: [
+                RemoveItem("eternal_gem"),
+                GiveItem("philosophers_stone"),
+                AdvancePhase("done"),
+            ],
+            auto_advance: None,
+        ),
+        "done": QuestPhaseDef(
+            dialog: ["덕분에 마을이 평화로워졌소. 감사합니다."],
+            on_interact: [],
+            auto_advance: None,
+        ),
+    },
+
+    spawns: [
+        QuestSpawn(
+            phase: "active",
+            item: "eternal_gem",
+            zone: Dungeon(2),
+        ),
+    ],
+)

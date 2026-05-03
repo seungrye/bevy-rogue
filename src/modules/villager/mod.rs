@@ -10,38 +10,41 @@ use crate::modules::{
     },
     player::{Player, MovingTo, PlayerSystemSet},
     ui::LogMessage,
+    quest::{QuestRegistry, QuestState, execute_actions},
+    item::{PlayerInventory},
 };
 
 const VILLAGER_STAY_CHANCE: f64 = 0.3;
 const Z_VILLAGER: f32 = 0.9;
 
-static VILLAGER_DATA: &[(&str, [f32; 3], &[&str])] = &[
-    // (name, [r,g,b], dialogues)
+// (name, [r,g,b], dialogues, quest_id)
+static VILLAGER_DATA: &[(&str, [f32; 3], &[&str], Option<&str>)] = &[
+    ("장로", [0.9, 0.8, 0.5], &[], Some("gem_quest")),
     ("촌장", [1.0, 0.85, 0.0], &[
         "어서오시게. 이 마을은 평화롭다네.",
         "요즘 주변에 이상한 소문이 들리는군.",
         "먼 길 오셨군. 조심해서 다니게나.",
-    ]),
+    ], None),
     ("상인", [0.3, 0.9, 0.3], &[
         "좋은 물건 있소이다!",
         "오늘만 특가라네, 어서 보시게.",
         "다음에 또 들르게나.",
-    ]),
+    ], None),
     ("농부", [0.8, 0.6, 0.3], &[
         "올해 수확이 풍성하길 바라네.",
         "하늘이 맑아 일하기 좋은 날이군.",
         "땅을 일구는 게 내 낙이라네.",
-    ]),
+    ], None),
     ("아이", [1.0, 1.0, 1.0], &[
         "안녕하세요!",
         "저기 던전에 가면 안 돼요!",
         "같이 놀아요!",
-    ]),
+    ], None),
     ("노인", [0.65, 0.65, 0.75], &[
         "이 마을에는 오랜 비밀이 있다네.",
         "오래전에 이 땅에 큰 전쟁이 있었지.",
         "젊은이, 몸 조심하게.",
-    ]),
+    ], None),
 ];
 
 #[derive(Component)]
@@ -51,6 +54,8 @@ pub struct Villager {
     pub tile_x: usize,
     pub tile_y: usize,
     pub just_bumped: bool,
+    pub quest_id: Option<String>,
+    pub quest_dialogue_idx: usize,
 }
 
 // 이번 턴에 주민이 이동해야 하는지 판단하고 플래그를 초기화한다
@@ -122,7 +127,7 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
     // rooms[0] 은 플레이어 스폰 방 — 건너뜀
     for (i, room) in rooms.iter().skip(1).enumerate() {
         let data = &VILLAGER_DATA[i % VILLAGER_DATA.len()];
-        let (name, color, lines) = (data.0, data.1, data.2);
+        let (name, color, lines, quest_id) = (data.0, data.1, data.2, data.3);
         let (cx, cy) = room.center();
         let coord = tile_to_world_coords(cx, cy);
 
@@ -146,6 +151,8 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
                 tile_x: cx,
                 tile_y: cy,
                 just_bumped: false,
+                quest_id: quest_id.map(String::from),
+                quest_dialogue_idx: 0,
             },
         ));
     }
@@ -156,17 +163,65 @@ fn handle_bump(
     mut events: EventReader<BumpTileEvent>,
     mut villager_query: Query<&mut Villager>,
     mut log_writer: EventWriter<LogMessage>,
+    registry: Res<QuestRegistry>,
+    mut quest_state: ResMut<QuestState>,
+    mut inventory: ResMut<PlayerInventory>,
 ) {
     for BumpTileEvent(bx, by) in events.read() {
         for mut villager in villager_query.iter_mut() {
-            if villager.tile_x == *bx && villager.tile_y == *by {
+            if villager.tile_x != *bx || villager.tile_y != *by { continue; }
+
+            if let Some(quest_id) = villager.quest_id.clone() {
+                show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer);
+            } else if !villager.dialogues.is_empty() {
                 let msg = villager.dialogues[villager.dialogue_idx].clone();
                 log_writer.send(LogMessage(msg));
                 villager.dialogue_idx = next_dialogue_idx(villager.dialogue_idx, villager.dialogues.len());
-                villager.just_bumped = true;
-                break;
             }
+            villager.just_bumped = true;
+            break;
         }
+    }
+}
+
+fn show_quest_dialog(
+    villager: &mut Villager,
+    quest_id: &str,
+    registry: &QuestRegistry,
+    state: &mut QuestState,
+    inventory: &mut PlayerInventory,
+    log: &mut EventWriter<LogMessage>,
+) {
+    // 퀘스트가 초기화되지 않았으면 initial_phase 로 초기화
+    if !state.phases.contains_key(quest_id) {
+        if let Some(def) = registry.get(quest_id) {
+            state.set_phase(quest_id, &def.initial_phase.clone());
+        }
+    }
+
+    let phase_id = match state.phases.get(quest_id) {
+        Some(p) => p.clone(),
+        None => return,
+    };
+
+    let Some(quest_def) = registry.get(quest_id) else { return };
+    let Some(phase) = quest_def.phases.get(&phase_id) else { return };
+
+    let dialog = phase.dialog.clone();
+    let actions = phase.on_interact.clone();
+    let npc_name = quest_def.giver_npc.clone();
+
+    let idx = villager.quest_dialogue_idx.min(dialog.len().saturating_sub(1));
+    if let Some(line) = dialog.get(idx) {
+        log.send(LogMessage(format!("{}: {}", npc_name, line)));
+    }
+
+    // 마지막 줄에서 액션 실행
+    if !dialog.is_empty() && idx + 1 >= dialog.len() {
+        villager.quest_dialogue_idx = 0;
+        execute_actions(&actions, quest_id, state, inventory, log);
+    } else {
+        villager.quest_dialogue_idx = idx + 1;
     }
 }
 
@@ -327,29 +382,44 @@ mod tests {
         }
     }
 
-    #[test]
-    fn take_turn_returns_false_and_resets_flag_when_bumped() {
-        let mut v = Villager {
+    fn make_villager(just_bumped: bool) -> Villager {
+        Villager {
             dialogues: vec![],
             dialogue_idx: 0,
             tile_x: 0,
             tile_y: 0,
-            just_bumped: true,
-        };
+            just_bumped,
+            quest_id: None,
+            quest_dialogue_idx: 0,
+        }
+    }
+
+    #[test]
+    fn take_turn_returns_false_and_resets_flag_when_bumped() {
+        let mut v = make_villager(true);
         assert!(!take_turn(&mut v), "충돌 직후에는 이동하지 않아야 한다");
         assert!(!v.just_bumped, "플래그는 한 번만 소모된다");
     }
 
     #[test]
     fn take_turn_returns_true_when_not_bumped() {
-        let mut v = Villager {
+        let mut v = make_villager(false);
+        assert!(take_turn(&mut v), "충돌 없는 주민은 정상 이동해야 한다");
+    }
+
+    #[test]
+    fn quest_villager_fields_default_correctly() {
+        let v = Villager {
             dialogues: vec![],
             dialogue_idx: 0,
             tile_x: 0,
             tile_y: 0,
             just_bumped: false,
+            quest_id: Some("gem_quest".to_string()),
+            quest_dialogue_idx: 0,
         };
-        assert!(take_turn(&mut v), "충돌 없는 주민은 정상 이동해야 한다");
+        assert_eq!(v.quest_id.as_deref(), Some("gem_quest"));
+        assert_eq!(v.quest_dialogue_idx, 0);
     }
 
     // villager_turn 에서 플레이어 타일(Transform 또는 MovingTo 목적지)을

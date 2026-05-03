@@ -33,7 +33,7 @@ pub enum MapType {
     Village,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Rect {
     pub x1: usize,
     pub x2: usize,
@@ -54,6 +54,7 @@ impl Rect {
 
 // --- Map ---
 
+#[derive(Clone)]
 pub struct Map {
     pub width: usize,
     pub height: usize,
@@ -166,6 +167,13 @@ pub struct MonsterRespawnEvent {
     pub rooms: Vec<Rect>,
 }
 
+/// 존 전환 시: 미리 준비된 맵을 그대로 적용 (재생성 없이 리드로우만)
+#[derive(Event)]
+pub struct ApplyMapEvent {
+    pub map: Map,
+    pub spawn_pos: Option<(usize, usize)>,
+}
+
 /// 몬스터 타일 위치 집합 — PreUpdate에서 동기화, 플레이어 이동 차단에 사용
 #[derive(Resource, Default)]
 pub struct MonsterTiles(pub std::collections::HashSet<(usize, usize)>);
@@ -214,6 +222,7 @@ impl Plugin for MapPlugin {
             .init_resource::<OccupiedTiles>()
             .init_resource::<MonsterTiles>()
             .add_event::<RegenerateMapEvent>()
+            .add_event::<ApplyMapEvent>()
             .add_event::<PlayerRespawnEvent>()
             .add_event::<TriggerRespawnEvent>()
             .add_event::<VillagerRespawnEvent>()
@@ -229,6 +238,8 @@ impl Plugin for MapPlugin {
                 cycle_map_generator,
                 execute_regen
                     .after(cycle_map_generator)
+                    .in_set(MapSystemSet::ExecuteRegen),
+                execute_apply
                     .in_set(MapSystemSet::ExecuteRegen),
                 update_tile_visibility.after(MapSystemSet::ExecuteRegen),
             ));
@@ -381,6 +392,58 @@ pub fn update_tile_visibility(
                 text.sections[0].style.color = new_color;
             }
         }
+    }
+}
+
+/// 존 전환: 사전 생성된 Map 을 적용하고 관련 리스폰 이벤트를 발행한다
+fn execute_apply(
+    mut commands: Commands,
+    mut events: EventReader<ApplyMapEvent>,
+    tile_query: Query<Entity, With<TileEntity>>,
+    asset_server: Res<AssetServer>,
+    mut player_respawn: EventWriter<PlayerRespawnEvent>,
+    mut trigger_respawn: EventWriter<TriggerRespawnEvent>,
+    mut villager_respawn: EventWriter<VillagerRespawnEvent>,
+    mut monster_respawn: EventWriter<MonsterRespawnEvent>,
+) {
+    for ev in events.read() {
+        for entity in tile_query.iter() {
+            commands.entity(entity).despawn();
+        }
+
+        let map = &ev.map;
+        let font = asset_server.load("fonts/FiraMono-Medium.ttf");
+        for y in 0..map.height {
+            for x in 0..map.width {
+                let glyph = match map.get_tile(x, y) {
+                    MapTile::Wall  => "#",
+                    MapTile::Floor => ".",
+                };
+                let coord = tile_to_world_coords(x, y);
+                commands.spawn((
+                    Text2dBundle {
+                        text: Text::from_section(glyph, TextStyle {
+                            font: font.clone(),
+                            font_size: TILE_SIZE,
+                            color: Color::WHITE,
+                        }),
+                        transform: Transform::from_xyz(coord.x, coord.y, 0.0),
+                        ..default()
+                    },
+                    TileEntity { x, y },
+                ));
+            }
+        }
+
+        let (sx, sy) = ev.spawn_pos.unwrap_or_else(|| find_spawn_point(map));
+        let rooms = map.rooms.clone();
+        let map_type = map.map_type;
+        commands.insert_resource(MapResource(map.clone()));
+
+        player_respawn.send(PlayerRespawnEvent(sx, sy));
+        trigger_respawn.send(TriggerRespawnEvent(rooms.clone()));
+        villager_respawn.send(VillagerRespawnEvent { map_type, rooms: rooms.clone() });
+        monster_respawn.send(MonsterRespawnEvent { map_type, rooms });
     }
 }
 

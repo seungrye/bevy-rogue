@@ -89,14 +89,22 @@ QuestDef(
 
 ## 동작 명세
 
-- [ ] 시작 시 `assets/quests/` 내 모든 `.ron` 파일을 로드해 `QuestRegistry` 에 등록
-- [ ] `QuestState` 리소스: `HashMap<quest_id, current_phase>` 로 진행상황 추적
-- [ ] NPC가 퀘스트 수여자(`giver_npc`)이면 `QuestState` 에 따른 조건부 대화 출력
-- [ ] 마지막 대화 줄에서 Interact(이동키/Esc) 시 `on_interact` 액션 실행
-- [ ] 매 프레임 `auto_advance` 조건 평가 → 충족 시 자동 단계 전진
-- [ ] `QuestSpawn` 은 해당 `phase` 활성 + 해당 `zone` 진입 시 아이템 스폰
-- [ ] 이미 수집한 퀘스트 아이템은 재스폰 안 됨 (퀘스트 단계로 판단)
+- [x] 시작 시 `assets/quests/` 내 모든 `.ron` 파일을 로드해 `QuestRegistry` 에 등록
+- [x] `QuestState` 리소스: `HashMap<quest_id, current_phase>` 로 진행상황 추적
+- [x] NPC가 퀘스트 수여자(`giver_npc`)이면 `QuestState` 에 따른 조건부 대화 출력
+- [x] 마지막 대화 줄에서 Interact(이동키/Esc) 시 `on_interact` 액션 실행
+- [x] 매 프레임 `auto_advance` 조건 평가 → 충족 시 자동 단계 전진
+- [x] `QuestSpawn` 은 해당 `phase` 활성 + 해당 `zone` 진입 시 아이템 스폰
+- [x] 이미 수집한 퀘스트 아이템은 재스폰 안 됨 (`QuestState.spawned` HashSet)
 - [ ] 퀘스트 진행상황은 `save/progress.ron` 에 저장·복원 (추후 구현)
+
+## 구현 세부사항
+
+- `Villager` 컴포넌트에 `quest_id: Option<String>`, `quest_dialogue_idx: usize` 추가
+- `VILLAGER_DATA` 에 "장로" 항목 추가 (`quest_id: Some("gem_quest")`)
+- `handle_bump` 에서 `quest_id` 여부에 따라 퀘스트 대화 또는 일반 대화 분기
+- `QuestItemKind { EternalGem, PhilosophersStone }` 추가, `ItemKind::QuestItem` 변형 신설
+- `spawn_quest_items` 시스템: 맵 변경 시 퀘스트 스폰 조건 평가 후 아이템 스폰
 
 ## NPC 대화 우선순위
 

@@ -92,6 +92,10 @@ fn glyph_unicode(kind: ItemKind) -> &'static str {
         ItemKind::Consumable(c) => match c {
             ConsumableKind::HealthPotion => "\u{2764}", // ❤ heavy heart
         },
+        ItemKind::QuestItem(q) => match q {
+            QuestItemKind::EternalGem        => "\u{25C6}", // ◆ black diamond
+            QuestItemKind::PhilosophersStone => "\u{2295}", // ⊕ circled plus
+        },
     }
 }
 
@@ -108,6 +112,25 @@ fn glyph_game_icon(kind: ItemKind) -> &'static str {
         ItemKind::Consumable(c) => match c {
             ConsumableKind::HealthPotion => "\u{EA72}", // ra-potion
         },
+        ItemKind::QuestItem(q) => match q {
+            QuestItemKind::EternalGem        => "\u{25C6}", // fallback: ◆
+            QuestItemKind::PhilosophersStone => "\u{2295}", // fallback: ⊕
+        },
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum QuestItemKind {
+    EternalGem,
+    PhilosophersStone,
+}
+
+impl QuestItemKind {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            QuestItemKind::EternalGem       => "영원의 보석",
+            QuestItemKind::PhilosophersStone => "현자의 돌",
+        }
     }
 }
 
@@ -165,6 +188,7 @@ pub enum ItemKind {
     Weapon(WeaponKind),
     Armor(ArmorKind),
     Consumable(ConsumableKind),
+    QuestItem(QuestItemKind),
 }
 
 impl ItemKind {
@@ -181,6 +205,10 @@ impl ItemKind {
             ItemKind::Consumable(c) => match c {
                 ConsumableKind::HealthPotion => "!",
             },
+            ItemKind::QuestItem(q) => match q {
+                QuestItemKind::EternalGem        => "*",
+                QuestItemKind::PhilosophersStone => "%",
+            },
         }
     }
 
@@ -189,6 +217,7 @@ impl ItemKind {
             ItemKind::Weapon(_)     => Color::rgb(1.0, 1.0, 0.2),
             ItemKind::Armor(_)      => Color::rgb(0.2, 0.4, 1.0),
             ItemKind::Consumable(_) => Color::rgb(0.2, 0.9, 0.2),
+            ItemKind::QuestItem(_)  => Color::rgb(0.8, 0.3, 1.0),
         }
     }
 
@@ -197,6 +226,7 @@ impl ItemKind {
             ItemKind::Weapon(w)     => w.display_name(),
             ItemKind::Armor(a)      => a.display_name(),
             ItemKind::Consumable(c) => c.display_name(),
+            ItemKind::QuestItem(q)  => q.display_name(),
         }
     }
 
@@ -212,6 +242,10 @@ impl ItemKind {
             },
             ItemKind::Consumable(c) => match c {
                 ConsumableKind::HealthPotion => "체력 물약을 획득했다!",
+            },
+            ItemKind::QuestItem(q) => match q {
+                QuestItemKind::EternalGem        => "영원의 보석을 획득했다!",
+                QuestItemKind::PhilosophersStone => "현자의 돌을 획득했다!",
             },
         }
     }
@@ -429,7 +463,7 @@ fn pickup_items(
 
     for (entity, kind) in at_tile {
         match kind {
-            ItemKind::Weapon(_) | ItemKind::Armor(_) => {
+            ItemKind::Weapon(_) | ItemKind::Armor(_) | ItemKind::QuestItem(_) => {
                 inventory.items.push(InventoryItem { kind });
             }
             ItemKind::Consumable(ck) => {
@@ -607,5 +641,20 @@ mod tests {
     #[test]
     fn glyph_style_default_is_ascii() {
         assert_eq!(GlyphStyle::default(), GlyphStyle::Ascii);
+    }
+
+    #[test]
+    fn quest_item_display_names() {
+        assert_eq!(QuestItemKind::EternalGem.display_name(), "영원의 보석");
+        assert_eq!(QuestItemKind::PhilosophersStone.display_name(), "현자의 돌");
+    }
+
+    #[test]
+    fn quest_item_glyph_and_pickup_message() {
+        let gem = ItemKind::QuestItem(QuestItemKind::EternalGem);
+        assert_eq!(gem.glyph(), "*");
+        assert_eq!(gem.pickup_message(), "영원의 보석을 획득했다!");
+        let stone = ItemKind::QuestItem(QuestItemKind::PhilosophersStone);
+        assert_eq!(stone.pickup_message(), "현자의 돌을 획득했다!");
     }
 }

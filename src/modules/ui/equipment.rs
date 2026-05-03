@@ -138,7 +138,7 @@ fn handle_equipment_input(
                         log.send(LogMessage(format!("{} 장착.", a.display_name())));
                     }
                 }
-                ItemKind::Consumable(_) => {}
+                ItemKind::Consumable(_) | ItemKind::QuestItem(_) => {}
             }
         } else {
             let ci = cursor - eq_len;
@@ -202,6 +202,7 @@ fn item_kind_icon(kind: &ItemKind) -> &'static str {
         ItemKind::Weapon(WeaponKind::Bow)   => BOW_ICON,
         ItemKind::Armor(_)                  => ARMOR_ICON,
         ItemKind::Consumable(_)             => POTION_ICON,
+        ItemKind::QuestItem(_)              => "*",
     }
 }
 
