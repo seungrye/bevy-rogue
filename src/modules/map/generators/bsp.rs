@@ -8,7 +8,7 @@ impl MapGenerator for BspGenerator {
     fn generate(&self, width: usize, height: usize) -> Map {
         let mut map = Map::new(width, height);
         let mut rooms = Vec::new();
-        split_rect(Rect::new(1, 1, width - 2, height - 2), &mut rooms, 7);
+        split_rect(Rect::new(1, 1, width - 2, height - 2), &mut rooms, 6);
         for room in &rooms {
             for y in room.y1..room.y2 {
                 for x in room.x1..room.x2 {

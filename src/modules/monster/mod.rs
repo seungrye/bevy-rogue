@@ -88,8 +88,9 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
     let font = asset_server.load("fonts/FiraMono-Medium.ttf");
     let mut rng = rand::thread_rng();
 
-    for room in rooms.iter().skip(1) {
-        let count = rng.gen_range(1..=3usize);
+    // 첫 방(플레이어 스폰)을 건너뛰고 최대 10개 방에만 스폰
+    for room in rooms.iter().skip(1).take(10) {
+        let count = rng.gen_range(1..=2usize);
         let mut placed: HashSet<(usize, usize)> = HashSet::new();
 
         for j in 0..count {

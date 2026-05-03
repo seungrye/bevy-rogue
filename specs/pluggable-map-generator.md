@@ -66,7 +66,7 @@ pub trait MapGenerator: Send + Sync {
 
 | 생성기 | 등록 이름 | 유형 | 결과 느낌 |
 |--------|-----------|------|-----------|
-| `BspGenerator` | `bsp` | 던전 | 규칙적인 방 분할, 깔끔한 복도 (depth 7, 최소 8×8) |
+| `BspGenerator` | `bsp` | 던전 | 규칙적인 방 분할, 깔끔한 복도 (depth 6, 최소 8×8) |
 | `SimpleRoomsGenerator` | `simple_rooms` | 던전 | 크기 다양한 방들이 랜덤 배치 |
 | `DrunkardWalkGenerator` | `drunkard` | 동굴 | 취한 듯 굴곡진 유기적 통로 |
 | `CellularAutomataGenerator` | `cellular_automata` | 동굴 | 자연 침식된 느낌의 불규칙 동굴 |
