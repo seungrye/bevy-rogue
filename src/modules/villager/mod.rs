@@ -47,7 +47,7 @@ static VILLAGER_DATA: &[(&str, [f32; 3], &[&str], Option<&str>, f32)] = &[
         "이 마을에는 오랜 비밀이 있다네.",
         "오래전에 이 땅에 큰 전쟁이 있었지.",
         "젊은이, 몸 조심하게.",
-    ], None, 0.5),
+    ], Some("world_fracture"), 0.5),
 ];
 
 #[derive(Component)]
@@ -537,5 +537,11 @@ mod tests {
             let result = pick_next_tile(5, 5, &map, &occupied, &mut rng);
             assert_eq!(result, (5, 5), "플레이어 타일로 이동하면 안 된다");
         }
+    }
+
+    #[test]
+    fn noin_npc_has_world_fracture_quest() {
+        let noin = VILLAGER_DATA.iter().find(|d| d.0 == "노인").expect("노인 NPC가 존재해야 한다");
+        assert_eq!(noin.3, Some("world_fracture"), "노인은 world_fracture 퀘스트를 가져야 한다");
     }
 }
