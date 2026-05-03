@@ -1,6 +1,6 @@
 use crate::modules::{
     map::{
-        draw_map, Map, MapResource, MapTile, OccupiedTiles, MonsterTiles,
+        draw_map, MapResource, MapTile, OccupiedTiles, MonsterTiles,
         tile_to_world_coords, world_to_tile_coords, is_line_of_sight_clear,
         MAP_HEIGHT, MAP_WIDTH, TILE_SIZE,
         MapSystemSet, PlayerRespawnEvent, PlayerActedEvent, BumpTileEvent, AttackMonsterEvent,

@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use std::collections::{HashSet, HashMap};
+use std::collections::HashSet;
 use rand::{Rng, rngs::ThreadRng};
 use crate::modules::{
     map::{
@@ -13,7 +13,7 @@ use crate::modules::{
     ui::LogMessage,
     combat_feedback::CombatFeedbackEvent,
     item::ItemDropEvent,
-    zone::{WorldState, ZoneId},
+    zone::{WorldState, ZonePersistence, MonsterSlot},
     map::GlobalTurn,
 };
 
@@ -37,15 +37,6 @@ pub struct Monster {
     pub slot_idx: usize,
 }
 
-#[derive(Clone)]
-pub struct MonsterSlot {
-    pub data_idx: usize,
-    pub respawn_at_turn: Option<u64>,
-}
-
-#[derive(Resource, Default)]
-pub struct ZoneMonsterState(pub HashMap<ZoneId, Vec<MonsterSlot>>);
-
 pub fn can_see_player(
     mx: usize, my: usize,
     px: usize, py: usize,
@@ -62,8 +53,7 @@ pub struct MonsterPlugin;
 
 impl Plugin for MonsterPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ZoneMonsterState>()
-            .add_systems(Startup, spawn_on_startup.after(draw_map))
+        app.add_systems(Startup, spawn_on_startup.after(draw_map))
             .add_systems(PreUpdate, sync_monster_tiles)
             .add_systems(Update, (
                 respawn_on_regen.after(MapSystemSet::ExecuteRegen),
@@ -89,14 +79,14 @@ fn spawn_on_startup(
     mut commands: Commands,
     map_res: Res<MapResource>,
     asset_server: Res<AssetServer>,
-    mut zone_state: ResMut<ZoneMonsterState>,
+    mut persistence: ResMut<ZonePersistence>,
     world: Res<WorldState>,
 ) {
     let map = map_res.map();
     if map.map_type == MapType::Dungeon {
         let zone_id = world.current.clone();
         let slots = init_zone_monster_slots(&map.rooms);
-        zone_state.0.insert(zone_id, slots.clone());
+        persistence.0.entry(zone_id).or_default().monster_slots = slots.clone();
         spawn_from_slots(&mut commands, &map.rooms, &slots, 0, &asset_server);
     }
 }
@@ -108,7 +98,7 @@ fn respawn_on_regen(
     asset_server: Res<AssetServer>,
     world: Res<WorldState>,
     global_turn: Res<GlobalTurn>,
-    mut zone_state: ResMut<ZoneMonsterState>,
+    mut persistence: ResMut<ZonePersistence>,
 ) {
     for event in events.read() {
         for entity in monster_query.iter() {
@@ -119,20 +109,21 @@ fn respawn_on_regen(
         let zone_id = world.current.clone();
 
         // 처음 방문이면 슬롯 초기화
-        if !zone_state.0.contains_key(&zone_id) {
-            zone_state.0.insert(zone_id.clone(), init_zone_monster_slots(&event.rooms));
+        if !persistence.0.contains_key(&zone_id) {
+            persistence.0.entry(zone_id.clone()).or_default().monster_slots =
+                init_zone_monster_slots(&event.rooms);
         }
 
-        // 만료된 리스폰 슬롯을 alive 상태로 전환
-        if let Some(slots) = zone_state.0.get_mut(&zone_id) {
-            for slot in slots.iter_mut() {
+        // 만료된 리스폰 타이머 처리 (경과 턴 catch-up)
+        if let Some(snapshot) = persistence.0.get_mut(&zone_id) {
+            for slot in &mut snapshot.monster_slots {
                 if let Some(t) = slot.respawn_at_turn {
                     if t <= global_turn.0 { slot.respawn_at_turn = None; }
                 }
             }
         }
 
-        let slots = zone_state.0[&zone_id].clone();
+        let slots = persistence.0[&zone_id].monster_slots.clone();
         spawn_from_slots(&mut commands, &event.rooms, &slots, global_turn.0, &asset_server);
     }
 }
@@ -355,15 +346,15 @@ fn cleanup_dead(
     query: Query<(Entity, &Monster, &CombatStats)>,
     world: Res<WorldState>,
     global_turn: Res<GlobalTurn>,
-    mut zone_state: ResMut<ZoneMonsterState>,
+    mut persistence: ResMut<ZonePersistence>,
 ) {
     let mut rng = rand::thread_rng();
     for (entity, monster, stats) in query.iter() {
         if stats.hp <= 0 {
             commands.entity(entity).despawn();
             let respawn_at = global_turn.0 + rng.gen_range(30u64..=120);
-            if let Some(slots) = zone_state.0.get_mut(&world.current) {
-                if let Some(slot) = slots.get_mut(monster.slot_idx) {
+            if let Some(snapshot) = persistence.0.get_mut(&world.current) {
+                if let Some(slot) = snapshot.monster_slots.get_mut(monster.slot_idx) {
                     slot.respawn_at_turn = Some(respawn_at);
                 }
             }

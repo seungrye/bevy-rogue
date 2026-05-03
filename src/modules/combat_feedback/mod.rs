@@ -110,10 +110,6 @@ pub fn blood_stain_alpha_after_decay(current: f32, per_turn: f32) -> f32 {
     (current - per_turn).max(0.0)
 }
 
-pub fn decay_per_turn_for(lifetime_turns: u32) -> f32 {
-    1.0 / lifetime_turns as f32
-}
-
 pub fn hit_flash_remaining_after(remaining: f32, dt: f32) -> f32 {
     (remaining - dt).max(0.0)
 }
@@ -121,6 +117,10 @@ pub fn hit_flash_remaining_after(remaining: f32, dt: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn decay_per_turn_for(lifetime_turns: u32) -> f32 {
+        1.0 / lifetime_turns as f32
+    }
 
     #[test]
     fn blood_stain_starts_fully_visible() {

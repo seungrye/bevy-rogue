@@ -37,7 +37,7 @@ impl ZoneId {
     }
 }
 
-// ── ZonePersistentState ──────────────────────────────────────────────────────
+// ── ZonePersistence ──────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 pub struct SavedBloodStain {
@@ -47,11 +47,21 @@ pub struct SavedBloodStain {
     pub decay_per_turn: f32,
 }
 
-#[derive(Clone, Default)]
-pub struct ZonePersistentState {
-    pub blood_stains: Vec<SavedBloodStain>,
-    pub left_at_turn: u64,
+#[derive(Clone)]
+pub struct MonsterSlot {
+    pub data_idx: usize,
+    pub respawn_at_turn: Option<u64>,
 }
+
+#[derive(Clone, Default)]
+pub struct ZoneSnapshot {
+    pub blood_stains: Vec<SavedBloodStain>,
+    pub monster_slots: Vec<MonsterSlot>,
+    pub last_visited_turn: u64,
+}
+
+#[derive(Resource, Default)]
+pub struct ZonePersistence(pub HashMap<ZoneId, ZoneSnapshot>);
 
 // ── WorldState ───────────────────────────────────────────────────────────────
 
@@ -59,12 +69,11 @@ pub struct ZonePersistentState {
 pub struct WorldState {
     pub current: ZoneId,
     pub maps: HashMap<ZoneId, Map>,
-    pub zone_state: HashMap<ZoneId, ZonePersistentState>,
 }
 
 impl Default for WorldState {
     fn default() -> Self {
-        Self { current: ZoneId::Town, maps: HashMap::new(), zone_state: HashMap::new() }
+        Self { current: ZoneId::Town, maps: HashMap::new() }
     }
 }
 
@@ -120,13 +129,14 @@ pub struct ZonePlugin;
 impl Plugin for ZonePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorldState>()
+            .init_resource::<ZonePersistence>()
             .add_event::<ZoneTransitionEvent>()
             .add_systems(Startup, cache_initial_map.after(crate::modules::map::draw_map))
             .add_systems(Update, (
                 check_portal_collision,
                 handle_zone_transition,
                 spawn_portals_after_apply,
-                restore_blood_stains,
+                restore_zone_state,
                 discover_portals_in_fov,
             ).chain());
     }
@@ -189,20 +199,17 @@ fn handle_zone_transition(
     mut log: EventWriter<crate::modules::ui::LogMessage>,
     blood_query: Query<(Entity, &BloodStain, &Transform)>,
     global_turn: Res<GlobalTurn>,
+    mut persistence: ResMut<ZonePersistence>,
 ) {
     for transition in ev.read() {
-        // 혈흔 저장 후 제거 (떠나는 존 기준으로 저장)
+        // 떠나는 존의 혈흔을 스냅샷에 저장하고 엔티티 제거
         let from_zone = world.current.clone();
-        let stains: Vec<SavedBloodStain> = blood_query.iter().map(|(_, stain, transform)| {
+        let snapshot = persistence.0.entry(from_zone).or_default();
+        snapshot.blood_stains = blood_query.iter().map(|(_, stain, transform)| {
             let (tx, ty) = world_to_tile_coords(transform.translation);
             SavedBloodStain { tile_x: tx, tile_y: ty, alpha: stain.alpha, decay_per_turn: stain.decay_per_turn }
         }).collect();
-        if !stains.is_empty() {
-            world.zone_state.insert(from_zone, ZonePersistentState {
-                blood_stains: stains,
-                left_at_turn: global_turn.0,
-            });
-        }
+        snapshot.last_visited_turn = global_turn.0;
         for (entity, _, _) in blood_query.iter() {
             commands.entity(entity).despawn();
         }
@@ -279,22 +286,24 @@ fn spawn_portals_after_apply(
     }
 }
 
-/// 존 전환 후 저장된 혈흔을 턴 감소 적용하여 복원한다
-fn restore_blood_stains(
+/// 존 복귀 시 스냅샷에서 혈흔을 경과 턴만큼 감소하여 복원한다.
+/// 몬스터 리스폰 타이머 처리는 monster::respawn_on_regen 에서 담당한다.
+fn restore_zone_state(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     map_res: Res<MapResource>,
-    mut world: ResMut<WorldState>,
+    world: Res<WorldState>,
     global_turn: Res<GlobalTurn>,
+    mut persistence: ResMut<ZonePersistence>,
 ) {
     if !map_res.is_changed() { return; }
     let zone = world.current.clone();
-    let Some(state) = world.zone_state.remove(&zone) else { return };
+    let Some(snapshot) = persistence.0.get_mut(&zone) else { return };
 
-    let turns_passed = global_turn.0.saturating_sub(state.left_at_turn);
+    let turns_passed = global_turn.0.saturating_sub(snapshot.last_visited_turn);
     let font = asset_server.load("fonts/FiraMono-Medium.ttf");
 
-    for stain in state.blood_stains {
+    for stain in snapshot.blood_stains.drain(..) {
         let adjusted = (stain.alpha - turns_passed as f32 * stain.decay_per_turn).max(0.0);
         if adjusted <= 0.0 { continue; }
         let pos = tile_to_world_coords(stain.tile_x, stain.tile_y);
