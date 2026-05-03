@@ -12,6 +12,8 @@ use crate::modules::{
 };
 
 pub const MINIMAP_RADIUS: i32 = 20;
+const WALL_BOOST: f32 = 5.0;
+const PLAYER_BOOST: f32 = 20.0;
 pub const MINIMAP_SIDE: u32 = (MINIMAP_RADIUS * 2 + 1) as u32;
 pub const MINIMAP_DISPLAY_SIZE: f32 = 180.0;
 const MINIMAP_VIEW_RADIUS_MIN: i32 = MINIMAP_RADIUS;
@@ -208,6 +210,25 @@ pub(crate) fn tile_color_f32(map: &Map, x: i32, y: i32, player_x: usize, player_
     [c[0] as f32, c[1] as f32, c[2] as f32, c[3] as f32]
 }
 
+/// 타일의 가중치 부스트 배수를 반환한다.
+/// 벽·건물은 zoom out 시에도 바닥색에 묻히지 않도록 가중치를 높인다.
+pub(crate) fn tile_boost(map: &Map, x: i32, y: i32, player_x: usize, player_y: usize) -> f32 {
+    if x < 0 || x >= MAP_WIDTH as i32 || y < 0 || y >= MAP_HEIGHT as i32 {
+        return 1.0;
+    }
+    let ux = x as usize;
+    let uy = y as usize;
+    if ux == player_x && uy == player_y {
+        return PLAYER_BOOST;
+    }
+    let idx = map.index(ux, uy);
+    if (map.visible_tiles[idx] || map.revealed_tiles[idx]) && map.tiles[idx] == MapTile::Wall {
+        WALL_BOOST
+    } else {
+        1.0
+    }
+}
+
 fn update_minimap(
     map_res: Res<MapResource>,
     minimap_res: Res<MinimapImage>,
@@ -262,13 +283,20 @@ fn update_minimap(
             let iy0 = fy_lo.floor() as i32;  let iy1 = fy_hi.floor() as i32;
 
             let mut blended = [0.0f32; 4];
+            let mut total_w = 0.0f32;
             for iy in iy0..=iy1 {
                 let wy = box_weight(iy, fy_lo, fy_hi, scale);
                 for ix in ix0..=ix1 {
                     let wx = box_weight(ix, fx_lo, fx_hi, scale);
+                    let w = wx * wy * tile_boost(map, ix, iy, player_x, player_y);
                     let c = tile_color_f32(map, ix, iy, player_x, player_y);
-                    for i in 0..4 { blended[i] += c[i] * wx * wy; }
+                    for i in 0..4 { blended[i] += c[i] * w; }
+                    total_w += w;
                 }
+            }
+            if total_w > 0.0 {
+                let inv = 1.0 / total_w;
+                for i in 0..4 { blended[i] *= inv; }
             }
             let color: [u8; 4] = std::array::from_fn(|i| blended[i].round() as u8);
 
@@ -388,6 +416,54 @@ mod tests {
         let wb = box_weight(10, lo2, hi2, 1.0);
         assert!((wa + wb - 1.0).abs() < 1e-6);
         let _ = (w0, w1); // used above
+    }
+
+    #[test]
+    fn tile_boost_player_returns_player_boost() {
+        let map = Map::new(10, 10);
+        assert_eq!(tile_boost(&map, 3, 3, 3, 3), PLAYER_BOOST);
+    }
+
+    #[test]
+    fn tile_boost_revealed_wall_returns_wall_boost() {
+        let mut map = Map::new(10, 10);
+        map.set_tile(5, 5, MapTile::Wall);
+        let idx = map.index(5, 5);
+        map.revealed_tiles[idx] = true;
+        assert_eq!(tile_boost(&map, 5, 5, 0, 0), WALL_BOOST);
+    }
+
+    #[test]
+    fn tile_boost_visible_wall_returns_wall_boost() {
+        let mut map = Map::new(10, 10);
+        map.set_tile(5, 5, MapTile::Wall);
+        let idx = map.index(5, 5);
+        map.visible_tiles[idx] = true;
+        assert_eq!(tile_boost(&map, 5, 5, 0, 0), WALL_BOOST);
+    }
+
+    #[test]
+    fn tile_boost_unrevealed_wall_returns_one() {
+        let mut map = Map::new(10, 10);
+        map.set_tile(5, 5, MapTile::Wall);
+        // visible/revealed 모두 false → 미탐험 벽은 부스트 없음
+        assert_eq!(tile_boost(&map, 5, 5, 0, 0), 1.0);
+    }
+
+    #[test]
+    fn tile_boost_floor_returns_one() {
+        let mut map = Map::new(10, 10);
+        map.set_tile(5, 5, MapTile::Floor);
+        let idx = map.index(5, 5);
+        map.revealed_tiles[idx] = true;
+        assert_eq!(tile_boost(&map, 5, 5, 0, 0), 1.0);
+    }
+
+    #[test]
+    fn tile_boost_out_of_bounds_returns_one() {
+        let map = Map::new(10, 10);
+        assert_eq!(tile_boost(&map, -1, 0, 0, 0), 1.0);
+        assert_eq!(tile_boost(&map, 10, 0, 0, 0), 1.0);
     }
 
     #[test]
