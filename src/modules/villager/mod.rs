@@ -12,7 +12,7 @@ use crate::modules::{
     ui::{LogMessage, minimap::{DiscoveredMarkers, MarkerKind}},
     quest::{QuestRegistry, QuestState, KillNpcEvent, execute_actions},
     item::{PlayerInventory},
-    zone::WorldState,
+    zone::{WorldState, SpawnQuestPortalEvent},
     combat::Speed,
 };
 
@@ -372,6 +372,7 @@ fn handle_bump(
     mut markers: ResMut<DiscoveredMarkers>,
     world_state: Res<WorldState>,
     mut kill_npc: EventWriter<KillNpcEvent>,
+    mut open_portal: EventWriter<SpawnQuestPortalEvent>,
 ) {
     for BumpTileEvent(bx, by) in events.read() {
         for mut villager in villager_query.iter_mut() {
@@ -379,7 +380,7 @@ fn handle_bump(
 
             if let Some(quest_id) = villager.quest_id.clone() {
                 let phase_before = quest_state.phases.get(&quest_id).cloned();
-                show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut kill_npc);
+                show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut kill_npc, &mut open_portal);
                 let phase_after = quest_state.phases.get(&quest_id).cloned();
                 // 퀘스트가 active 상태로 전환됐을 때 QuestGiver 마커 추가
                 if phase_before.as_deref() != Some("active") && phase_after.as_deref() == Some("active") {
@@ -405,6 +406,7 @@ fn show_quest_dialog(
     log: &mut EventWriter<LogMessage>,
     world: &WorldState,
     kill_npc: &mut EventWriter<KillNpcEvent>,
+    open_portal: &mut EventWriter<SpawnQuestPortalEvent>,
 ) {
     // 퀘스트가 초기화되지 않았으면 initial_phase 로 초기화
     if !state.phases.contains_key(quest_id) {
@@ -433,7 +435,7 @@ fn show_quest_dialog(
     // 마지막 줄에서 액션 실행
     if !dialog.is_empty() && idx + 1 >= dialog.len() {
         villager.quest_dialogue_idx = 0;
-        execute_actions(&actions, quest_id, state, inventory, log, world, kill_npc);
+        execute_actions(&actions, quest_id, state, inventory, log, world, kill_npc, open_portal);
     } else {
         villager.quest_dialogue_idx = idx + 1;
     }

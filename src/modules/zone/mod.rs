@@ -17,24 +17,49 @@ pub enum ZoneId {
     Town,
     Forest,
     Dungeon(u32),
+    /// 퀘스트가 동적으로 생성하는 명명된 존 (ex: Named("desert"))
+    Named(String),
 }
 
 impl ZoneId {
     pub fn display_name(&self) -> String {
         match self {
-            ZoneId::Town      => "마을".into(),
-            ZoneId::Forest    => "숲".into(),
+            ZoneId::Town       => "마을".into(),
+            ZoneId::Forest     => "숲".into(),
             ZoneId::Dungeon(n) => format!("던전 {}층", n),
+            ZoneId::Named(n)   => n.clone(),
         }
     }
 
     pub fn algorithm(&self) -> &'static str {
         match self {
-            ZoneId::Town      => "organic_village",
-            ZoneId::Forest    => "forest",
+            ZoneId::Town       => "organic_village",
+            ZoneId::Forest     => "forest",
             ZoneId::Dungeon(_) => "bsp",
+            ZoneId::Named(_)   => "bsp", // 실제 생성기는 NamedZoneConfig에서 조회
         }
     }
+}
+
+// ── NamedZoneConfig ───────────────────────────────────────────────────────────
+
+/// 퀘스트 포탈이 동적으로 등록하는 Named 존 설정
+#[derive(Clone)]
+pub struct NamedZoneEntry {
+    pub generator: String,
+    pub origin: ZoneId,
+}
+
+#[derive(Resource, Default)]
+pub struct NamedZoneConfig {
+    pub zones: HashMap<String, NamedZoneEntry>,
+}
+
+/// 퀘스트 액션이 발행 → handle_spawn_quest_portal 시스템이 처리
+#[derive(Event)]
+pub struct SpawnQuestPortalEvent {
+    pub zone: String,
+    pub generator: String,
 }
 
 // ── ZonePersistence ──────────────────────────────────────────────────────────
@@ -130,9 +155,12 @@ impl Plugin for ZonePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorldState>()
             .init_resource::<ZonePersistence>()
+            .init_resource::<NamedZoneConfig>()
             .add_event::<ZoneTransitionEvent>()
+            .add_event::<SpawnQuestPortalEvent>()
             .add_systems(Startup, cache_initial_map.after(crate::modules::map::draw_map))
             .add_systems(Update, (
+                handle_spawn_quest_portal,
                 check_portal_collision,
                 handle_zone_transition,
                 spawn_portals_after_apply,
@@ -200,6 +228,7 @@ fn handle_zone_transition(
     blood_query: Query<(Entity, &BloodStain, &Transform)>,
     global_turn: Res<GlobalTurn>,
     mut persistence: ResMut<ZonePersistence>,
+    named_config: Res<NamedZoneConfig>,
 ) {
     for transition in ev.read() {
         // 떠나는 존의 혈흔을 스냅샷에 저장하고 엔티티 제거
@@ -223,7 +252,15 @@ fn handle_zone_transition(
         let map = if let Some(cached) = world.maps.get(&target) {
             cached.clone()
         } else {
-            registry.select_by_name(target.algorithm());
+            // Named 존은 NamedZoneConfig 에서 생성기를 조회한다
+            let algo = if let ZoneId::Named(ref name) = target {
+                named_config.zones.get(name)
+                    .map(|e| e.generator.clone())
+                    .unwrap_or_else(|| "bsp".to_string())
+            } else {
+                target.algorithm().to_string()
+            };
+            registry.select_by_name(&algo);
             registry.current()
                 .map(|g| g.generate(MAP_WIDTH, MAP_HEIGHT))
                 .unwrap_or_else(|| Map::new(MAP_WIDTH, MAP_HEIGHT))
@@ -253,6 +290,7 @@ fn spawn_portals_after_apply(
     world: Res<WorldState>,
     portal_q: Query<(), With<ZonePortal>>,
     map_res: Res<MapResource>,
+    named_config: Res<NamedZoneConfig>,
 ) {
     if !map_res.is_changed() { return; }
     if !portal_q.is_empty() { return; }  // 이미 스폰됨
@@ -260,15 +298,35 @@ fn spawn_portals_after_apply(
     let map = &map_res.0;
     let font = asset_server.load("fonts/FiraMono-Medium.ttf");
 
-    let portals = zone_portals(&world.current);
+    let mut portals = zone_portals(&world.current);
+
+    // Named 존 안에 있으면 원점으로 돌아가는 포탈을 추가한다
+    if let ZoneId::Named(ref name) = world.current {
+        if let Some(entry) = named_config.zones.get(name) {
+            portals.push((PortalDirection::StairUp, entry.origin.clone()));
+        }
+    }
+
+    // 현재 존이 origin 인 Named 존들의 진입 포탈을 재스폰한다 (존 재방문 시)
+    for (zone_name, entry) in &named_config.zones {
+        if entry.origin == world.current {
+            portals.push((PortalDirection::StairDown, ZoneId::Named(zone_name.clone())));
+        }
+    }
+
     for (dir, target) in portals {
+        let is_quest_portal = matches!(target, ZoneId::Named(_));
         if let Some((px, py)) = portal_tile(map, &dir) {
             let coord = tile_to_world_coords(px, py);
             let glyph = dir.glyph();
-            let color = match dir {
-                PortalDirection::StairDown => Color::YELLOW,
-                PortalDirection::StairUp   => Color::CYAN,
-                _                          => Color::rgba(0.5, 1.0, 0.5, 0.7),
+            let color = if is_quest_portal {
+                Color::rgb(0.8, 0.2, 0.8)  // 퀘스트 포탈 — 보라색
+            } else {
+                match dir {
+                    PortalDirection::StairDown => Color::YELLOW,
+                    PortalDirection::StairUp   => Color::CYAN,
+                    _                          => Color::rgba(0.5, 1.0, 0.5, 0.7),
+                }
             };
             commands.spawn((
                 Text2dBundle {
@@ -281,6 +339,48 @@ fn spawn_portals_after_apply(
                     ..default()
                 },
                 ZonePortal { target, arrive_from: dir },
+            ));
+        }
+    }
+}
+
+/// SpawnQuestPortalEvent 를 받아 NamedZoneConfig 에 등록하고 현재 맵에 포탈을 스폰한다
+fn handle_spawn_quest_portal(
+    mut ev: EventReader<SpawnQuestPortalEvent>,
+    mut named_config: ResMut<NamedZoneConfig>,
+    world: Res<WorldState>,
+    map_res: Res<MapResource>,
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+) {
+    for event in ev.read() {
+        // 이미 등록된 Named 존은 중복 생성하지 않는다
+        if named_config.zones.contains_key(&event.zone) { continue; }
+
+        named_config.zones.insert(event.zone.clone(), NamedZoneEntry {
+            generator: event.generator.clone(),
+            origin: world.current.clone(),
+        });
+
+        let map = &map_res.0;
+        let dir = PortalDirection::StairDown;
+        if let Some((px, py)) = portal_tile(map, &dir) {
+            let coord = tile_to_world_coords(px, py);
+            let font = asset_server.load("fonts/FiraMono-Medium.ttf");
+            commands.spawn((
+                Text2dBundle {
+                    text: Text::from_section(dir.glyph(), TextStyle {
+                        font,
+                        font_size: TILE_SIZE,
+                        color: Color::rgb(0.8, 0.2, 0.8),
+                    }),
+                    transform: Transform::from_xyz(coord.x, coord.y, 1.5),
+                    ..default()
+                },
+                ZonePortal {
+                    target: ZoneId::Named(event.zone.clone()),
+                    arrive_from: dir,
+                },
             ));
         }
     }
@@ -369,6 +469,7 @@ fn zone_portals(zone: &ZoneId) -> Vec<(PortalDirection, ZoneId)> {
                 (PortalDirection::StairDown, ZoneId::Dungeon(n + 1)),
             ]
         }
+        ZoneId::Named(_) => vec![],
     }
 }
 
@@ -485,5 +586,29 @@ mod tests {
         for x in 0..20 { map.set_tile(x, 18, crate::modules::map::MapTile::Floor); }
         let (_, y) = arrival_pos(&map, &PortalDirection::North);
         assert!(y >= 10, "남쪽 스폰이어야 함: y={}", y);
+    }
+
+    #[test]
+    fn named_zone_portals_empty() {
+        let portals = zone_portals(&ZoneId::Named("desert".to_string()));
+        assert!(portals.is_empty(), "Named 존의 정적 포탈은 없어야 한다");
+    }
+
+    #[test]
+    fn named_zone_config_registers_entry() {
+        let mut config = NamedZoneConfig::default();
+        config.zones.insert("desert".to_string(), NamedZoneEntry {
+            generator: "desert_gen".to_string(),
+            origin: ZoneId::Town,
+        });
+        let entry = config.zones.get("desert").expect("등록된 Named 존이 있어야 한다");
+        assert_eq!(entry.generator, "desert_gen");
+        assert_eq!(entry.origin, ZoneId::Town);
+    }
+
+    #[test]
+    fn named_zone_display_name_uses_zone_name() {
+        assert_eq!(ZoneId::Named("사막".to_string()).display_name(), "사막");
+        assert_eq!(ZoneId::Named("콰스".to_string()).display_name(), "콰스");
     }
 }

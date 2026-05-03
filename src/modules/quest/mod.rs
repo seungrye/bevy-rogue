@@ -4,7 +4,7 @@ use serde::Deserialize;
 use crate::modules::{
     item::{PlayerInventory, ItemKind, QuestItemKind, InventoryItem, Item},
     map::{MapResource, TILE_SIZE, tile_to_world_coords},
-    zone::ZoneId,
+    zone::{ZoneId, SpawnQuestPortalEvent},
 };
 
 // ── RON 데이터 구조 (assets/quests/*.ron) ────────────────────────────────────
@@ -58,6 +58,8 @@ pub enum QuestAction {
     SetFlag { flag: String, value: String },
     ClearFlag(String),
     KillNpc(String),
+    /// 현재 존에 Named 존으로 이어지는 포탈을 즉시 스폰한다
+    OpenPortal { zone: String, generator: String },
     Branch {
         condition: Box<QuestCondition>,
         if_true: Vec<QuestAction>,
@@ -222,6 +224,7 @@ pub fn execute_actions(
     log: &mut EventWriter<crate::modules::ui::LogMessage>,
     world: &crate::modules::zone::WorldState,
     kill_npc: &mut EventWriter<KillNpcEvent>,
+    open_portal: &mut EventWriter<SpawnQuestPortalEvent>,
 ) {
     for action in actions {
         match action {
@@ -260,13 +263,23 @@ pub fn execute_actions(
                 kill_npc.send(KillNpcEvent(name.clone()));
                 info!("NPC 사망 이벤트: {}", name);
             }
+            QuestAction::OpenPortal { zone, generator } => {
+                open_portal.send(SpawnQuestPortalEvent {
+                    zone: zone.clone(),
+                    generator: generator.clone(),
+                });
+                log.send(crate::modules::ui::LogMessage(
+                    format!("포탈이 열렸다 — {}.", zone)
+                ));
+                info!("퀘스트 포탈 열기: {} (생성기: {})", zone, generator);
+            }
             QuestAction::Branch { condition, if_true, if_false } => {
                 let branch = if eval_condition(condition, inventory, world, state) {
                     if_true.as_slice()
                 } else {
                     if_false.as_slice()
                 };
-                execute_actions(branch, quest_id, state, inventory, log, world, kill_npc);
+                execute_actions(branch, quest_id, state, inventory, log, world, kill_npc, open_portal);
             }
         }
     }
