@@ -58,6 +58,7 @@ pub struct Villager {
     pub just_bumped: bool,
     pub quest_id: Option<String>,
     pub quest_dialogue_idx: usize,
+    pub base_color: Color,
 }
 
 // 이번 턴에 주민이 이동해야 하는지 판단하고 플래그를 초기화한다
@@ -80,6 +81,7 @@ impl Plugin for VillagerPlugin {
                 (handle_bump, villager_turn)
                     .chain()
                     .after(PlayerSystemSet::Movement),
+                update_villager_glyph,
             ));
     }
 }
@@ -137,12 +139,19 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
             .map(|&s| format!("{}: {}", name, s))
             .collect();
 
+        let base_color = Color::rgb(color[0], color[1], color[2]);
+        let (glyph, display_color) = if quest_id.is_some() {
+            ("?", Color::rgb(1.0, 0.9, 0.1))
+        } else {
+            ("v", base_color)
+        };
+
         commands.spawn((
             Text2dBundle {
-                text: Text::from_section("v", TextStyle {
+                text: Text::from_section(glyph, TextStyle {
                     font: font.clone(),
                     font_size: TILE_SIZE,
-                    color: Color::rgb(color[0], color[1], color[2]),
+                    color: display_color,
                 }),
                 transform: Transform::from_xyz(coord.x, coord.y, Z_VILLAGER),
                 ..default()
@@ -155,6 +164,7 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
                 just_bumped: false,
                 quest_id: quest_id.map(String::from),
                 quest_dialogue_idx: 0,
+                base_color,
             },
         ));
     }
@@ -309,6 +319,33 @@ pub fn next_dialogue_idx(current: usize, total: usize) -> usize {
     (current + 1) % total
 }
 
+/// 퀘스트가 더 이상 진행할 수 없는 최종 단계인지 확인한다
+pub fn is_quest_terminal(registry: &QuestRegistry, state: &QuestState, quest_id: &str) -> bool {
+    let Some(phase_id) = state.phases.get(quest_id) else { return false };
+    let Some(def) = registry.get(quest_id) else { return false };
+    let Some(phase) = def.phases.get(phase_id) else { return false };
+    phase.on_interact.is_empty() && phase.auto_advance.is_empty()
+}
+
+/// QuestState가 바뀔 때마다 퀘스트 수여자의 글리프와 색을 갱신한다
+fn update_villager_glyph(
+    registry: Res<QuestRegistry>,
+    quest_state: Res<QuestState>,
+    mut query: Query<(&Villager, &mut Text)>,
+) {
+    if !quest_state.is_changed() { return; }
+    for (villager, mut text) in query.iter_mut() {
+        let Some(ref qid) = villager.quest_id else { continue };
+        let (glyph, color) = if is_quest_terminal(&registry, &quest_state, qid) {
+            ("v", villager.base_color)
+        } else {
+            ("?", Color::rgb(1.0, 0.9, 0.1))
+        };
+        text.sections[0].value = glyph.to_string();
+        text.sections[0].style.color = color;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,6 +439,7 @@ mod tests {
             just_bumped,
             quest_id: None,
             quest_dialogue_idx: 0,
+            base_color: Color::WHITE,
         }
     }
 
@@ -428,6 +466,7 @@ mod tests {
             just_bumped: false,
             quest_id: Some("gem_quest".to_string()),
             quest_dialogue_idx: 0,
+            base_color: Color::WHITE,
         };
         assert_eq!(v.quest_id.as_deref(), Some("gem_quest"));
         assert_eq!(v.quest_dialogue_idx, 0);
