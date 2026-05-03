@@ -301,7 +301,7 @@ fn cycle_map_generator(
     mut registry: ResMut<MapGeneratorRegistry>,
     mut events: EventWriter<RegenerateMapEvent>,
 ) {
-    if keyboard_input.just_pressed(KeyCode::Tab) {
+    if keyboard_input.just_pressed(KeyCode::F1) {
         registry.next();
         info!("맵 생성기 전환: {}", registry.current_name());
         events.send(RegenerateMapEvent);

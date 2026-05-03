@@ -55,5 +55,7 @@
 - `ShopOpenEvent` — 상인 NPC 충돌 시 발행
 - `ShopPanelOpen(bool)` 리소스 — 패널 표시 여부
 - `ShopUiState { cursor, mode: ShopMode }` 리소스
+- `ShopFont(Handle<Font>)` 리소스 — 한글 폰트 핸들 보존 (동적 TextSection 생성 시 사용)
 - `src/modules/ui/shop.rs` — ShopPlugin, 패널 렌더·입력 처리
 - `villager::handle_bump` 에서 `name == "상인"` 분기 → `ShopOpenEvent` 발행
+- 맵 생성기 순환 단축키: `Tab` → `F1` (Tab은 상점 탭 전환에 사용)

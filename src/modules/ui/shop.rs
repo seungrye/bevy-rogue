@@ -94,6 +94,9 @@ struct ShopPanel;
 #[derive(Component)]
 struct ShopPanelContent;
 
+#[derive(Resource)]
+struct ShopFont(Handle<Font>);
+
 pub struct ShopPlugin;
 
 impl Plugin for ShopPlugin {
@@ -111,7 +114,8 @@ impl Plugin for ShopPlugin {
 }
 
 fn setup_shop_panel(mut commands: Commands, asset_server: Res<AssetServer>) {
-    let font = asset_server.load("fonts/NanumSquareNeo-bRg.ttf");
+    let font: Handle<Font> = asset_server.load("fonts/NanumSquareNeo-bRg.ttf");
+    commands.insert_resource(ShopFont(font.clone()));
     // 전체 화면 투명 컨테이너 (수평 중앙 정렬)
     commands.spawn((
         NodeBundle {
@@ -248,6 +252,7 @@ fn update_shop_panel(
     open: Res<ShopPanelOpen>,
     state: Res<ShopUiState>,
     inventory: Res<PlayerInventory>,
+    shop_font: Res<ShopFont>,
     mut panel_q: Query<&mut Visibility, With<ShopPanel>>,
     mut content_q: Query<&mut Text, With<ShopPanelContent>>,
 ) {
@@ -262,8 +267,9 @@ fn update_shop_panel(
     let white  = Color::WHITE;
 
     let mut sections: Vec<TextSection> = Vec::new();
+    let font = shop_font.0.clone();
 
-    let make = |s: String, c: Color| TextSection::new(s, TextStyle { font_size: FONT_SIZE, color: c, ..default() });
+    let make = |s: String, c: Color| TextSection::new(s, TextStyle { font: font.clone(), font_size: FONT_SIZE, color: c });
 
     // 헤더
     sections.push(make("═══ 상인의 상점 ═══\n".into(), yellow));

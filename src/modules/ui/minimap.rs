@@ -161,7 +161,7 @@ fn spawn_minimap_overlay(
             GeneratorNameText,
         ));
         parent.spawn(TextBundle::from_section(
-            "[Tab] 맵 전환",
+            "[F1] 맵 전환",
             TextStyle { font, font_size: 11.0, color: Color::GRAY },
         ));
     });
