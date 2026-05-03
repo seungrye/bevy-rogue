@@ -58,13 +58,15 @@ fn handle_combat_feedback(
             BloodStain { alpha: 1.0 },
         ));
 
-        let original_color = flash_query.get(event.hit_entity)
-            .map(|f| f.original_color)
-            .unwrap_or(event.original_color);
-        commands.entity(event.hit_entity).insert(HitFlash {
-            remaining: HIT_FLASH_DURATION,
-            original_color,
-        });
+        if let Some(mut ec) = commands.get_entity(event.hit_entity) {
+            let original_color = flash_query.get(event.hit_entity)
+                .map(|f| f.original_color)
+                .unwrap_or(event.original_color);
+            ec.insert(HitFlash {
+                remaining: HIT_FLASH_DURATION,
+                original_color,
+            });
+        }
     }
 }
 
@@ -111,6 +113,18 @@ pub fn hit_flash_remaining_after(remaining: f32, dt: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blood_stain_starts_fully_visible() {
+        // 스폰 직후(dt=0)에는 alpha가 감소하지 않는다
+        assert_eq!(blood_stain_alpha_after_decay(1.0, BLOOD_DECAY_RATE, 0.0), 1.0);
+    }
+
+    #[test]
+    fn hit_flash_starts_active() {
+        // 스폰 직후(dt=0)에는 remaining이 초기값 그대로여야 한다
+        assert!(hit_flash_remaining_after(HIT_FLASH_DURATION, 0.0) > 0.0);
+    }
 
     #[test]
     fn blood_stain_decays_at_given_rate() {
