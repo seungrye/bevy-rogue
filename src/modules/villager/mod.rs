@@ -554,15 +554,16 @@ pub fn is_quest_terminal(registry: &QuestRegistry, state: &QuestState, quest_id:
     phase.on_interact.is_empty() && phase.auto_advance.is_empty()
 }
 
-/// QuestState 또는 PlayerInventory가 바뀔 때마다 퀘스트 수여자의 글리프와 색을 갱신한다
+/// QuestState 또는 PlayerInventory가 바뀌거나 주민이 새로 스폰될 때마다 퀘스트 수여자의 글리프와 색을 갱신한다
 fn update_villager_glyph(
     registry: Res<QuestRegistry>,
     quest_state: Res<QuestState>,
     inventory: Res<PlayerInventory>,
     world: Res<WorldState>,
     mut query: Query<(&Villager, &mut Text)>,
+    added: Query<(), Added<Villager>>,
 ) {
-    if !quest_state.is_changed() && !inventory.is_changed() { return; }
+    if !quest_state.is_changed() && !inventory.is_changed() && added.is_empty() { return; }
     for (villager, mut text) in query.iter_mut() {
         let Some(ref qid) = villager.quest_id else { continue };
         let Some(def) = registry.get(qid) else { continue };
