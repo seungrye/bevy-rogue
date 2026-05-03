@@ -445,7 +445,10 @@ pub struct Item {
 pub struct QuestItemAcquiredEvent(pub QuestItemKind);
 
 #[derive(Component)]
-struct QuestItemPopup;
+struct QuestItemPopup {
+    tile_x: usize,
+    tile_y: usize,
+}
 
 /// 몬스터 처치 시 아이템 드롭을 요청하는 이벤트
 #[derive(Event)]
@@ -646,9 +649,15 @@ fn spawn_quest_item_popup(
     mut events: EventReader<QuestItemAcquiredEvent>,
     asset_server: Res<AssetServer>,
     popup_q: Query<(), With<QuestItemPopup>>,
+    player_q: Query<(Option<&MovingTo>, &Transform), With<Player>>,
 ) {
     for QuestItemAcquiredEvent(kind) in events.read() {
         if !popup_q.is_empty() { continue; }
+        let Ok((moving_to, transform)) = player_q.get_single() else { continue };
+        let (tile_x, tile_y) = moving_to
+            .map(|m| world_to_tile_coords(m.target))
+            .unwrap_or_else(|| world_to_tile_coords(transform.translation));
+
         let image = asset_server.load(quest_item_image_path(*kind));
         commands.spawn((
             NodeBundle {
@@ -664,7 +673,7 @@ fn spawn_quest_item_popup(
                 background_color: Color::NONE.into(),
                 ..default()
             },
-            QuestItemPopup,
+            QuestItemPopup { tile_x, tile_y },
         )).with_children(|parent| {
             parent.spawn(ImageBundle {
                 image: image.into(),
@@ -681,34 +690,25 @@ fn spawn_quest_item_popup(
 
 fn close_quest_item_popup(
     mut commands: Commands,
-    mut acted: EventReader<PlayerActedEvent>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
-    popup_q: Query<Entity, With<QuestItemPopup>>,
-    mut seen: Local<bool>,
+    popup_q: Query<(Entity, &QuestItemPopup)>,
+    player_q: Query<(Option<&MovingTo>, &Transform), With<Player>>,
 ) {
-    let Ok(entity) = popup_q.get_single() else {
-        *seen = false; // 팝업 없으면 상태 초기화
-        return;
-    };
+    let Ok((entity, popup)) = popup_q.get_single() else { return };
 
-    // Escape 는 언제든 즉시 닫기
     if keyboard_input.just_pressed(KeyCode::Escape) {
         commands.entity(entity).despawn_recursive();
-        *seen = false;
         return;
     }
 
-    if !*seen {
-        // 팝업이 처음 보이는 프레임 — 픽업 프레임의 오래된 acted 이벤트를 비워 무시
-        *seen = true;
-        acted.clear();
-        return;
-    }
+    let Ok((moving_to, transform)) = player_q.get_single() else { return };
+    let (px, py) = moving_to
+        .map(|m| world_to_tile_coords(m.target))
+        .unwrap_or_else(|| world_to_tile_coords(transform.translation));
 
-    // 다음 프레임부터 플레이어가 행동하면 팝업 닫기
-    if acted.read().next().is_some() {
+    // 픽업한 타일을 벗어나면 팝업 닫기
+    if px != popup.tile_x || py != popup.tile_y {
         commands.entity(entity).despawn_recursive();
-        *seen = false;
     }
 }
 
