@@ -1,13 +1,18 @@
 use crate::modules::{
     map::{
-        draw_map, Map, MapResource, MapTile, OccupiedTiles,
+        draw_map, Map, MapResource, MapTile, OccupiedTiles, MonsterTiles,
         tile_to_world_coords, world_to_tile_coords,
         MAP_HEIGHT, MAP_WIDTH, TILE_SIZE,
-        MapSystemSet, PlayerRespawnEvent, PlayerActedEvent, BumpTileEvent,
+        MapSystemSet, PlayerRespawnEvent, PlayerActedEvent, BumpTileEvent, AttackMonsterEvent,
     },
+    combat::{CombatStats, Defeated},
     ui::LogMessage,
 };
 use bevy::prelude::*;
+
+pub const PLAYER_HP: i32 = 30;
+pub const PLAYER_ATK: i32 = 5;
+pub const PLAYER_DEF: i32 = 1;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PlayerSystemSet {
@@ -69,6 +74,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, map_res:
             ..default()
         },
         Player,
+        CombatStats { hp: PLAYER_HP, max_hp: PLAYER_HP, attack: PLAYER_ATK, defense: PLAYER_DEF },
     ));
 }
 
@@ -77,12 +83,14 @@ fn player_movement(
     keyboard_input: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     mut hold_state: ResMut<MoveHoldState>,
-    player_query: Query<(Entity, &Transform), (With<Player>, Without<MovingTo>)>,
+    player_query: Query<(Entity, &Transform), (With<Player>, Without<MovingTo>, Without<Defeated>)>,
     map_res: Res<MapResource>,
     occupied: Res<OccupiedTiles>,
+    monster_tiles: Res<MonsterTiles>,
     mut acted: EventWriter<PlayerActedEvent>,
     mut bump: EventWriter<BumpTileEvent>,
-    mut log_writer: EventWriter<LogMessage>,
+    mut attack: EventWriter<AttackMonsterEvent>,
+    _log_writer: EventWriter<LogMessage>,
 ) {
     let Ok((entity, transform)) = player_query.get_single() else { return };
 
@@ -107,12 +115,13 @@ fn player_movement(
 
     if map_res.map().get_tile(tx, ty) != MapTile::Floor { return; }
 
-    if occupied.0.contains(&(tx, ty)) {
-        // 주민과 충돌: 대사 트리거 + 턴 소비
+    if monster_tiles.0.contains(&(tx, ty)) {
+        attack.send(AttackMonsterEvent(tx, ty));
+        acted.send(PlayerActedEvent);
+    } else if occupied.0.contains(&(tx, ty)) {
         bump.send(BumpTileEvent(tx, ty));
         acted.send(PlayerActedEvent);
     } else {
-        log_writer.send(LogMessage(format!("({}, {}) 로 이동합니다.", tx, ty)));
         let wp = tile_to_world_coords(tx, ty);
         commands.entity(entity).insert(MovingTo { target: Vec3::new(wp.x, wp.y, 1.0) });
         acted.send(PlayerActedEvent);

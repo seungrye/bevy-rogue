@@ -81,6 +81,7 @@ fn main() {
         }))
         .add_plugins(modules::map::MapPlugin { initial_algorithm })
         .add_plugins(modules::player::PlayerPlugin)
+        .add_plugins(modules::monster::MonsterPlugin)
         .add_plugins(modules::trigger::TriggerPlugin)
         .add_plugins(modules::ui::GameUiPlugin)
         .add_plugins(modules::villager::VillagerPlugin)

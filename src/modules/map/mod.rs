@@ -155,6 +155,21 @@ pub struct PlayerActedEvent;
 #[derive(Event)]
 pub struct BumpTileEvent(pub usize, pub usize);
 
+/// 플레이어가 몬스터 타일로 이동을 시도했을 때 발행
+#[derive(Event)]
+pub struct AttackMonsterEvent(pub usize, pub usize);
+
+/// 맵 재생성 시 몬스터 재스폰 트리거
+#[derive(Event)]
+pub struct MonsterRespawnEvent {
+    pub map_type: MapType,
+    pub rooms: Vec<Rect>,
+}
+
+/// 몬스터 타일 위치 집합 — PreUpdate에서 동기화, 플레이어 이동 차단에 사용
+#[derive(Resource, Default)]
+pub struct MonsterTiles(pub std::collections::HashSet<(usize, usize)>);
+
 // --- System Set ---
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -197,12 +212,15 @@ impl Plugin for MapPlugin {
 
         app.insert_resource(registry)
             .init_resource::<OccupiedTiles>()
+            .init_resource::<MonsterTiles>()
             .add_event::<RegenerateMapEvent>()
             .add_event::<PlayerRespawnEvent>()
             .add_event::<TriggerRespawnEvent>()
             .add_event::<VillagerRespawnEvent>()
+            .add_event::<MonsterRespawnEvent>()
             .add_event::<PlayerActedEvent>()
             .add_event::<BumpTileEvent>()
+            .add_event::<AttackMonsterEvent>()
             .add_systems(Startup, (
                 create_and_store_map,
                 draw_map.after(create_and_store_map),
@@ -277,6 +295,7 @@ fn execute_regen(
     mut player_respawn: EventWriter<PlayerRespawnEvent>,
     mut trigger_respawn: EventWriter<TriggerRespawnEvent>,
     mut villager_respawn: EventWriter<VillagerRespawnEvent>,
+    mut monster_respawn: EventWriter<MonsterRespawnEvent>,
 ) {
     for _ in events.read() {
         for entity in tile_query.iter() {
@@ -317,7 +336,8 @@ fn execute_regen(
 
         player_respawn.send(PlayerRespawnEvent(sx, sy));
         trigger_respawn.send(TriggerRespawnEvent(rooms.clone()));
-        villager_respawn.send(VillagerRespawnEvent { map_type, rooms });
+        villager_respawn.send(VillagerRespawnEvent { map_type, rooms: rooms.clone() });
+        monster_respawn.send(MonsterRespawnEvent { map_type, rooms });
     }
 }
 
