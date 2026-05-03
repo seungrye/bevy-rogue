@@ -61,7 +61,7 @@ fn main() {
             eprintln!("오류: {}\n\n{}", msg, HELP_TEXT);
             std::process::exit(1);
         }
-        ParseResult::Run(alg) => Some(alg.unwrap_or_else(|| "grid_village".to_string())),
+        ParseResult::Run(alg) => Some(alg.unwrap_or_else(|| "bsp".to_string())),
     };
 
     let tile_size = modules::map::TILE_SIZE;
