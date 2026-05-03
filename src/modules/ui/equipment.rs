@@ -2,12 +2,18 @@ use bevy::prelude::*;
 use crate::modules::{
     item::{
         ItemKind, PlayerInventory, PlayerEquipment, EquipmentPanelOpen,
-        weapon_attack, armor_defense_bonus,
+        weapon_attack, armor_defense_bonus, WeaponKind,
     },
     player::Player,
     combat::CombatStats,
 };
 use super::LogMessage;
+
+const WEAPON_ICON: &str = "\u{E946}";
+const SPEAR_ICON:  &str = "\u{EAAC}";
+const BOW_ICON:    &str = "\u{E978}";
+const ARMOR_ICON:  &str = "\u{EA96}";
+const POTION_ICON: &str = "\u{EA72}";
 
 #[derive(Resource, Default)]
 pub struct EquipmentUiState {
@@ -167,6 +173,7 @@ fn update_equipment_panel(
     inventory: Res<PlayerInventory>,
     equipment: Res<PlayerEquipment>,
     ui_state: Res<EquipmentUiState>,
+    asset_server: Res<AssetServer>,
     mut panel_q: Query<&mut Visibility, With<EquipmentPanel>>,
     mut text_q: Query<&mut Text, With<EquipmentPanelContent>>,
 ) {
@@ -179,52 +186,81 @@ fn update_equipment_panel(
     if !panel_open.0 { return; }
 
     if panel_open.is_changed() || inventory.is_changed() || equipment.is_changed() || ui_state.is_changed() {
+        let kr_font  = asset_server.load("fonts/NanumSquareNeo-bRg.ttf");
+        let rpg_font = asset_server.load("fonts/rpg-awesome.ttf");
         if let Ok(mut text) = text_q.get_single_mut() {
-            text.sections[0].value = build_panel_text(&inventory, &equipment, ui_state.cursor);
+            text.sections = build_panel_sections(&inventory, &equipment, ui_state.cursor, &kr_font, &rpg_font);
         }
     }
 }
 
-pub(crate) fn build_panel_text(
+fn ts(value: impl Into<String>, font: Handle<Font>, size: f32, color: Color) -> TextSection {
+    TextSection { value: value.into(), style: TextStyle { font, font_size: size, color } }
+}
+
+fn item_kind_icon(kind: &ItemKind) -> &'static str {
+    match kind {
+        ItemKind::Weapon(WeaponKind::Sword) => WEAPON_ICON,
+        ItemKind::Weapon(WeaponKind::Spear) => SPEAR_ICON,
+        ItemKind::Weapon(WeaponKind::Bow)   => BOW_ICON,
+        ItemKind::Armor(_)                  => ARMOR_ICON,
+        ItemKind::Consumable(_)             => POTION_ICON,
+    }
+}
+
+pub(crate) fn build_panel_sections(
     inventory: &PlayerInventory,
     equipment: &PlayerEquipment,
     cursor: usize,
-) -> String {
-    let mut lines: Vec<String> = vec![
-        "=== 장비 관리 ===".into(),
-        "↑↓: 선택  Enter: 장착/사용  E·Esc: 닫기".into(),
-        String::new(),
+    kr_font: &Handle<Font>,
+    rpg_font: &Handle<Font>,
+) -> Vec<TextSection> {
+    let kr  = |v: &str| ts(v, kr_font.clone(), 16.0, Color::WHITE);
+    let dim = |v: &str, c: Color| ts(v, rpg_font.clone(), 16.0, c);
+
+    let mut sections = vec![
+        kr("=== 장비 관리 ===\n↑↓: 선택  Enter: 장착/사용  E·Esc: 닫기\n\n"),
     ];
 
-    let weapon_str = match equipment.weapon {
-        None    => "없음".to_string(),
-        Some(w) => format!("{} (ATK {})", w.display_name(), weapon_attack(w)),
+    let (weapon_icon_str, weapon_icon_color) = match equipment.weapon {
+        Some(WeaponKind::Sword) => (WEAPON_ICON, Color::rgba(1.0, 1.0, 0.5, 1.0)),
+        Some(WeaponKind::Spear) => (SPEAR_ICON,  Color::rgba(1.0, 1.0, 0.5, 1.0)),
+        Some(WeaponKind::Bow)   => (BOW_ICON,    Color::rgba(1.0, 1.0, 0.5, 1.0)),
+        None                    => (WEAPON_ICON, Color::rgba(1.0, 1.0, 0.5, 0.3)),
     };
-    let armor_str = match equipment.armor {
-        None    => "없음".to_string(),
-        Some(a) => format!("{} (+{}DEF)", a.display_name(), armor_defense_bonus(a)),
+    let weapon_status = match equipment.weapon {
+        None    => "없음\n".to_string(),
+        Some(w) => format!("{} (ATK {})\n", w.display_name(), weapon_attack(w)),
     };
-    lines.push(format!("무기: {}", weapon_str));
-    lines.push(format!("방어구: {}", armor_str));
-    lines.push(String::new());
-    lines.push("--- 인벤토리 ---".into());
+    sections.push(dim(&format!("{} ", weapon_icon_str), weapon_icon_color));
+    sections.push(ts(weapon_status, kr_font.clone(), 16.0, Color::rgba(1.0, 1.0, 0.5, 0.9)));
+
+    let armor_icon_color = if equipment.armor.is_some() {
+        Color::rgba(0.5, 0.7, 1.0, 1.0)
+    } else {
+        Color::rgba(0.5, 0.7, 1.0, 0.3)
+    };
+    let armor_status = match equipment.armor {
+        None    => "없음\n\n--- 인벤토리 ---\n".to_string(),
+        Some(a) => format!("{} (+{}DEF)\n\n--- 인벤토리 ---\n", a.display_name(), armor_defense_bonus(a)),
+    };
+    sections.push(dim(&format!("{} ", ARMOR_ICON), armor_icon_color));
+    sections.push(ts(armor_status, kr_font.clone(), 16.0, Color::rgba(0.5, 0.7, 1.0, 0.9)));
 
     let total = inventory.items.len() + inventory.consumables.len();
     if total == 0 {
-        lines.push("  (비어있음)".into());
+        sections.push(kr("  (비어있음)"));
     } else {
         let mut weapon_marked = false;
         let mut armor_marked  = false;
         for (i, inv_item) in inventory.items.iter().enumerate() {
-            let prefix = if i == cursor { ">" } else { " " };
+            let prefix = if i == cursor { "> " } else { "  " };
             let equipped = match inv_item.kind {
                 ItemKind::Weapon(w) if equipment.weapon == Some(w) && !weapon_marked => {
-                    weapon_marked = true;
-                    " [장착]"
+                    weapon_marked = true; " [장착]"
                 }
                 ItemKind::Armor(a) if equipment.armor == Some(a) && !armor_marked => {
-                    armor_marked = true;
-                    " [장착]"
+                    armor_marked = true; " [장착]"
                 }
                 _ => "",
             };
@@ -233,16 +269,34 @@ pub(crate) fn build_panel_text(
                 ItemKind::Armor(a)  => format!(" (+{}DEF)", armor_defense_bonus(a)),
                 _                   => String::new(),
             };
-            lines.push(format!("{} {}{}{}", prefix, inv_item.kind.display_name(), stat, equipped));
+            let icon = item_kind_icon(&inv_item.kind);
+            sections.push(ts(prefix, kr_font.clone(), 16.0, Color::WHITE));
+            sections.push(dim(&format!("{} ", icon), Color::rgba(1.0, 0.9, 0.6, 0.8)));
+            sections.push(ts(format!("{}{}{}\n", inv_item.kind.display_name(), stat, equipped), kr_font.clone(), 16.0, Color::WHITE));
         }
         let base = inventory.items.len();
         for (i, (ck, count)) in inventory.consumables.iter().enumerate() {
-            let prefix = if base + i == cursor { ">" } else { " " };
-            lines.push(format!("{} {} x{}", prefix, ck.display_name(), count));
+            let prefix = if base + i == cursor { "> " } else { "  " };
+            sections.push(ts(prefix, kr_font.clone(), 16.0, Color::WHITE));
+            sections.push(dim(&format!("{} ", POTION_ICON), Color::rgba(1.0, 0.4, 0.4, 0.8)));
+            sections.push(ts(format!("{} x{}\n", ck.display_name(), count), kr_font.clone(), 16.0, Color::WHITE));
         }
     }
 
-    lines.join("\n")
+    sections
+}
+
+pub(crate) fn build_panel_text(
+    inventory: &PlayerInventory,
+    equipment: &PlayerEquipment,
+    cursor: usize,
+) -> String {
+    let kr:  Handle<Font> = Handle::default();
+    let rpg: Handle<Font> = Handle::default();
+    build_panel_sections(inventory, equipment, cursor, &kr, &rpg)
+        .into_iter()
+        .map(|s| s.value)
+        .collect()
 }
 
 #[cfg(test)]
@@ -284,7 +338,7 @@ mod tests {
         inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::Spear) });
         let text = build_panel_text(&inv, &empty_eq(), 1);
         let spear_line = text.lines().find(|l| l.contains("창")).unwrap_or("");
-        assert!(spear_line.contains("> 창"), "spear line was: {spear_line:?}");
+        assert!(spear_line.starts_with("> ") && spear_line.contains("창"), "spear line was: {spear_line:?}");
     }
 
     #[test]

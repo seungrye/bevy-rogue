@@ -9,8 +9,13 @@ use bevy::{
 use crate::modules::{
     map::{Map, MapResource, MapTile, MAP_HEIGHT, MAP_WIDTH, MapGeneratorRegistry},
     player::Player,
-    item::PlayerEquipment,
+    item::{PlayerEquipment, WeaponKind},
 };
+
+const WEAPON_ICON: &str = "\u{E946}";
+const SPEAR_ICON:  &str = "\u{EAAC}";
+const BOW_ICON:    &str = "\u{E978}";
+const ARMOR_ICON:  &str = "\u{EA96}";
 
 pub const MINIMAP_RADIUS: i32 = 20;
 const WALL_BOOST: f32 = 5.0;
@@ -92,6 +97,7 @@ fn spawn_minimap_overlay(
     registry: Res<MapGeneratorRegistry>,
 ) {
     let font = asset_server.load("fonts/NanumSquareNeo-bRg.ttf");
+    let rpg_font = asset_server.load("fonts/rpg-awesome.ttf");
     commands.spawn((
         NodeBundle {
             style: Style {
@@ -129,17 +135,35 @@ fn spawn_minimap_overlay(
             TextStyle { font: font.clone(), font_size: 11.0, color: Color::GRAY },
         ));
         parent.spawn((
-            TextBundle::from_section(
-                "무기: -",
-                TextStyle { font: font.clone(), font_size: 11.0, color: Color::rgba(1.0, 1.0, 0.5, 0.9) },
-            ),
+            TextBundle {
+                text: Text::from_sections([
+                    TextSection::new(
+                        format!("{} ", WEAPON_ICON),
+                        TextStyle { font: rpg_font.clone(), font_size: 13.0, color: Color::rgba(1.0, 1.0, 0.5, 0.3) },
+                    ),
+                    TextSection::new(
+                        "-",
+                        TextStyle { font: font.clone(), font_size: 11.0, color: Color::rgba(1.0, 1.0, 0.5, 0.9) },
+                    ),
+                ]),
+                ..default()
+            },
             WeaponSlotText,
         ));
         parent.spawn((
-            TextBundle::from_section(
-                "방어구: -",
-                TextStyle { font, font_size: 11.0, color: Color::rgba(0.5, 0.7, 1.0, 0.9) },
-            ),
+            TextBundle {
+                text: Text::from_sections([
+                    TextSection::new(
+                        format!("{} ", ARMOR_ICON),
+                        TextStyle { font: rpg_font, font_size: 13.0, color: Color::rgba(0.5, 0.7, 1.0, 0.3) },
+                    ),
+                    TextSection::new(
+                        "-",
+                        TextStyle { font, font_size: 11.0, color: Color::rgba(0.5, 0.7, 1.0, 0.9) },
+                    ),
+                ]),
+                ..default()
+            },
             ArmorSlotText,
         ));
     });
@@ -333,16 +357,37 @@ fn update_equipment_slots(
 ) {
     if !equipment.is_changed() { return; }
     if let Ok(mut text) = weapon_q.get_single_mut() {
-        text.sections[0].value = match equipment.weapon {
-            None    => "무기: -".to_string(),
-            Some(w) => format!("무기: {}", w.display_name()),
-        };
+        match equipment.weapon {
+            None => {
+                text.sections[0].value = format!("{} ", WEAPON_ICON);
+                text.sections[0].style.color = Color::rgba(1.0, 1.0, 0.5, 0.3);
+                text.sections[1].value = "-".to_string();
+            }
+            Some(w) => {
+                let icon = match w {
+                    WeaponKind::Sword => WEAPON_ICON,
+                    WeaponKind::Spear => SPEAR_ICON,
+                    WeaponKind::Bow   => BOW_ICON,
+                };
+                text.sections[0].value = format!("{} ", icon);
+                text.sections[0].style.color = Color::rgba(1.0, 1.0, 0.5, 0.9);
+                text.sections[1].value = w.display_name().to_string();
+            }
+        }
     }
     if let Ok(mut text) = armor_q.get_single_mut() {
-        text.sections[0].value = match equipment.armor {
-            None    => "방어구: -".to_string(),
-            Some(a) => format!("방어구: {}", a.display_name()),
-        };
+        match equipment.armor {
+            None => {
+                text.sections[0].value = format!("{} ", ARMOR_ICON);
+                text.sections[0].style.color = Color::rgba(0.5, 0.7, 1.0, 0.3);
+                text.sections[1].value = "-".to_string();
+            }
+            Some(a) => {
+                text.sections[0].value = format!("{} ", ARMOR_ICON);
+                text.sections[0].style.color = Color::rgba(0.5, 0.7, 1.0, 0.9);
+                text.sections[1].value = a.display_name().to_string();
+            }
+        }
     }
 }
 
@@ -560,25 +605,25 @@ mod tests {
     }
 
     #[test]
-    fn weapon_slot_text_no_weapon() {
+    fn weapon_slot_name_text_no_weapon() {
         use crate::modules::item::PlayerEquipment;
         let eq = PlayerEquipment { weapon: None, armor: None };
-        let text = match eq.weapon {
-            None    => "무기: -".to_string(),
-            Some(w) => format!("무기: {}", w.display_name()),
+        let name_text = match eq.weapon {
+            None    => "-".to_string(),
+            Some(w) => w.display_name().to_string(),
         };
-        assert_eq!(text, "무기: -");
+        assert_eq!(name_text, "-");
     }
 
     #[test]
-    fn armor_slot_text_no_armor() {
+    fn armor_slot_name_text_no_armor() {
         use crate::modules::item::PlayerEquipment;
         let eq = PlayerEquipment { weapon: None, armor: None };
-        let text = match eq.armor {
-            None    => "방어구: -".to_string(),
-            Some(a) => format!("방어구: {}", a.display_name()),
+        let name_text = match eq.armor {
+            None    => "-".to_string(),
+            Some(a) => a.display_name().to_string(),
         };
-        assert_eq!(text, "방어구: -");
+        assert_eq!(name_text, "-");
     }
 
     #[test]
