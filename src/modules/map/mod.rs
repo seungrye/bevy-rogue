@@ -463,8 +463,8 @@ fn find_spawn_point(map: &Map) -> (usize, usize) {
 
 // --- Constants ---
 
-pub const MAP_WIDTH: usize = 160;
-pub const MAP_HEIGHT: usize = 100;
+pub const MAP_WIDTH: usize = 80;
+pub const MAP_HEIGHT: usize = 50;
 pub const TILE_SIZE: f32 = 16.0;
 
 // --- Coords ---

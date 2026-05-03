@@ -27,6 +27,11 @@ pub trait MapGenerator: Send + Sync {
 
 ---
 
+## 맵 크기
+
+- `MAP_WIDTH = 80`, `MAP_HEIGHT = 50` (타일 단위)
+- 컨텐츠 밀도를 높이기 위해 과도하게 넓은 크기는 피한다
+
 ## 동작 명세
 
 ### 맵 생성 계약
