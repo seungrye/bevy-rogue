@@ -1,8 +1,12 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
-use crate::modules::map::{
-    Map, MapResource, MapGeneratorRegistry, ApplyMapEvent,
-    MAP_WIDTH, MAP_HEIGHT, MapTile, tile_to_world_coords, TILE_SIZE,
+use crate::modules::{
+    map::{
+        Map, MapResource, MapGeneratorRegistry, ApplyMapEvent,
+        MAP_WIDTH, MAP_HEIGHT, MapTile, tile_to_world_coords, TILE_SIZE,
+        world_to_tile_coords,
+    },
+    player::MovingTo,
 };
 
 // ── ZoneId ──────────────────────────────────────────────────────────────────
@@ -121,11 +125,10 @@ fn cache_initial_map(
 
 /// 플레이어가 ZonePortal 위치에 있으면 ZoneTransitionEvent 발행
 fn check_portal_collision(
-    player_q: Query<&Transform, With<crate::modules::player::Player>>,
+    player_q: Query<(&Transform, Option<&MovingTo>), With<crate::modules::player::Player>>,
     portal_q: Query<(&Transform, &ZonePortal)>,
     mut ev: EventWriter<ZoneTransitionEvent>,
     mut triggered: Local<bool>,
-    // 이동 이벤트가 발생한 프레임에만 체크
     acted: EventReader<crate::modules::map::PlayerActedEvent>,
 ) {
     if acted.is_empty() {
@@ -134,11 +137,14 @@ fn check_portal_collision(
     }
     if *triggered { return; }
 
-    let Ok(pt) = player_q.get_single() else { return };
-    let (px, py) = crate::modules::map::world_to_tile_coords(pt.translation);
+    let Ok((pt, moving_to)) = player_q.get_single() else { return };
+    // MovingTo 목적지 우선 사용 — Transform 은 lerp 중간값이라 실제 타일과 불일치
+    let (px, py) = moving_to
+        .map(|m| world_to_tile_coords(m.target))
+        .unwrap_or_else(|| world_to_tile_coords(pt.translation));
 
     for (portal_t, portal) in portal_q.iter() {
-        let (tx, ty) = crate::modules::map::world_to_tile_coords(portal_t.translation);
+        let (tx, ty) = world_to_tile_coords(portal_t.translation);
         if px == tx && py == ty {
             ev.send(ZoneTransitionEvent {
                 target: portal.target.clone(),

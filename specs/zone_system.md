@@ -42,12 +42,13 @@ Town ←→ Forest ←→ Dungeon(1) ←→ Dungeon(2)
 
 ## 동작 명세
 
-- [ ] `WorldState` 리소스: 현재 존 + 맵 캐시
-- [ ] 존 전환 시 이전 맵을 캐시에 저장하고 새 맵으로 교체
-- [ ] `ZoneChangedEvent` 발행 → 몬스터·아이템·빌리저 재스폰 트리거
-- [ ] 포털 진입 시 플레이어 위치를 도착 존의 적절한 지점으로 이동
-- [ ] 계단 포털은 `>` (내려가기) / `<` (올라가기) 글리프로 맵에 표시
-- [ ] 마을·숲 구분: `MapType::Village` vs `MapType::Dungeon` 유지
+- [x] `WorldState` 리소스: 현재 존 + 맵 캐시
+- [x] 존 전환 시 이전 맵을 캐시에 저장하고 새 맵으로 교체
+- [x] `ApplyMapEvent` 발행 → 몬스터·아이템·빌리저 재스폰 트리거
+- [x] 포털 진입 시 플레이어 위치를 도착 존의 적절한 지점으로 이동
+- [x] 계단 포털은 `>` (내려가기) / `<` (올라가기) 글리프로 맵에 표시
+- [x] 마을·숲 구분: `MapType::Village` vs `MapType::Dungeon` 유지
+- [x] 포털 충돌은 `MovingTo` 목적지 기준 — Transform 은 lerp 중간값이므로 미사용
 
 ## 시작 존
 
