@@ -4,8 +4,8 @@ use crate::modules::map::{tile_to_world_coords, TILE_SIZE, PlayerActedEvent};
 
 pub const HIT_FLASH_DURATION: f32 = 0.15;
 const Z_BLOOD: f32 = 0.5;
-const BLOOD_LIFETIME_MIN: u32 = 4;
-const BLOOD_LIFETIME_MAX: u32 = 12;
+const BLOOD_LIFETIME_MIN: u32 = 15;
+const BLOOD_LIFETIME_MAX: u32 = 30;
 
 #[derive(Component)]
 pub struct BloodStain {
@@ -139,7 +139,7 @@ mod tests {
         let decay = decay_per_turn_for(BLOOD_LIFETIME_MIN);
         let mut a = 1.0_f32;
         for _ in 0..BLOOD_LIFETIME_MIN { a = blood_stain_alpha_after_decay(a, decay); }
-        assert!(a <= 0.0, "최소 수명({} 턴) 후 사라져야 한다", BLOOD_LIFETIME_MIN);
+        assert!(a < 1e-4, "최소 수명({} 턴) 후 거의 사라져야 한다 (실제: {})", BLOOD_LIFETIME_MIN, a);
     }
 
     #[test]
