@@ -13,10 +13,14 @@
 
 ```rust
 pub trait MapGenerator: Send + Sync {
-    fn generate(&self, width: usize, height: usize) -> Map;
+    fn generate(&self, width: usize, height: usize, seed: u64) -> Map;
     fn name(&self) -> &str;
 }
 ```
+
+- 모든 구현체는 `StdRng::seed_from_u64(seed)` 를 사용해 결정론적으로 생성한다
+- `thread_rng()` 는 사용하지 않는다 — 동일 시드로 항상 동일한 맵 재현 보장
+- 내부 헬퍼 함수도 `&mut impl Rng` 로 rng 를 전달받는다
 
 ### MapGeneratorRegistry 리소스
 
