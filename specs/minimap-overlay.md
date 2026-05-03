@@ -14,9 +14,12 @@
 - [x] 기본값은 표시 상태이다 (게임 시작 시 미니맵 표시됨)
 - [x] 미니맵 아래에 현재 생성기 이름이 청록색으로 표시된다
 - [x] 생성기 이름 아래에 `[Tab] 맵 전환` 힌트가 회색으로 표시된다
-- [x] `Ctrl`+`=`(`+`) 또는 `Ctrl`+Numpad`+`로 미니맵을 확대한다
-- [x] `Ctrl`+`-` 또는 `Ctrl`+Numpad`-`로 미니맵을 축소한다
-- [x] 확대/축소 단위는 20px이며 최솟값 80px, 최댓값 280px으로 제한된다
+- [x] `Ctrl`+`-` 또는 `Ctrl`+Numpad`-`로 줌아웃한다 (view_radius 증가 → 더 넓은 영역)
+- [x] 줌아웃 단위는 view_radius 5이며 초깃값(MINIMAP_RADIUS=20)에서 최대 70까지 확장된다
+- [x] 다이아몬드 픽셀 크기(180px)는 줌과 무관하게 고정된다
+- [x] 다이아몬드 border 픽셀은 줌 레벨과 무관하게 항상 border 색상으로 표시된다
+- [x] 줌아웃 시 box filter(픽셀 footprint 내 모든 타일의 면적 가중 평균)로 픽셀 flicker를 방지한다
+- [x] 미니맵이 숨김(Hidden) 상태일 때는 텍스처 업데이트를 건너뛴다
 
 ## 엣지 케이스
 
@@ -28,7 +31,8 @@
 
 - 우측 여백: `5.0` px
 - 상단 여백: `10.0` px
-- 기본 표시 크기: `MINIMAP_DISPLAY_SIZE = 180.0` px (`MinimapConfig::display_size` 초깃값)
-- 최솟값: `MINIMAP_MIN_SIZE = 80.0` px
-- 최댓값: `MINIMAP_MAX_SIZE = 280.0` px
-- 줌 단위: `MINIMAP_ZOOM_STEP = 20.0` px
+- 표시 크기: `MINIMAP_DISPLAY_SIZE = 180.0` px (고정)
+- 기본 view_radius: `MINIMAP_RADIUS = 20` (타일) — 줌인 불가 (최솟값)
+- 최솟값: `MINIMAP_VIEW_RADIUS_MIN = MINIMAP_RADIUS = 20`
+- 최댓값: `MINIMAP_VIEW_RADIUS_MAX = 70` (맵 전체 조망 가능)
+- 줌 단위: `MINIMAP_ZOOM_STEP = 5` (타일)
