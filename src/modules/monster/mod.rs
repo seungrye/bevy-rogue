@@ -9,7 +9,7 @@ use crate::modules::{
         MapSystemSet, MonsterRespawnEvent, PlayerActedEvent, AttackMonsterEvent, Rect,
     },
     player::{Player, MovingTo, PlayerSystemSet},
-    combat::{CombatStats, Defeated, calc_damage},
+    combat::{CombatStats, Defeated, Speed, calc_damage},
     ui::LogMessage,
     combat_feedback::CombatFeedbackEvent,
     item::ItemDropEvent,
@@ -18,11 +18,11 @@ use crate::modules::{
 const Z_MONSTER: f32 = 0.8;
 const MAX_ALERT_TURNS: u32 = 5;
 
-static MONSTER_DATA: &[(&str, &str, [f32; 3], i32, i32, i32, i32)] = &[
-    // (이름, 글리프, 색상, hp, attack, defense, vision_radius)
-    ("고블린", "g", [0.2, 0.8, 0.2],  6, 3, 0, 6),
-    ("오크",   "O", [0.9, 0.5, 0.1], 10, 5, 2, 8),
-    ("트롤",   "T", [0.3, 0.7, 0.5], 16, 8, 3, 5),
+static MONSTER_DATA: &[(&str, &str, [f32; 3], i32, i32, i32, i32, f32)] = &[
+    // (이름, 글리프, 색상, hp, attack, defense, vision_radius, speed)
+    ("고블린", "g", [0.2, 0.8, 0.2],  6, 3, 0, 6, 1.5),
+    ("오크",   "O", [0.9, 0.5, 0.1], 10, 5, 2, 8, 1.0),
+    ("트롤",   "T", [0.3, 0.7, 0.5], 16, 8, 3, 5, 0.5),
 ];
 
 #[derive(Component)]
@@ -110,7 +110,7 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
 
         for j in 0..count {
             let data = MONSTER_DATA[j % MONSTER_DATA.len()];
-            let (name, glyph, color, hp, atk, def, vis) = (data.0, data.1, data.2, data.3, data.4, data.5, data.6);
+            let (name, glyph, color, hp, atk, def, vis, spd) = (data.0, data.1, data.2, data.3, data.4, data.5, data.6, data.7);
 
             // 방 안에서 겹치지 않는 빈 타일 찾기 (최대 10회 시도)
             let mut tile = room.center();
@@ -139,6 +139,7 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
                 },
                 Monster { name: name.to_string(), tile_x: tx, tile_y: ty, vision_radius: vis, alert_turns: 0 },
                 CombatStats { hp, max_hp: hp, mp: 0, max_mp: 0, attack: atk, defense: def },
+                Speed::new(spd),
             ));
         }
     }
@@ -192,7 +193,7 @@ fn monster_turn(
     mut commands: Commands,
     mut events: EventReader<PlayerActedEvent>,
     map_res: Res<MapResource>,
-    mut monster_query: Query<(&mut Monster, &mut Transform, &CombatStats), Without<Player>>,
+    mut monster_query: Query<(&mut Monster, &mut Transform, &CombatStats, &mut Speed), Without<Player>>,
     mut player_query: Query<(Entity, &Transform, Option<&MovingTo>, &mut CombatStats), (With<Player>, Without<Monster>)>,
     mut log_writer: EventWriter<LogMessage>,
     mut feedback_writer: EventWriter<CombatFeedbackEvent>,
@@ -207,16 +208,15 @@ fn monster_turn(
         .unwrap_or_else(|| world_to_tile_coords(player_transform.translation));
 
     let mut occupied: HashSet<(usize, usize)> = monster_query.iter()
-        .filter(|(_, _, stats)| stats.hp > 0)
-        .map(|(m, _, _)| (m.tile_x, m.tile_y))
+        .filter(|(_, _, stats, _)| stats.hp > 0)
+        .map(|(m, _, _, _)| (m.tile_x, m.tile_y))
         .collect();
     occupied.insert((px, py));
 
     let mut player_dead = false;
-
     let mut rng = rand::thread_rng();
 
-    for (mut monster, mut transform, monster_stats) in monster_query.iter_mut() {
+    for (mut monster, mut transform, monster_stats, mut speed) in monster_query.iter_mut() {
         if monster_stats.hp <= 0 { continue; }
 
         occupied.remove(&(monster.tile_x, monster.tile_y));
@@ -228,52 +228,56 @@ fn monster_turn(
             monster.alert_turns -= 1;
         }
 
-        let dx = (monster.tile_x as i32 - px as i32).abs();
-        let dy = (monster.tile_y as i32 - py as i32).abs();
-        let adjacent = (dx == 1 && dy == 0) || (dx == 0 && dy == 1);
+        // 에너지 누적 → 1.0마다 행동 1회 소비
+        speed.energy += speed.value;
+        while speed.energy >= 1.0 {
+            speed.energy -= 1.0;
 
-        if adjacent {
-            // 인접 시 항상 공격 (Idle이라도 우발적 접촉)
-            if !player_dead {
-                let dmg = calc_damage(monster_stats.attack, player_stats.defense);
-                player_stats.hp -= dmg;
-                feedback_writer.send(CombatFeedbackEvent {
-                    tile_x: px,
-                    tile_y: py,
-                    hit_entity: player_entity,
-                    original_color: Color::YELLOW,
-                });
-                if player_stats.hp <= 0 {
-                    player_dead = true;
-                    log_writer.send(LogMessage(format!(
-                        "{}에게 {} 데미지! 당신은 죽었습니다.", monster.name, dmg
-                    )));
-                    commands.entity(player_entity).insert(Defeated);
-                } else {
-                    log_writer.send(LogMessage(format!(
-                        "{}에게 {} 데미지! (HP: {}/{})",
-                        monster.name, dmg, player_stats.hp, player_stats.max_hp
-                    )));
+            let dx = (monster.tile_x as i32 - px as i32).abs();
+            let dy = (monster.tile_y as i32 - py as i32).abs();
+            let adjacent = (dx == 1 && dy == 0) || (dx == 0 && dy == 1);
+
+            if adjacent {
+                if !player_dead {
+                    let dmg = calc_damage(monster_stats.attack, player_stats.defense);
+                    player_stats.hp -= dmg;
+                    feedback_writer.send(CombatFeedbackEvent {
+                        tile_x: px,
+                        tile_y: py,
+                        hit_entity: player_entity,
+                        original_color: Color::YELLOW,
+                    });
+                    if player_stats.hp <= 0 {
+                        player_dead = true;
+                        log_writer.send(LogMessage(format!(
+                            "{}에게 {} 데미지! 당신은 죽었습니다.", monster.name, dmg
+                        )));
+                        commands.entity(player_entity).insert(Defeated);
+                    } else {
+                        log_writer.send(LogMessage(format!(
+                            "{}에게 {} 데미지! (HP: {}/{})",
+                            monster.name, dmg, player_stats.hp, player_stats.max_hp
+                        )));
+                    }
                 }
+            } else if monster.alert_turns > 0 {
+                let (nx, ny) = move_toward(monster.tile_x, monster.tile_y, px, py, map, &occupied);
+                occupied.remove(&(monster.tile_x, monster.tile_y));
+                occupied.insert((nx, ny));
+                monster.tile_x = nx;
+                monster.tile_y = ny;
+            } else {
+                let (nx, ny) = wander(monster.tile_x, monster.tile_y, map, &occupied, &mut rng);
+                occupied.remove(&(monster.tile_x, monster.tile_y));
+                occupied.insert((nx, ny));
+                monster.tile_x = nx;
+                monster.tile_y = ny;
             }
-            occupied.insert((monster.tile_x, monster.tile_y));
-        } else if monster.alert_turns > 0 {
-            // Alerted: 플레이어 방향으로 추적
-            let (nx, ny) = move_toward(monster.tile_x, monster.tile_y, px, py, map, &occupied);
-            occupied.insert((nx, ny));
-            monster.tile_x = nx;
-            monster.tile_y = ny;
-            let wp = tile_to_world_coords(nx, ny);
-            transform.translation = Vec3::new(wp.x, wp.y, Z_MONSTER);
-        } else {
-            // Idle: 무작위 배회
-            let (nx, ny) = wander(monster.tile_x, monster.tile_y, map, &occupied, &mut rng);
-            occupied.insert((nx, ny));
-            monster.tile_x = nx;
-            monster.tile_y = ny;
-            let wp = tile_to_world_coords(nx, ny);
-            transform.translation = Vec3::new(wp.x, wp.y, Z_MONSTER);
         }
+
+        let wp = tile_to_world_coords(monster.tile_x, monster.tile_y);
+        transform.translation = Vec3::new(wp.x, wp.y, Z_MONSTER);
+        occupied.insert((monster.tile_x, monster.tile_y));
     }
 }
 

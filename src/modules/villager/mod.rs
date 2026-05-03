@@ -13,40 +13,41 @@ use crate::modules::{
     quest::{QuestRegistry, QuestState, execute_actions},
     item::{PlayerInventory},
     zone::WorldState,
+    combat::Speed,
 };
 
 const VILLAGER_STAY_CHANCE: f64 = 0.3;
 const Z_VILLAGER: f32 = 0.9;
 
-// (name, [r,g,b], dialogues, quest_id)
-static VILLAGER_DATA: &[(&str, [f32; 3], &[&str], Option<&str>)] = &[
-    ("장로", [0.9, 0.8, 0.5], &[], Some("gem_quest")),
-    ("연금술사", [0.4, 0.9, 0.8], &[], Some("alchemist_quest")),
-    ("촌장", [1.0, 0.85, 0.0], &[
+// (name, [r,g,b], dialogues, quest_id, speed)
+static VILLAGER_DATA: &[(&str, [f32; 3], &[&str], Option<&str>, f32)] = &[
+    ("장로",   [0.9, 0.8, 0.5], &[], Some("gem_quest"),        0.5),
+    ("연금술사",[0.4, 0.9, 0.8], &[], Some("alchemist_quest"), 0.75),
+    ("촌장",   [1.0, 0.85, 0.0], &[
         "어서오시게. 이 마을은 평화롭다네.",
         "요즘 주변에 이상한 소문이 들리는군.",
         "먼 길 오셨군. 조심해서 다니게나.",
-    ], None),
-    ("상인", [0.3, 0.9, 0.3], &[
+    ], None, 1.0),
+    ("상인",   [0.3, 0.9, 0.3], &[
         "좋은 물건 있소이다!",
         "오늘만 특가라네, 어서 보시게.",
         "다음에 또 들르게나.",
-    ], None),
-    ("농부", [0.8, 0.6, 0.3], &[
+    ], None, 1.0),
+    ("농부",   [0.8, 0.6, 0.3], &[
         "올해 수확이 풍성하길 바라네.",
         "하늘이 맑아 일하기 좋은 날이군.",
         "땅을 일구는 게 내 낙이라네.",
-    ], None),
-    ("아이", [1.0, 1.0, 1.0], &[
+    ], None, 0.75),
+    ("아이",   [1.0, 1.0, 1.0], &[
         "안녕하세요!",
         "저기 던전에 가면 안 돼요!",
         "같이 놀아요!",
-    ], None),
-    ("노인", [0.65, 0.65, 0.75], &[
+    ], None, 1.5),
+    ("노인",   [0.65, 0.65, 0.75], &[
         "이 마을에는 오랜 비밀이 있다네.",
         "오래전에 이 땅에 큰 전쟁이 있었지.",
         "젊은이, 몸 조심하게.",
-    ], None),
+    ], None, 0.5),
 ];
 
 #[derive(Component)]
@@ -138,7 +139,7 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
     let mut regular_idx = 0;
 
     for room in spawn_rooms {
-        let data: &(&str, [f32; 3], &[&str], Option<&str>) = if quest_idx < quest_npcs.len() {
+        let data: &(&str, [f32; 3], &[&str], Option<&str>, f32) = if quest_idx < quest_npcs.len() {
             let d = quest_npcs[quest_idx];
             quest_idx += 1;
             d
@@ -149,7 +150,7 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
         } else {
             continue;
         };
-        let (name, color, lines, quest_id) = (data.0, data.1, data.2, data.3);
+        let (name, color, lines, quest_id, spd) = (data.0, data.1, data.2, data.3, data.4);
         let (cx, cy) = room.center();
         let coord = tile_to_world_coords(cx, cy);
 
@@ -184,6 +185,7 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
                 quest_dialogue_idx: 0,
                 base_color,
             },
+            Speed::new(spd),
         ));
     }
 }
@@ -268,7 +270,7 @@ fn show_quest_dialog(
 fn villager_turn(
     mut events: EventReader<PlayerActedEvent>,
     map_res: Res<crate::modules::map::MapResource>,
-    mut villager_query: Query<(&mut Villager, &mut Transform)>,
+    mut villager_query: Query<(&mut Villager, &mut Transform, &mut Speed)>,
     player_query: Query<(&Transform, Option<&MovingTo>), (With<Player>, Without<Villager>)>,
 ) {
     if events.read().next().is_none() { return; }
@@ -276,10 +278,8 @@ fn villager_turn(
     let map = map_res.map();
     let mut rng = thread_rng();
 
-    // 주민 위치 + 플레이어 논리적 목적지로 점유셋 구성 (overlap 방지)
-    // Transform은 lerp 중간값이므로 MovingTo(목적지)가 있으면 그 타일을 사용
     let mut occupied: HashSet<(usize, usize)> = villager_query.iter()
-        .map(|(v, _)| (v.tile_x, v.tile_y))
+        .map(|(v, _, _)| (v.tile_x, v.tile_y))
         .collect();
     if let Ok((pt, moving)) = player_query.get_single() {
         let player_tile = moving
@@ -288,19 +288,29 @@ fn villager_turn(
         occupied.insert(player_tile);
     }
 
-    for (mut villager, mut transform) in villager_query.iter_mut() {
+    for (mut villager, mut transform, mut speed) in villager_query.iter_mut() {
         occupied.remove(&(villager.tile_x, villager.tile_y));
+
+        speed.energy += speed.value;
+
         if !take_turn(&mut villager) {
+            // 충돌(대화) 턴 — 에너지는 쌓되 행동하지 않음
             occupied.insert((villager.tile_x, villager.tile_y));
             continue;
         }
-        let (nx, ny) = pick_next_tile(villager.tile_x, villager.tile_y, map, &occupied, &mut rng);
-        occupied.insert((nx, ny));
 
-        villager.tile_x = nx;
-        villager.tile_y = ny;
-        let wp = tile_to_world_coords(nx, ny);
+        while speed.energy >= 1.0 {
+            speed.energy -= 1.0;
+            let (nx, ny) = pick_next_tile(villager.tile_x, villager.tile_y, map, &occupied, &mut rng);
+            occupied.remove(&(villager.tile_x, villager.tile_y));
+            occupied.insert((nx, ny));
+            villager.tile_x = nx;
+            villager.tile_y = ny;
+        }
+
+        let wp = tile_to_world_coords(villager.tile_x, villager.tile_y);
         transform.translation = Vec3::new(wp.x, wp.y, Z_VILLAGER);
+        occupied.insert((villager.tile_x, villager.tile_y));
     }
 }
 

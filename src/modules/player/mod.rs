@@ -5,7 +5,7 @@ use crate::modules::{
         MAP_HEIGHT, MAP_WIDTH, TILE_SIZE,
         MapSystemSet, PlayerRespawnEvent, PlayerActedEvent, BumpTileEvent, AttackMonsterEvent,
     },
-    combat::{CombatStats, Defeated},
+    combat::{CombatStats, Defeated, Speed},
     item::EquipmentPanelOpen,
     ui::LogMessage,
 };
@@ -107,6 +107,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, map_res:
             mp: PLAYER_MP, max_mp: PLAYER_MP,
             attack: PLAYER_ATK, defense: PLAYER_DEF,
         },
+        Speed::new(1.0),
     )).with_children(|parent| {
         // HP 바 배경 (어두운 빨간색)
         parent.spawn(SpriteBundle {
