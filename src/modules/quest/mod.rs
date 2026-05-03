@@ -366,6 +366,18 @@ pub fn item_id_to_kind(id: &str) -> Option<ItemKind> {
         "bow"                 => Some(ItemKind::Weapon(crate::modules::item::WeaponKind::Bow)),
         "leather_armor"       => Some(ItemKind::Armor(crate::modules::item::ArmorKind::LeatherArmor)),
         "health_potion"       => Some(ItemKind::Consumable(crate::modules::item::ConsumableKind::HealthPotion)),
+        // stark_quest
+        "lords_oath"          => Some(ItemKind::QuestItem(QuestItemKind::LordsOath)),
+        "jaime_sword"         => Some(ItemKind::QuestItem(QuestItemKind::JaimeSword)),
+        "kings_north_crown"   => Some(ItemKind::QuestItem(QuestItemKind::KingsNorthCrown)),
+        // targaryen_quest
+        "warlock_key"         => Some(ItemKind::QuestItem(QuestItemKind::WarlockKey)),
+        "dragon_chain"        => Some(ItemKind::QuestItem(QuestItemKind::DragonChain)),
+        "essos_sail_map"      => Some(ItemKind::QuestItem(QuestItemKind::EssosSailMap)),
+        // jon_snow_quest
+        "dragonglass_arrows"  => Some(ItemKind::QuestItem(QuestItemKind::DragonglassArrows)),
+        "rangers_note"        => Some(ItemKind::QuestItem(QuestItemKind::RangersNote)),
+        "ygritte_bow"         => Some(ItemKind::QuestItem(QuestItemKind::YgrittesBow)),
         // prologue_fog
         "prologue_greatsword" => Some(ItemKind::QuestItem(QuestItemKind::PrologueGreatsword)),
         "prologue_daggers"    => Some(ItemKind::QuestItem(QuestItemKind::PrologueDaggers)),

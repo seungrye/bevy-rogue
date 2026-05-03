@@ -105,6 +105,15 @@ fn glyph_unicode(kind: ItemKind) -> &'static str {
             QuestItemKind::IceSword           => "\u{2746}", // ❆ snowflake
             QuestItemKind::DragonEgg          => "\u{25CE}", // ◎ bullseye
             QuestItemKind::GhostWolf          => "\u{25D4}", // ◔ circle arc
+            QuestItemKind::LordsOath          => "\u{2709}", // ✉ envelope
+            QuestItemKind::JaimeSword         => "\u{2020}", // † dagger
+            QuestItemKind::KingsNorthCrown    => "\u{265A}", // ♚ king chess piece
+            QuestItemKind::WarlockKey         => "\u{2318}", // ⌘ command/key
+            QuestItemKind::DragonChain        => "\u{26D3}", // ⛓ chains
+            QuestItemKind::EssosSailMap       => "\u{2742}", // ❂ compass-like
+            QuestItemKind::DragonglassArrows  => "\u{25B6}", // ▶ solid arrow
+            QuestItemKind::RangersNote        => "\u{2767}", // ❧ floral heart
+            QuestItemKind::YgrittesBow        => "\u{2640}", // ♀ (ygritte's symbol)
         },
     }
 }
@@ -134,6 +143,15 @@ fn glyph_game_icon(kind: ItemKind) -> &'static str {
             QuestItemKind::IceSword           => "\u{2746}", // fallback: ❆
             QuestItemKind::DragonEgg          => "\u{25CE}", // fallback: ◎
             QuestItemKind::GhostWolf          => "\u{25D4}", // fallback: ◔
+            QuestItemKind::LordsOath          => "\u{2709}", // fallback: ✉
+            QuestItemKind::JaimeSword         => "\u{2020}", // fallback: †
+            QuestItemKind::KingsNorthCrown    => "\u{265A}", // fallback: ♚
+            QuestItemKind::WarlockKey         => "\u{2318}", // fallback: ⌘
+            QuestItemKind::DragonChain        => "\u{26D3}", // fallback: ⛓
+            QuestItemKind::EssosSailMap       => "\u{2742}", // fallback: ❂
+            QuestItemKind::DragonglassArrows  => "\u{25B6}", // fallback: ▶
+            QuestItemKind::RangersNote        => "\u{2767}", // fallback: ❧
+            QuestItemKind::YgrittesBow        => "\u{2640}", // fallback: ♀
         },
     }
 }
@@ -155,6 +173,18 @@ pub enum QuestItemKind {
     IceSword,
     DragonEgg,
     GhostWolf,
+    // stark_quest — 전쟁의 서막
+    LordsOath,
+    JaimeSword,
+    KingsNorthCrown,
+    // targaryen_quest — 재생의 불꽃
+    WarlockKey,
+    DragonChain,
+    EssosSailMap,
+    // jon_snow_quest — 장벽 너머의 그림자
+    DragonglassArrows,
+    RangersNote,
+    YgrittesBow,
 }
 
 impl QuestItemKind {
@@ -171,6 +201,15 @@ impl QuestItemKind {
             QuestItemKind::IceSword           => "아이스",
             QuestItemKind::DragonEgg          => "용의 알",
             QuestItemKind::GhostWolf          => "고스트",
+            QuestItemKind::LordsOath          => "충성 서약서",
+            QuestItemKind::JaimeSword         => "제이미의 검",
+            QuestItemKind::KingsNorthCrown    => "북부의 왕관",
+            QuestItemKind::WarlockKey         => "마법사의 열쇠",
+            QuestItemKind::DragonChain        => "드래곤 족쇄",
+            QuestItemKind::EssosSailMap       => "에소스 항로도",
+            QuestItemKind::DragonglassArrows  => "드래곤스톤 화살촉",
+            QuestItemKind::RangersNote        => "죽은 레인저의 메모",
+            QuestItemKind::YgrittesBow        => "이그리트의 활",
         }
     }
 }
@@ -258,6 +297,15 @@ impl ItemKind {
                 QuestItemKind::IceSword           => "!",
                 QuestItemKind::DragonEgg          => "o",
                 QuestItemKind::GhostWolf          => "w",
+                QuestItemKind::LordsOath          => "=",
+                QuestItemKind::JaimeSword         => "|",
+                QuestItemKind::KingsNorthCrown    => "&",
+                QuestItemKind::WarlockKey         => "k",
+                QuestItemKind::DragonChain        => "8",
+                QuestItemKind::EssosSailMap       => "m",
+                QuestItemKind::DragonglassArrows  => ">",
+                QuestItemKind::RangersNote        => "n",
+                QuestItemKind::YgrittesBow        => "q",
             },
         }
     }
@@ -305,6 +353,15 @@ impl ItemKind {
                 QuestItemKind::IceSword           => "아이스 — 스타크 가문의 검이 손 안에서 차갑게 빛난다.",
                 QuestItemKind::DragonEgg          => "용의 알이 손바닥 위에서 뜨겁게 맥박친다.",
                 QuestItemKind::GhostWolf          => "하얀 늑대 고스트가 곁에 나타났다.",
+                QuestItemKind::LordsOath          => "충성 서약서를 받았다. 북부의 힘이 결집되고 있다.",
+                QuestItemKind::JaimeSword         => "제이미 라니스터의 검을 손에 넣었다. 전장의 증거.",
+                QuestItemKind::KingsNorthCrown    => "북부의 왕관. 이제 돌아올 수 없는 길에 섰다.",
+                QuestItemKind::WarlockKey         => "마법사의 열쇠. 차갑고 이상한 냄새가 난다.",
+                QuestItemKind::DragonChain        => "드래곤들을 묶었던 족쇄. 이제 그들은 자유롭다.",
+                QuestItemKind::EssosSailMap       => "에소스 항로도. 정복의 시작점이 표시되어 있다.",
+                QuestItemKind::DragonglassArrows  => "드래곤스톤 화살촉 다발. 와이트를 멈추는 유일한 방법.",
+                QuestItemKind::RangersNote        => "죽은 레인저의 메모. 떨리는 손으로 쓴 마지막 경고.",
+                QuestItemKind::YgrittesBow        => "이그리트의 활. 그녀는 항상 당신보다 빨리 쏜다.",
             },
         }
     }
@@ -570,6 +627,15 @@ fn quest_item_image_path(kind: QuestItemKind) -> &'static str {
         QuestItemKind::IceSword           => "scene/open-chest.png",
         QuestItemKind::DragonEgg          => "scene/open-chest.png",
         QuestItemKind::GhostWolf          => "scene/open-chest.png",
+        QuestItemKind::LordsOath          => "scene/open-chest.png",
+        QuestItemKind::JaimeSword         => "scene/open-chest.png",
+        QuestItemKind::KingsNorthCrown    => "scene/open-chest.png",
+        QuestItemKind::WarlockKey         => "scene/open-chest.png",
+        QuestItemKind::DragonChain        => "scene/open-chest.png",
+        QuestItemKind::EssosSailMap       => "scene/open-chest.png",
+        QuestItemKind::DragonglassArrows  => "scene/open-chest.png",
+        QuestItemKind::RangersNote        => "scene/open-chest.png",
+        QuestItemKind::YgrittesBow        => "scene/open-chest.png",
     }
 }
 
