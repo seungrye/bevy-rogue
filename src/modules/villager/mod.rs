@@ -128,9 +128,27 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
     if rooms.is_empty() { return; }
     let font = asset_server.load("fonts/FiraMono-Medium.ttf");
 
+    // 퀘스트 NPC와 일반 NPC를 분리: 퀘스트 NPC는 최대 1명씩만 스폰
+    let quest_npcs: Vec<_> = VILLAGER_DATA.iter().filter(|d| d.3.is_some()).collect();
+    let regular_npcs: Vec<_> = VILLAGER_DATA.iter().filter(|d| d.3.is_none()).collect();
+
     // rooms[0] 은 플레이어 스폰 방 — 건너뜀
-    for (i, room) in rooms.iter().skip(1).enumerate() {
-        let data = &VILLAGER_DATA[i % VILLAGER_DATA.len()];
+    let spawn_rooms: Vec<_> = rooms.iter().skip(1).collect();
+    let mut quest_idx = 0;
+    let mut regular_idx = 0;
+
+    for room in spawn_rooms {
+        let data: &(&str, [f32; 3], &[&str], Option<&str>) = if quest_idx < quest_npcs.len() {
+            let d = quest_npcs[quest_idx];
+            quest_idx += 1;
+            d
+        } else if !regular_npcs.is_empty() {
+            let d = regular_npcs[regular_idx % regular_npcs.len()];
+            regular_idx += 1;
+            d
+        } else {
+            continue;
+        };
         let (name, color, lines, quest_id) = (data.0, data.1, data.2, data.3);
         let (cx, cy) = room.center();
         let coord = tile_to_world_coords(cx, cy);
