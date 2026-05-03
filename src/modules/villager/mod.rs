@@ -210,6 +210,8 @@ pub struct Villager {
     pub quest_id: Option<String>,
     pub quest_dialogue_idx: usize,
     pub base_color: Color,
+    /// 퀘스트 NPC의 이동 구역 제한. Some이면 해당 Rect 안에서만 이동한다.
+    pub home_room: Option<Rect>,
 }
 
 // 이번 턴에 주민이 이동해야 하는지 판단하고 플래그를 초기화한다
@@ -355,6 +357,7 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
                 quest_id: quest_id.map(String::from),
                 quest_dialogue_idx: 0,
                 base_color,
+                home_room: if quest_id.is_some() { Some(*room) } else { None },
             },
             Speed::new(spd),
             MoveQueue::default(),
@@ -478,7 +481,7 @@ fn villager_turn(
 
         while speed.energy >= 1.0 {
             speed.energy -= 1.0;
-            let (nx, ny) = pick_next_tile(villager.tile_x, villager.tile_y, map, &occupied, &mut rng);
+            let (nx, ny) = pick_next_tile(villager.tile_x, villager.tile_y, map, &occupied, villager.home_room.as_ref(), &mut rng);
             occupied.remove(&(villager.tile_x, villager.tile_y));
             occupied.insert((nx, ny));
             let wp = tile_to_world_coords(nx, ny);
@@ -518,6 +521,7 @@ pub fn pick_next_tile(
     x: usize, y: usize,
     map: &Map,
     occupied: &HashSet<(usize, usize)>,
+    home_rect: Option<&Rect>,
     rng: &mut impl Rng,
 ) -> (usize, usize) {
     if rng.gen_bool(VILLAGER_STAY_CHANCE) {
@@ -534,6 +538,7 @@ pub fn pick_next_tile(
             nx < MAP_WIDTH && ny < MAP_HEIGHT
                 && map.get_tile(nx, ny) == MapTile::Floor
                 && !occupied.contains(&(nx, ny))
+                && home_rect.map_or(true, |r| nx >= r.x1 && nx <= r.x2 && ny >= r.y1 && ny <= r.y2)
         })
         .copied()
         .collect();
@@ -682,7 +687,7 @@ mod tests {
         let occupied = HashSet::new();
         let mut rng = StdRng::seed_from_u64(0);
         for _ in 0..50 {
-            let result = pick_next_tile(5, 5, &map, &occupied, &mut rng);
+            let result = pick_next_tile(5, 5, &map, &occupied, None, &mut rng);
             assert_eq!(result, (5, 5));
         }
     }
@@ -696,7 +701,7 @@ mod tests {
         let mut moved = false;
         for seed in 0..200u64 {
             let mut rng = StdRng::seed_from_u64(seed);
-            if pick_next_tile(5, 5, &map, &occupied, &mut rng) == (6, 5) {
+            if pick_next_tile(5, 5, &map, &occupied, None, &mut rng) == (6, 5) {
                 moved = true;
                 break;
             }
@@ -713,7 +718,7 @@ mod tests {
         let occupied = HashSet::new();
         for seed in 0..500u64 {
             let mut rng = StdRng::seed_from_u64(seed);
-            let (_, ny) = pick_next_tile(5, 5, &map, &occupied, &mut rng);
+            let (_, ny) = pick_next_tile(5, 5, &map, &occupied, None, &mut rng);
             assert_eq!(ny, 5, "Wall 타일(y!=5)로 이동하면 안 된다");
         }
     }
@@ -727,7 +732,7 @@ mod tests {
         occupied.insert((6usize, 5usize)); // 유일한 이웃이 점유됨
         for seed in 0..200u64 {
             let mut rng = StdRng::seed_from_u64(seed);
-            let result = pick_next_tile(5, 5, &map, &occupied, &mut rng);
+            let result = pick_next_tile(5, 5, &map, &occupied, None, &mut rng);
             assert_eq!(result, (5, 5), "점유된 타일로 이동하면 안 된다");
         }
     }
@@ -743,6 +748,7 @@ mod tests {
             quest_id: None,
             quest_dialogue_idx: 0,
             base_color: Color::WHITE,
+            home_room: None,
         }
     }
 
@@ -771,6 +777,7 @@ mod tests {
             quest_id: Some("gem_quest".to_string()),
             quest_dialogue_idx: 0,
             base_color: Color::WHITE,
+            home_room: None,
         };
         assert_eq!(v.quest_id.as_deref(), Some("gem_quest"));
         assert_eq!(v.quest_dialogue_idx, 0);
@@ -787,8 +794,28 @@ mod tests {
         occupied.insert((6usize, 5usize)); // 플레이어 현재 위치 또는 MovingTo 목적지
         for seed in 0..200u64 {
             let mut rng = StdRng::seed_from_u64(seed);
-            let result = pick_next_tile(5, 5, &map, &occupied, &mut rng);
+            let result = pick_next_tile(5, 5, &map, &occupied, None, &mut rng);
             assert_eq!(result, (5, 5), "플레이어 타일로 이동하면 안 된다");
+        }
+    }
+
+    #[test]
+    fn pick_next_tile_respects_home_rect() {
+        // 5,5 중심에 3x3 Floor 배치. home_rect 를 (4..=6, 4..=6) 으로 제한
+        let mut map = Map::new(10, 10);
+        for x in 4..=6usize {
+            for y in 4..=6usize {
+                map.set_tile(x, y, MapTile::Floor);
+            }
+        }
+        // home_rect 바깥 인접 Floor 추가 — 범위 밖이므로 선택되면 안 됨
+        map.set_tile(7, 5, MapTile::Floor);
+        let home = Rect::new(4, 4, 2, 2); // x1=4,y1=4,x2=6,y2=6
+        let occupied = HashSet::new();
+        for seed in 0..200u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let (nx, ny) = pick_next_tile(5, 5, &map, &occupied, Some(&home), &mut rng);
+            assert!(nx >= 4 && nx <= 6 && ny >= 4 && ny <= 6, "home_rect 밖으로 이동하면 안 된다: ({nx},{ny})");
         }
     }
 
