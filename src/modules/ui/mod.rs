@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+pub mod equipment;
 pub mod minimap;
 use crate::modules::map::{MAP_WIDTH, TILE_SIZE};
 
@@ -12,6 +13,7 @@ pub struct GameUiPlugin;
 impl Plugin for GameUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(minimap::MinimapPlugin)
+            .add_plugins(equipment::EquipmentPlugin)
             .add_systems(Startup, setup_ui)
             .add_event::<LogMessage>()
             .init_resource::<MessageLog>()

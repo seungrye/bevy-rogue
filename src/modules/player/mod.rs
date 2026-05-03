@@ -6,6 +6,7 @@ use crate::modules::{
         MapSystemSet, PlayerRespawnEvent, PlayerActedEvent, BumpTileEvent, AttackMonsterEvent,
     },
     combat::{CombatStats, Defeated},
+    item::EquipmentPanelOpen,
     ui::LogMessage,
 };
 use bevy::prelude::*;
@@ -147,7 +148,9 @@ fn player_movement(
     mut bump: EventWriter<BumpTileEvent>,
     mut attack: EventWriter<AttackMonsterEvent>,
     _log_writer: EventWriter<LogMessage>,
+    equipment_open: Res<EquipmentPanelOpen>,
 ) {
+    if equipment_open.0 { return; }
     let Ok((entity, transform)) = player_query.get_single() else { return };
 
     // 스페이스바: 제자리 대기 — hold state 초기화 후 턴 소비

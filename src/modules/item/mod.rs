@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use rand::Rng;
 use crate::modules::{
     map::{tile_to_world_coords, world_to_tile_coords, TILE_SIZE, PlayerActedEvent},
-    player::{Player, MovingTo, PlayerSystemSet},
+    player::{Player, MovingTo, PlayerSystemSet, PLAYER_ATK, PLAYER_DEF},
     combat::CombatStats,
     ui::LogMessage,
 };
@@ -11,33 +11,180 @@ pub const POTION_HEAL: i32 = 8;
 const Z_ITEM: f32 = 0.3;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ItemType {
+pub enum WeaponKind {
+    Sword,
+    Spear,
+    Bow,
+}
+
+impl WeaponKind {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            WeaponKind::Sword => "검",
+            WeaponKind::Spear => "창",
+            WeaponKind::Bow   => "활",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ArmorKind {
+    LeatherArmor,
+}
+
+impl ArmorKind {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            ArmorKind::LeatherArmor => "가죽 갑옷",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ConsumableKind {
     HealthPotion,
 }
 
-impl ItemType {
+impl ConsumableKind {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            ConsumableKind::HealthPotion => "체력 물약",
+        }
+    }
+
+    pub fn heal_amount(self) -> i32 {
+        match self {
+            ConsumableKind::HealthPotion => POTION_HEAL,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ItemKind {
+    Weapon(WeaponKind),
+    Armor(ArmorKind),
+    Consumable(ConsumableKind),
+}
+
+impl ItemKind {
     pub fn glyph(self) -> &'static str {
         match self {
-            ItemType::HealthPotion => "!",
+            ItemKind::Weapon(w) => match w {
+                WeaponKind::Sword => "/",
+                WeaponKind::Spear => "|",
+                WeaponKind::Bow   => ")",
+            },
+            ItemKind::Armor(a) => match a {
+                ArmorKind::LeatherArmor => "]",
+            },
+            ItemKind::Consumable(c) => match c {
+                ConsumableKind::HealthPotion => "!",
+            },
         }
     }
 
     pub fn color(self) -> Color {
         match self {
-            ItemType::HealthPotion => Color::rgb(0.2, 0.9, 0.2),
+            ItemKind::Weapon(_)     => Color::rgb(1.0, 1.0, 0.2),
+            ItemKind::Armor(_)      => Color::rgb(0.2, 0.4, 1.0),
+            ItemKind::Consumable(_) => Color::rgb(0.2, 0.9, 0.2),
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            ItemKind::Weapon(w)     => w.display_name(),
+            ItemKind::Armor(a)      => a.display_name(),
+            ItemKind::Consumable(c) => c.display_name(),
         }
     }
 
     pub fn pickup_message(self) -> &'static str {
         match self {
-            ItemType::HealthPotion => "체력 물약을 획득했다!",
+            ItemKind::Weapon(w) => match w {
+                WeaponKind::Sword => "검을 획득했다!",
+                WeaponKind::Spear => "창을 획득했다!",
+                WeaponKind::Bow   => "활을 획득했다!",
+            },
+            ItemKind::Armor(a) => match a {
+                ArmorKind::LeatherArmor => "가죽 갑옷을 획득했다!",
+            },
+            ItemKind::Consumable(c) => match c {
+                ConsumableKind::HealthPotion => "체력 물약을 획득했다!",
+            },
         }
     }
 }
 
+pub fn weapon_attack(kind: WeaponKind) -> i32 {
+    match kind {
+        WeaponKind::Sword => 7,
+        WeaponKind::Spear => 9,
+        WeaponKind::Bow   => 5,
+    }
+}
+
+pub fn armor_defense_bonus(kind: ArmorKind) -> i32 {
+    match kind {
+        ArmorKind::LeatherArmor => 2,
+    }
+}
+
+pub fn effective_attack(equipment: &PlayerEquipment) -> i32 {
+    equipment.weapon.map(weapon_attack).unwrap_or(PLAYER_ATK)
+}
+
+pub fn effective_defense(equipment: &PlayerEquipment) -> i32 {
+    let bonus = equipment.armor.map(armor_defense_bonus).unwrap_or(0);
+    PLAYER_DEF + bonus
+}
+
+#[derive(Clone, Debug)]
+pub struct InventoryItem {
+    pub kind: ItemKind,
+}
+
+#[derive(Resource, Default)]
+pub struct PlayerInventory {
+    pub items: Vec<InventoryItem>,
+    pub consumables: Vec<(ConsumableKind, u32)>,
+}
+
+impl PlayerInventory {
+    pub fn add_consumable(&mut self, kind: ConsumableKind) {
+        if let Some(slot) = self.consumables.iter_mut().find(|(k, _)| *k == kind) {
+            slot.1 += 1;
+        } else {
+            self.consumables.push((kind, 1));
+        }
+    }
+
+    pub fn use_consumable(&mut self, kind: ConsumableKind) -> bool {
+        if let Some(pos) = self.consumables.iter().position(|(k, _)| *k == kind) {
+            if self.consumables[pos].1 > 0 {
+                self.consumables[pos].1 -= 1;
+                if self.consumables[pos].1 == 0 {
+                    self.consumables.remove(pos);
+                }
+                return true;
+            }
+        }
+        false
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct PlayerEquipment {
+    pub weapon: Option<WeaponKind>,
+    pub armor:  Option<ArmorKind>,
+}
+
+#[derive(Resource, Default)]
+pub struct EquipmentPanelOpen(pub bool);
+
 #[derive(Component)]
 pub struct Item {
-    pub item_type: ItemType,
+    pub kind:   ItemKind,
     pub tile_x: usize,
     pub tile_y: usize,
 }
@@ -45,9 +192,32 @@ pub struct Item {
 /// 몬스터 처치 시 아이템 드롭을 요청하는 이벤트
 #[derive(Event)]
 pub struct ItemDropEvent {
-    pub tile_x: usize,
-    pub tile_y: usize,
+    pub tile_x:       usize,
+    pub tile_y:       usize,
     pub monster_name: String,
+}
+
+/// 몬스터별 드롭 테이블 — 각 항목은 독립 확률로 롤된다
+pub fn monster_drop_table(monster_name: &str) -> &'static [(ItemKind, f32)] {
+    match monster_name {
+        "고블린" => &[
+            (ItemKind::Consumable(ConsumableKind::HealthPotion), 0.30),
+            (ItemKind::Weapon(WeaponKind::Sword), 0.15),
+        ],
+        "오크" => &[
+            (ItemKind::Consumable(ConsumableKind::HealthPotion), 0.40),
+            (ItemKind::Weapon(WeaponKind::Spear), 0.20),
+            (ItemKind::Armor(ArmorKind::LeatherArmor), 0.10),
+        ],
+        "트롤" => &[
+            (ItemKind::Consumable(ConsumableKind::HealthPotion), 0.50),
+            (ItemKind::Weapon(WeaponKind::Bow), 0.25),
+            (ItemKind::Armor(ArmorKind::LeatherArmor), 0.20),
+        ],
+        _ => &[
+            (ItemKind::Consumable(ConsumableKind::HealthPotion), 0.25),
+        ],
+    }
 }
 
 pub struct ItemPlugin;
@@ -55,27 +225,14 @@ pub struct ItemPlugin;
 impl Plugin for ItemPlugin {
     fn build(&self, app: &mut App) {
         app.add_event::<ItemDropEvent>()
+            .init_resource::<PlayerInventory>()
+            .init_resource::<PlayerEquipment>()
+            .init_resource::<EquipmentPanelOpen>()
             .add_systems(Update, (
                 spawn_dropped_items,
                 pickup_items.after(PlayerSystemSet::Movement),
+                apply_equipment_stats,
             ));
-    }
-}
-
-/// 몬스터 이름별 드롭률 (0.0–1.0)
-pub fn drop_rate(monster_name: &str) -> f32 {
-    match monster_name {
-        "고블린" => 0.30,
-        "오크"   => 0.40,
-        "트롤"   => 0.50,
-        _        => 0.25,
-    }
-}
-
-/// 아이템 타입별 HP 회복량
-pub fn heal_amount(item_type: ItemType) -> i32 {
-    match item_type {
-        ItemType::HealthPotion => POTION_HEAL,
     }
 }
 
@@ -86,48 +243,66 @@ fn spawn_dropped_items(
 ) {
     let mut rng = rand::thread_rng();
     for event in events.read() {
-        if rng.gen::<f32>() >= drop_rate(&event.monster_name) { continue; }
-        let item_type = ItemType::HealthPotion;
-        let pos = tile_to_world_coords(event.tile_x, event.tile_y);
-        commands.spawn((
-            Text2dBundle {
-                text: Text::from_section(item_type.glyph(), TextStyle {
-                    font: asset_server.load("fonts/FiraMono-Medium.ttf"),
-                    font_size: TILE_SIZE,
-                    color: item_type.color(),
-                }),
-                transform: Transform::from_xyz(pos.x, pos.y, Z_ITEM),
-                ..default()
-            },
-            Item { item_type, tile_x: event.tile_x, tile_y: event.tile_y },
-        ));
+        for &(kind, rate) in monster_drop_table(&event.monster_name) {
+            if rng.gen::<f32>() >= rate { continue; }
+            let pos = tile_to_world_coords(event.tile_x, event.tile_y);
+            commands.spawn((
+                Text2dBundle {
+                    text: Text::from_section(kind.glyph(), TextStyle {
+                        font: asset_server.load("fonts/FiraMono-Medium.ttf"),
+                        font_size: TILE_SIZE,
+                        color: kind.color(),
+                    }),
+                    transform: Transform::from_xyz(pos.x, pos.y, Z_ITEM),
+                    ..default()
+                },
+                Item { kind, tile_x: event.tile_x, tile_y: event.tile_y },
+            ));
+        }
     }
 }
 
 fn pickup_items(
     mut commands: Commands,
     mut turn_events: EventReader<PlayerActedEvent>,
-    mut player_query: Query<(Option<&MovingTo>, &Transform, &mut CombatStats), With<Player>>,
+    player_query: Query<(Option<&MovingTo>, &Transform), With<Player>>,
     item_query: Query<(Entity, &Item)>,
+    mut inventory: ResMut<PlayerInventory>,
     mut log: EventWriter<LogMessage>,
 ) {
     if turn_events.read().next().is_none() { return; }
-    let Ok((moving_to, transform, mut stats)) = player_query.get_single_mut() else { return };
+    let Ok((moving_to, transform)) = player_query.get_single() else { return };
     let (px, py) = moving_to
         .map(|m| world_to_tile_coords(m.target))
         .unwrap_or_else(|| world_to_tile_coords(transform.translation));
 
-    for (entity, item) in item_query.iter() {
-        if item.tile_x != px || item.tile_y != py { continue; }
-        let heal = heal_amount(item.item_type);
-        stats.hp = (stats.hp + heal).min(stats.max_hp);
-        log.send(LogMessage(format!(
-            "{} (HP +{}, {}/{})",
-            item.item_type.pickup_message(), heal, stats.hp, stats.max_hp
-        )));
+    let at_tile: Vec<(Entity, ItemKind)> = item_query.iter()
+        .filter(|(_, item)| item.tile_x == px && item.tile_y == py)
+        .map(|(e, item)| (e, item.kind))
+        .collect();
+
+    for (entity, kind) in at_tile {
+        match kind {
+            ItemKind::Weapon(_) | ItemKind::Armor(_) => {
+                inventory.items.push(InventoryItem { kind });
+            }
+            ItemKind::Consumable(ck) => {
+                inventory.add_consumable(ck);
+            }
+        }
+        log.send(LogMessage(kind.pickup_message().to_string()));
         commands.entity(entity).despawn();
-        break;
     }
+}
+
+fn apply_equipment_stats(
+    equipment: Res<PlayerEquipment>,
+    mut player_query: Query<&mut CombatStats, With<Player>>,
+) {
+    if !equipment.is_changed() { return; }
+    let Ok(mut stats) = player_query.get_single_mut() else { return };
+    stats.attack  = effective_attack(&equipment);
+    stats.defense = effective_defense(&equipment);
 }
 
 #[cfg(test)]
@@ -135,43 +310,109 @@ mod tests {
     use super::*;
 
     #[test]
-    fn drop_rate_goblin_is_thirty_percent() {
-        assert!((drop_rate("고블린") - 0.30).abs() < f32::EPSILON);
+    fn weapon_attack_sword_is_7() {
+        assert_eq!(weapon_attack(WeaponKind::Sword), 7);
     }
 
     #[test]
-    fn drop_rate_orc_is_forty_percent() {
-        assert!((drop_rate("오크") - 0.40).abs() < f32::EPSILON);
+    fn weapon_attack_spear_is_9() {
+        assert_eq!(weapon_attack(WeaponKind::Spear), 9);
     }
 
     #[test]
-    fn drop_rate_troll_is_fifty_percent() {
-        assert!((drop_rate("트롤") - 0.50).abs() < f32::EPSILON);
+    fn weapon_attack_bow_is_5() {
+        assert_eq!(weapon_attack(WeaponKind::Bow), 5);
     }
 
     #[test]
-    fn drop_rate_unknown_monster_has_default() {
-        assert!(drop_rate("알수없는몬스터") > 0.0);
+    fn armor_defense_bonus_leather_is_2() {
+        assert_eq!(armor_defense_bonus(ArmorKind::LeatherArmor), 2);
     }
 
     #[test]
-    fn heal_amount_potion_equals_constant() {
-        assert_eq!(heal_amount(ItemType::HealthPotion), POTION_HEAL);
+    fn effective_attack_no_weapon_equals_player_default() {
+        let eq = PlayerEquipment { weapon: None, armor: None };
+        assert_eq!(effective_attack(&eq), PLAYER_ATK);
     }
 
     #[test]
-    fn potion_heal_does_not_exceed_max_hp() {
-        let max_hp = 10;
-        let current_hp = 8;
-        let healed = (current_hp + heal_amount(ItemType::HealthPotion)).min(max_hp);
-        assert_eq!(healed, max_hp);
+    fn effective_attack_with_sword_is_7() {
+        let eq = PlayerEquipment { weapon: Some(WeaponKind::Sword), armor: None };
+        assert_eq!(effective_attack(&eq), 7);
     }
 
     #[test]
-    fn potion_heal_adds_to_current_hp() {
-        let max_hp = 30;
-        let current_hp = 15;
-        let healed = (current_hp + heal_amount(ItemType::HealthPotion)).min(max_hp);
-        assert_eq!(healed, 15 + POTION_HEAL);
+    fn effective_defense_no_armor_equals_player_default() {
+        let eq = PlayerEquipment { weapon: None, armor: None };
+        assert_eq!(effective_defense(&eq), PLAYER_DEF);
+    }
+
+    #[test]
+    fn effective_defense_with_leather_adds_bonus() {
+        let eq = PlayerEquipment { weapon: None, armor: Some(ArmorKind::LeatherArmor) };
+        assert_eq!(effective_defense(&eq), PLAYER_DEF + 2);
+    }
+
+    #[test]
+    fn goblin_drop_table_has_potion_and_sword() {
+        let t = monster_drop_table("고블린");
+        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Consumable(ConsumableKind::HealthPotion))));
+        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Weapon(WeaponKind::Sword))));
+    }
+
+    #[test]
+    fn orc_drop_table_has_spear_and_armor() {
+        let t = monster_drop_table("오크");
+        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Weapon(WeaponKind::Spear))));
+        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Armor(ArmorKind::LeatherArmor))));
+    }
+
+    #[test]
+    fn troll_drop_table_has_bow_and_armor() {
+        let t = monster_drop_table("트롤");
+        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Weapon(WeaponKind::Bow))));
+        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Armor(ArmorKind::LeatherArmor))));
+    }
+
+    #[test]
+    fn add_consumable_stacks_same_kind() {
+        let mut inv = PlayerInventory::default();
+        inv.add_consumable(ConsumableKind::HealthPotion);
+        inv.add_consumable(ConsumableKind::HealthPotion);
+        assert_eq!(inv.consumables.len(), 1);
+        assert_eq!(inv.consumables[0].1, 2);
+    }
+
+    #[test]
+    fn use_consumable_decrements_count() {
+        let mut inv = PlayerInventory::default();
+        inv.add_consumable(ConsumableKind::HealthPotion);
+        inv.add_consumable(ConsumableKind::HealthPotion);
+        assert!(inv.use_consumable(ConsumableKind::HealthPotion));
+        assert_eq!(inv.consumables[0].1, 1);
+    }
+
+    #[test]
+    fn use_consumable_removes_slot_when_count_zero() {
+        let mut inv = PlayerInventory::default();
+        inv.add_consumable(ConsumableKind::HealthPotion);
+        inv.use_consumable(ConsumableKind::HealthPotion);
+        assert!(inv.consumables.is_empty());
+    }
+
+    #[test]
+    fn use_consumable_returns_false_when_empty() {
+        let mut inv = PlayerInventory::default();
+        assert!(!inv.use_consumable(ConsumableKind::HealthPotion));
+    }
+
+    #[test]
+    fn consumable_heal_amount_equals_constant() {
+        assert_eq!(ConsumableKind::HealthPotion.heal_amount(), POTION_HEAL);
+    }
+
+    #[test]
+    fn equipment_panel_open_default_is_false() {
+        assert!(!EquipmentPanelOpen::default().0);
     }
 }

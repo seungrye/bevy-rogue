@@ -9,6 +9,7 @@ use bevy::{
 use crate::modules::{
     map::{Map, MapResource, MapTile, MAP_HEIGHT, MAP_WIDTH, MapGeneratorRegistry},
     player::Player,
+    item::PlayerEquipment,
 };
 
 pub const MINIMAP_RADIUS: i32 = 20;
@@ -38,6 +39,12 @@ pub struct MinimapOverlay;
 #[derive(Component)]
 pub(super) struct GeneratorNameText;
 
+#[derive(Component)]
+pub(super) struct WeaponSlotText;
+
+#[derive(Component)]
+pub(super) struct ArmorSlotText;
+
 pub struct MinimapPlugin;
 
 impl Plugin for MinimapPlugin {
@@ -47,7 +54,7 @@ impl Plugin for MinimapPlugin {
                 setup_minimap,
                 spawn_minimap_overlay.after(setup_minimap),
             ))
-            .add_systems(Update, (update_minimap, toggle_minimap, update_generator_name, zoom_minimap));
+            .add_systems(Update, (update_minimap, toggle_minimap, update_generator_name, zoom_minimap, update_equipment_slots));
     }
 }
 
@@ -119,7 +126,21 @@ fn spawn_minimap_overlay(
         ));
         parent.spawn(TextBundle::from_section(
             "[Tab] 맵 전환",
-            TextStyle { font, font_size: 11.0, color: Color::GRAY },
+            TextStyle { font: font.clone(), font_size: 11.0, color: Color::GRAY },
+        ));
+        parent.spawn((
+            TextBundle::from_section(
+                "무기: -",
+                TextStyle { font: font.clone(), font_size: 11.0, color: Color::rgba(1.0, 1.0, 0.5, 0.9) },
+            ),
+            WeaponSlotText,
+        ));
+        parent.spawn((
+            TextBundle::from_section(
+                "방어구: -",
+                TextStyle { font, font_size: 11.0, color: Color::rgba(0.5, 0.7, 1.0, 0.9) },
+            ),
+            ArmorSlotText,
         ));
     });
 }
@@ -302,6 +323,26 @@ fn update_minimap(
 
             image.data[pixel_idx..pixel_idx + 4].copy_from_slice(&color);
         }
+    }
+}
+
+fn update_equipment_slots(
+    equipment: Res<PlayerEquipment>,
+    mut weapon_q: Query<&mut Text, (With<WeaponSlotText>, Without<ArmorSlotText>)>,
+    mut armor_q: Query<&mut Text, (With<ArmorSlotText>, Without<WeaponSlotText>)>,
+) {
+    if !equipment.is_changed() { return; }
+    if let Ok(mut text) = weapon_q.get_single_mut() {
+        text.sections[0].value = match equipment.weapon {
+            None    => "무기: -".to_string(),
+            Some(w) => format!("무기: {}", w.display_name()),
+        };
+    }
+    if let Ok(mut text) = armor_q.get_single_mut() {
+        text.sections[0].value = match equipment.armor {
+            None    => "방어구: -".to_string(),
+            Some(a) => format!("방어구: {}", a.display_name()),
+        };
     }
 }
 
@@ -516,6 +557,28 @@ mod tests {
     #[test]
     fn toggle_hidden_to_visible() {
         assert_eq!(toggle_visibility(Visibility::Hidden), Visibility::Inherited);
+    }
+
+    #[test]
+    fn weapon_slot_text_no_weapon() {
+        use crate::modules::item::PlayerEquipment;
+        let eq = PlayerEquipment { weapon: None, armor: None };
+        let text = match eq.weapon {
+            None    => "무기: -".to_string(),
+            Some(w) => format!("무기: {}", w.display_name()),
+        };
+        assert_eq!(text, "무기: -");
+    }
+
+    #[test]
+    fn armor_slot_text_no_armor() {
+        use crate::modules::item::PlayerEquipment;
+        let eq = PlayerEquipment { weapon: None, armor: None };
+        let text = match eq.armor {
+            None    => "방어구: -".to_string(),
+            Some(a) => format!("방어구: {}", a.display_name()),
+        };
+        assert_eq!(text, "방어구: -");
     }
 
     #[test]
