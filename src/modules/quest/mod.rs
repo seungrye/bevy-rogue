@@ -25,7 +25,8 @@ pub struct QuestPhaseDef {
     pub dialog: Vec<String>,
     #[serde(default)]
     pub on_interact: Vec<QuestAction>,
-    pub auto_advance: Option<AutoAdvance>,
+    #[serde(default)]
+    pub auto_advance: Vec<AutoAdvance>,
     #[serde(default)]
     pub objective: Option<String>,
 }
@@ -41,6 +42,9 @@ pub enum QuestCondition {
     HasItem(String),
     InZone(ZoneId),
     PhaseIs { quest: String, phase: String },
+    And(Vec<QuestCondition>),
+    Or(Vec<QuestCondition>),
+    Not(Box<QuestCondition>),
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -48,6 +52,12 @@ pub enum QuestAction {
     AdvancePhase(String),
     GiveItem(String),
     RemoveItem(String),
+    Log(String),
+    Branch {
+        condition: Box<QuestCondition>,
+        if_true: Vec<QuestAction>,
+        if_false: Vec<QuestAction>,
+    },
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -138,6 +148,7 @@ fn load_quests(mut registry: ResMut<QuestRegistry>) {
 }
 
 /// auto_advance 조건을 매 프레임 평가하여 단계를 자동 전진시킨다
+/// Vec 순서로 평가하며 첫 번째 충족 조건만 적용한다
 fn check_auto_advance(
     registry: Res<QuestRegistry>,
     mut state: ResMut<QuestState>,
@@ -155,9 +166,10 @@ fn check_auto_advance(
             Some(p) => p,
             None => continue,
         };
-        if let Some(auto) = &phase_def.auto_advance {
-            if eval_condition(&auto.condition, &inventory, &world) {
+        for auto in &phase_def.auto_advance {
+            if eval_condition(&auto.condition, &inventory, &world, &state) {
                 advances.push((quest_id.clone(), auto.next_phase.clone()));
+                break; // 첫 번째 충족 조건만 사용
             }
         }
     }
@@ -176,6 +188,7 @@ pub fn execute_actions(
     state: &mut QuestState,
     inventory: &mut PlayerInventory,
     log: &mut EventWriter<crate::modules::ui::LogMessage>,
+    world: &crate::modules::zone::WorldState,
 ) {
     for action in actions {
         match action {
@@ -199,6 +212,17 @@ pub fn execute_actions(
                     ));
                 }
             }
+            QuestAction::Log(msg) => {
+                log.send(crate::modules::ui::LogMessage(msg.clone()));
+            }
+            QuestAction::Branch { condition, if_true, if_false } => {
+                let branch = if eval_condition(condition, inventory, world, state) {
+                    if_true.as_slice()
+                } else {
+                    if_false.as_slice()
+                };
+                execute_actions(branch, quest_id, state, inventory, log, world);
+            }
         }
     }
 }
@@ -209,6 +233,7 @@ pub fn eval_condition(
     cond: &QuestCondition,
     inventory: &PlayerInventory,
     world: &crate::modules::zone::WorldState,
+    quest_state: &QuestState,
 ) -> bool {
     match cond {
         QuestCondition::HasItem(item_id) => {
@@ -217,10 +242,16 @@ pub fn eval_condition(
         }
         QuestCondition::InZone(zone) => &world.current == zone,
         QuestCondition::PhaseIs { quest, phase } => {
-            // 다른 퀘스트 단계는 이 함수 밖에서 처리(전달된 state가 없음)
-            // 단순화: 항상 false (복잡한 퀘스트 체인은 향후 확장)
-            let _ = (quest, phase);
-            false
+            quest_state.phases.get(quest).map(|p| p == phase).unwrap_or(false)
+        }
+        QuestCondition::And(conds) => {
+            conds.iter().all(|c| eval_condition(c, inventory, world, quest_state))
+        }
+        QuestCondition::Or(conds) => {
+            conds.iter().any(|c| eval_condition(c, inventory, world, quest_state))
+        }
+        QuestCondition::Not(inner) => {
+            !eval_condition(inner, inventory, world, quest_state)
         }
     }
 }
@@ -281,6 +312,8 @@ pub fn item_id_to_kind(id: &str) -> Option<ItemKind> {
     match id {
         "eternal_gem"         => Some(ItemKind::QuestItem(QuestItemKind::EternalGem)),
         "philosophers_stone"  => Some(ItemKind::QuestItem(QuestItemKind::PhilosophersStone)),
+        "dragon_scale"        => Some(ItemKind::QuestItem(QuestItemKind::DragonScale)),
+        "ancient_scroll"      => Some(ItemKind::QuestItem(QuestItemKind::AncientScroll)),
         "sword"               => Some(ItemKind::Weapon(crate::modules::item::WeaponKind::Sword)),
         "spear"               => Some(ItemKind::Weapon(crate::modules::item::WeaponKind::Spear)),
         "bow"                 => Some(ItemKind::Weapon(crate::modules::item::WeaponKind::Bow)),
@@ -306,16 +339,16 @@ mod tests {
                 m.insert("not_started".into(), QuestPhaseDef {
                     dialog: vec!["대화".into()],
                     on_interact: vec![QuestAction::AdvancePhase("active".into())],
-                    auto_advance: None,
+                    auto_advance: vec![],
                     objective: None,
                 });
                 m.insert("active".into(), QuestPhaseDef {
                     dialog: vec!["아직".into()],
                     on_interact: vec![],
-                    auto_advance: Some(AutoAdvance {
+                    auto_advance: vec![AutoAdvance {
                         condition: QuestCondition::HasItem("eternal_gem".into()),
                         next_phase: "ready".into(),
-                    }),
+                    }],
                     objective: Some("영원의 보석을 찾아라".into()),
                 });
                 m
@@ -355,5 +388,161 @@ mod tests {
         assert!(!state.is_spawn_done("gem_quest", "eternal_gem"));
         state.mark_spawned("gem_quest", "eternal_gem");
         assert!(state.is_spawn_done("gem_quest", "eternal_gem"));
+    }
+
+    fn make_world() -> crate::modules::zone::WorldState {
+        crate::modules::zone::WorldState::default()
+    }
+
+    fn make_inventory_with(item_ids: &[&str]) -> PlayerInventory {
+        let mut inv = PlayerInventory::default();
+        for id in item_ids {
+            if let Some(kind) = item_id_to_kind(id) {
+                inv.items.push(InventoryItem { kind });
+            }
+        }
+        inv
+    }
+
+    #[test]
+    fn eval_and_requires_all() {
+        let inv = make_inventory_with(&["dragon_scale"]);
+        let state = QuestState::default();
+        let world = make_world();
+        let cond = QuestCondition::And(vec![
+            QuestCondition::HasItem("dragon_scale".into()),
+            QuestCondition::HasItem("ancient_scroll".into()),
+        ]);
+        assert!(!eval_condition(&cond, &inv, &world, &state));
+
+        let inv2 = make_inventory_with(&["dragon_scale", "ancient_scroll"]);
+        assert!(eval_condition(&cond, &inv2, &world, &state));
+    }
+
+    #[test]
+    fn eval_or_requires_any() {
+        let inv = make_inventory_with(&["dragon_scale"]);
+        let state = QuestState::default();
+        let world = make_world();
+        let cond = QuestCondition::Or(vec![
+            QuestCondition::HasItem("dragon_scale".into()),
+            QuestCondition::HasItem("ancient_scroll".into()),
+        ]);
+        assert!(eval_condition(&cond, &inv, &world, &state));
+
+        let empty = PlayerInventory::default();
+        assert!(!eval_condition(&cond, &empty, &world, &state));
+    }
+
+    #[test]
+    fn eval_not_inverts() {
+        let inv = make_inventory_with(&["dragon_scale"]);
+        let state = QuestState::default();
+        let world = make_world();
+        let cond = QuestCondition::Not(Box::new(QuestCondition::HasItem("ancient_scroll".into())));
+        assert!(eval_condition(&cond, &inv, &world, &state));
+        let cond2 = QuestCondition::Not(Box::new(QuestCondition::HasItem("dragon_scale".into())));
+        assert!(!eval_condition(&cond2, &inv, &world, &state));
+    }
+
+    #[test]
+    fn eval_phase_is_checks_quest_state() {
+        let inv = PlayerInventory::default();
+        let mut state = QuestState::default();
+        let world = make_world();
+        let cond = QuestCondition::PhaseIs { quest: "gem_quest".into(), phase: "done".into() };
+        assert!(!eval_condition(&cond, &inv, &world, &state));
+        state.set_phase("gem_quest", "done");
+        assert!(eval_condition(&cond, &inv, &world, &state));
+    }
+
+    #[test]
+    fn auto_advance_priority_first_match_wins() {
+        // gathering 단계 재현: dragon_scale + ancient_scroll 있으면 1순위 both_ready
+        let mut state = QuestState::default();
+        state.set_phase("test_q", "gathering");
+        let phase = QuestPhaseDef {
+            dialog: vec![],
+            on_interact: vec![],
+            auto_advance: vec![
+                AutoAdvance {
+                    condition: QuestCondition::And(vec![
+                        QuestCondition::HasItem("dragon_scale".into()),
+                        QuestCondition::HasItem("ancient_scroll".into()),
+                    ]),
+                    next_phase: "both_ready".into(),
+                },
+                AutoAdvance {
+                    condition: QuestCondition::HasItem("dragon_scale".into()),
+                    next_phase: "has_scale_hint".into(),
+                },
+            ],
+            objective: None,
+        };
+        let world = make_world();
+        let inv_both = make_inventory_with(&["dragon_scale", "ancient_scroll"]);
+        let matched: Option<String> = phase.auto_advance.iter()
+            .find(|a| eval_condition(&a.condition, &inv_both, &world, &state))
+            .map(|a| a.next_phase.clone());
+        assert_eq!(matched.as_deref(), Some("both_ready"), "둘 다 있으면 1순위가 선택돼야 한다");
+
+        let inv_scale = make_inventory_with(&["dragon_scale"]);
+        let matched2: Option<String> = phase.auto_advance.iter()
+            .find(|a| eval_condition(&a.condition, &inv_scale, &world, &state))
+            .map(|a| a.next_phase.clone());
+        assert_eq!(matched2.as_deref(), Some("has_scale_hint"), "용비늘만 있으면 2순위가 선택돼야 한다");
+    }
+
+    #[test]
+    fn branch_action_selects_correct_path() {
+        let mut state = QuestState::default();
+        state.set_phase("test_q", "ready");
+        let mut inv = make_inventory_with(&["dragon_scale", "ancient_scroll"]);
+        let world = make_world();
+        let mut log_msgs: Vec<String> = Vec::new();
+
+        // Branch: dragon_scale + ancient_scroll 있으면 if_true
+        let action = QuestAction::Branch {
+            condition: Box::new(QuestCondition::And(vec![
+                QuestCondition::HasItem("dragon_scale".into()),
+                QuestCondition::HasItem("ancient_scroll".into()),
+            ])),
+            if_true: vec![
+                QuestAction::RemoveItem("dragon_scale".into()),
+                QuestAction::RemoveItem("ancient_scroll".into()),
+                QuestAction::Log("정통 결말".into()),
+                QuestAction::AdvancePhase("normal_done".into()),
+            ],
+            if_false: vec![
+                QuestAction::Log("재료 부족".into()),
+            ],
+        };
+
+        // EventWriter 없이 내부 로직만 재현
+        if let QuestAction::Branch { condition, if_true, if_false } = &action {
+            let branch = if eval_condition(condition, &inv, &world, &state) { if_true } else { if_false };
+            for a in branch {
+                match a {
+                    QuestAction::RemoveItem(id) => {
+                        if let Some(kind) = item_id_to_kind(id) {
+                            inv.items.retain(|i| i.kind != kind);
+                        }
+                    }
+                    QuestAction::Log(msg) => log_msgs.push(msg.clone()),
+                    QuestAction::AdvancePhase(p) => state.set_phase("test_q", p),
+                    _ => {}
+                }
+            }
+        }
+
+        assert_eq!(state.current_phase("test_q"), Some("normal_done"));
+        assert!(log_msgs.contains(&"정통 결말".to_string()));
+        assert!(!inv.items.iter().any(|i| matches!(i.kind, ItemKind::QuestItem(QuestItemKind::DragonScale))));
+    }
+
+    #[test]
+    fn new_item_ids_mapped_correctly() {
+        assert!(matches!(item_id_to_kind("dragon_scale"), Some(ItemKind::QuestItem(QuestItemKind::DragonScale))));
+        assert!(matches!(item_id_to_kind("ancient_scroll"), Some(ItemKind::QuestItem(QuestItemKind::AncientScroll))));
     }
 }

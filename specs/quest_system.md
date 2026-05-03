@@ -71,7 +71,10 @@ QuestDef(
 |----|------|
 | `HasItem("item_id")` | 플레이어 인벤토리에 해당 아이템 존재 |
 | `InZone(ZoneId)` | 플레이어가 해당 존에 있음 |
-| `PhaseIs("quest_id", "phase_id")` | 다른 퀘스트의 현재 단계 확인 |
+| `PhaseIs { quest: "id", phase: "id" }` | 다른 퀘스트의 현재 단계 확인 |
+| `And([cond, ...])` | 모든 조건 충족 |
+| `Or([cond, ...])` | 하나 이상 조건 충족 |
+| `Not(cond)` | 조건 부정 |
 
 ### QuestAction
 | 값 | 설명 |
@@ -79,13 +82,21 @@ QuestDef(
 | `AdvancePhase("phase_id")` | 이 퀘스트의 현재 단계를 지정 단계로 이동 |
 | `GiveItem("item_id")` | 플레이어에게 아이템 지급 |
 | `RemoveItem("item_id")` | 플레이어 인벤토리에서 아이템 제거 |
+| `Log("message")` | 로그 창에 메시지 출력 |
+| `Branch { condition, if_true, if_false }` | 조건 분기 (중첩 가능) |
+
+### auto_advance
+- `Vec<AutoAdvance>` — 우선순위 순서, **첫 번째 충족 조건만** 실행
+- 빈 배열이면 자동 전진 없음
 
 ## 퀘스트 아이템 ID 목록
 
 | item_id | 종류 | 설명 |
 |---------|------|------|
-| `eternal_gem` | QuestItem | 던전 2층에서 획득, 퀘스트 목표물 |
-| `philosophers_stone` | QuestItem | 퀘스트 완료 보상 |
+| `eternal_gem` | QuestItem | 던전 2층에서 획득, 보석 퀘스트 목표물 |
+| `philosophers_stone` | QuestItem | 보석 퀘스트 완료 보상 |
+| `dragon_scale` | QuestItem | 던전 2층에서 획득, 연금술사 재료 |
+| `ancient_scroll` | QuestItem | 던전 1층에서 획득, 연금술사 재료 |
 
 ## 동작 명세
 
@@ -93,7 +104,9 @@ QuestDef(
 - [x] `QuestState` 리소스: `HashMap<quest_id, current_phase>` 로 진행상황 추적
 - [x] NPC가 퀘스트 수여자(`giver_npc`)이면 `QuestState` 에 따른 조건부 대화 출력
 - [x] 마지막 대화 줄에서 Interact(이동키/Esc) 시 `on_interact` 액션 실행
-- [x] 매 프레임 `auto_advance` 조건 평가 → 충족 시 자동 단계 전진
+- [x] `auto_advance` 는 Vec 순서로 평가, 첫 번째 충족 조건이 단계를 전진시킨다
+- [x] `PhaseIs` 조건은 `QuestState` 를 참조해 다른 퀘스트의 단계를 비교한다
+- [x] `Branch` 액션은 중첩 가능하며 런타임 조건에 따라 액션 목록을 선택한다
 - [x] `QuestSpawn` 은 해당 `phase` 활성 + 해당 `zone` 진입 시 아이템 스폰
 - [x] 이미 수집한 퀘스트 아이템은 재스폰 안 됨 (`QuestState.spawned` HashSet)
 - [ ] 퀘스트 진행상황은 `save/progress.ron` 에 저장·복원 (추후 구현)

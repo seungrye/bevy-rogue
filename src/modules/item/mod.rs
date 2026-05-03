@@ -95,6 +95,8 @@ fn glyph_unicode(kind: ItemKind) -> &'static str {
         ItemKind::QuestItem(q) => match q {
             QuestItemKind::EternalGem        => "\u{25C6}", // ◆ black diamond
             QuestItemKind::PhilosophersStone => "\u{2295}", // ⊕ circled plus
+            QuestItemKind::DragonScale       => "\u{25B2}", // ▲ triangle
+            QuestItemKind::AncientScroll     => "\u{2393}", // ⎓ scroll-like
         },
     }
 }
@@ -115,6 +117,8 @@ fn glyph_game_icon(kind: ItemKind) -> &'static str {
         ItemKind::QuestItem(q) => match q {
             QuestItemKind::EternalGem        => "\u{25C6}", // fallback: ◆
             QuestItemKind::PhilosophersStone => "\u{2295}", // fallback: ⊕
+            QuestItemKind::DragonScale       => "\u{25B2}", // fallback: ▲
+            QuestItemKind::AncientScroll     => "\u{2393}", // fallback: ⎓
         },
     }
 }
@@ -123,13 +127,17 @@ fn glyph_game_icon(kind: ItemKind) -> &'static str {
 pub enum QuestItemKind {
     EternalGem,
     PhilosophersStone,
+    DragonScale,
+    AncientScroll,
 }
 
 impl QuestItemKind {
     pub fn display_name(self) -> &'static str {
         match self {
-            QuestItemKind::EternalGem       => "영원의 보석",
+            QuestItemKind::EternalGem        => "영원의 보석",
             QuestItemKind::PhilosophersStone => "현자의 돌",
+            QuestItemKind::DragonScale       => "용비늘",
+            QuestItemKind::AncientScroll     => "고대 주문서",
         }
     }
 }
@@ -208,6 +216,8 @@ impl ItemKind {
             ItemKind::QuestItem(q) => match q {
                 QuestItemKind::EternalGem        => "*",
                 QuestItemKind::PhilosophersStone => "%",
+                QuestItemKind::DragonScale       => "§",
+                QuestItemKind::AncientScroll     => "~",
             },
         }
     }
@@ -246,6 +256,8 @@ impl ItemKind {
             ItemKind::QuestItem(q) => match q {
                 QuestItemKind::EternalGem        => "영원의 보석을 획득했다!",
                 QuestItemKind::PhilosophersStone => "현자의 돌을 획득했다!",
+                QuestItemKind::DragonScale       => "용비늘을 획득했다!",
+                QuestItemKind::AncientScroll     => "고대 주문서를 획득했다!",
             },
         }
     }

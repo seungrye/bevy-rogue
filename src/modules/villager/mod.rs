@@ -21,6 +21,7 @@ const Z_VILLAGER: f32 = 0.9;
 // (name, [r,g,b], dialogues, quest_id)
 static VILLAGER_DATA: &[(&str, [f32; 3], &[&str], Option<&str>)] = &[
     ("장로", [0.9, 0.8, 0.5], &[], Some("gem_quest")),
+    ("연금술사", [0.4, 0.9, 0.8], &[], Some("alchemist_quest")),
     ("촌장", [1.0, 0.85, 0.0], &[
         "어서오시게. 이 마을은 평화롭다네.",
         "요즘 주변에 이상한 소문이 들리는군.",
@@ -176,7 +177,7 @@ fn handle_bump(
 
             if let Some(quest_id) = villager.quest_id.clone() {
                 let phase_before = quest_state.phases.get(&quest_id).cloned();
-                show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer);
+                show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state);
                 let phase_after = quest_state.phases.get(&quest_id).cloned();
                 // 퀘스트가 active 상태로 전환됐을 때 QuestGiver 마커 추가
                 if phase_before.as_deref() != Some("active") && phase_after.as_deref() == Some("active") {
@@ -200,6 +201,7 @@ fn show_quest_dialog(
     state: &mut QuestState,
     inventory: &mut PlayerInventory,
     log: &mut EventWriter<LogMessage>,
+    world: &WorldState,
 ) {
     // 퀘스트가 초기화되지 않았으면 initial_phase 로 초기화
     if !state.phases.contains_key(quest_id) {
@@ -228,7 +230,7 @@ fn show_quest_dialog(
     // 마지막 줄에서 액션 실행
     if !dialog.is_empty() && idx + 1 >= dialog.len() {
         villager.quest_dialogue_idx = 0;
-        execute_actions(&actions, quest_id, state, inventory, log);
+        execute_actions(&actions, quest_id, state, inventory, log, world);
     } else {
         villager.quest_dialogue_idx = idx + 1;
     }

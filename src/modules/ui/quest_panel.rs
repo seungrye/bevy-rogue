@@ -137,13 +137,13 @@ mod tests {
         phases.insert("active".to_string(), QuestPhaseDef {
             dialog: vec![],
             on_interact: vec![],
-            auto_advance: None,
+            auto_advance: vec![],
             objective: Some("보석을 찾아라".to_string()),
         });
         phases.insert("done".to_string(), QuestPhaseDef {
             dialog: vec![],
             on_interact: vec![],
-            auto_advance: None,
+            auto_advance: vec![],
             objective: Some("완료!".to_string()),
         });
         let def = QuestDef {
@@ -195,7 +195,7 @@ mod tests {
         phases.insert("active".to_string(), QuestPhaseDef {
             dialog: vec![],
             on_interact: vec![],
-            auto_advance: None,
+            auto_advance: vec![],
             objective: None,
         });
         reg.quests.insert("q".into(), QuestDef {
