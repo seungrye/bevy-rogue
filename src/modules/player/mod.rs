@@ -20,15 +20,20 @@ const BAR_WIDTH: f32 = 14.0;
 const BAR_HEIGHT: f32 = 2.0;
 const BAR_X: f32 = -BAR_WIDTH / 2.0;
 const HP_BAR_Y: f32 = 11.0;
-const MP_BAR_Y: f32 = 14.0;
+const MP_BAR_Y: f32 = HP_BAR_Y + BAR_HEIGHT; // 간격 없이 바로 위에 붙임
+const BAR_ALPHA: f32 = 0.7;
+
+const HP_BG_COLOR: Color = Color::rgba(0.6, 0.0, 0.0, BAR_ALPHA);
+const MP_BG_COLOR: Color = Color::rgba(0.35, 0.35, 0.35, BAR_ALPHA);
+const MP_FG_COLOR: Color = Color::rgba(0.2, 0.5, 1.0, BAR_ALPHA);
 
 #[derive(Component)] struct HpBarFill;
 #[derive(Component)] struct MpBarFill;
 
 pub fn hp_color(ratio: f32) -> Color {
-    if ratio > 0.5 { Color::GREEN }
-    else if ratio > 0.25 { Color::YELLOW }
-    else { Color::RED }
+    if ratio > 0.5 { Color::rgba(0.0, 0.8, 0.0, BAR_ALPHA) }
+    else if ratio > 0.25 { Color::rgba(0.9, 0.8, 0.0, BAR_ALPHA) }
+    else { Color::rgba(0.9, 0.1, 0.1, BAR_ALPHA) }
 }
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -97,32 +102,31 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, map_res:
             attack: PLAYER_ATK, defense: PLAYER_DEF,
         },
     )).with_children(|parent| {
-        let bg = Color::rgba(0.15, 0.15, 0.15, 0.9);
-        // HP 바 배경
+        // HP 바 배경 (어두운 빨간색)
         parent.spawn(SpriteBundle {
-            sprite: Sprite { custom_size: Some(Vec2::new(BAR_WIDTH, BAR_HEIGHT)), color: bg, anchor: Anchor::CenterLeft, ..default() },
+            sprite: Sprite { custom_size: Some(Vec2::new(BAR_WIDTH, BAR_HEIGHT)), color: HP_BG_COLOR, anchor: Anchor::CenterLeft, ..default() },
             transform: Transform::from_xyz(BAR_X, HP_BAR_Y, 0.1),
             ..default()
         });
         // HP 바 전경
         parent.spawn((
             SpriteBundle {
-                sprite: Sprite { custom_size: Some(Vec2::new(BAR_WIDTH, BAR_HEIGHT)), color: Color::GREEN, anchor: Anchor::CenterLeft, ..default() },
+                sprite: Sprite { custom_size: Some(Vec2::new(BAR_WIDTH, BAR_HEIGHT)), color: hp_color(1.0), anchor: Anchor::CenterLeft, ..default() },
                 transform: Transform::from_xyz(BAR_X, HP_BAR_Y, 0.2),
                 ..default()
             },
             HpBarFill,
         ));
-        // MP 바 배경
+        // MP 바 배경 (회색)
         parent.spawn(SpriteBundle {
-            sprite: Sprite { custom_size: Some(Vec2::new(BAR_WIDTH, BAR_HEIGHT)), color: bg, anchor: Anchor::CenterLeft, ..default() },
+            sprite: Sprite { custom_size: Some(Vec2::new(BAR_WIDTH, BAR_HEIGHT)), color: MP_BG_COLOR, anchor: Anchor::CenterLeft, ..default() },
             transform: Transform::from_xyz(BAR_X, MP_BAR_Y, 0.1),
             ..default()
         });
-        // MP 바 전경
+        // MP 바 전경 (파란색)
         parent.spawn((
             SpriteBundle {
-                sprite: Sprite { custom_size: Some(Vec2::new(BAR_WIDTH, BAR_HEIGHT)), color: Color::rgb(0.2, 0.5, 1.0), anchor: Anchor::CenterLeft, ..default() },
+                sprite: Sprite { custom_size: Some(Vec2::new(BAR_WIDTH, BAR_HEIGHT)), color: MP_FG_COLOR, anchor: Anchor::CenterLeft, ..default() },
                 transform: Transform::from_xyz(BAR_X, MP_BAR_Y, 0.2),
                 ..default()
             },
@@ -305,20 +309,27 @@ mod tests {
 
     #[test]
     fn hp_color_green_above_half() {
-        assert_eq!(hp_color(1.0), Color::GREEN);
-        assert_eq!(hp_color(0.51), Color::GREEN);
+        assert_eq!(hp_color(1.0),  Color::rgba(0.0, 0.8, 0.0, BAR_ALPHA));
+        assert_eq!(hp_color(0.51), Color::rgba(0.0, 0.8, 0.0, BAR_ALPHA));
     }
 
     #[test]
     fn hp_color_yellow_quarter_to_half() {
-        assert_eq!(hp_color(0.5), Color::YELLOW);
-        assert_eq!(hp_color(0.26), Color::YELLOW);
+        assert_eq!(hp_color(0.5),  Color::rgba(0.9, 0.8, 0.0, BAR_ALPHA));
+        assert_eq!(hp_color(0.26), Color::rgba(0.9, 0.8, 0.0, BAR_ALPHA));
     }
 
     #[test]
     fn hp_color_red_at_or_below_quarter() {
-        assert_eq!(hp_color(0.25), Color::RED);
-        assert_eq!(hp_color(0.0), Color::RED);
+        assert_eq!(hp_color(0.25), Color::rgba(0.9, 0.1, 0.1, BAR_ALPHA));
+        assert_eq!(hp_color(0.0),  Color::rgba(0.9, 0.1, 0.1, BAR_ALPHA));
+    }
+
+    #[test]
+    fn hp_color_alpha_is_bar_alpha() {
+        for ratio in [0.0, 0.25, 0.26, 0.5, 0.51, 1.0] {
+            assert_eq!(hp_color(ratio).a(), BAR_ALPHA, "ratio={ratio} 의 alpha 가 BAR_ALPHA 여야 한다");
+        }
     }
 
     #[test]
