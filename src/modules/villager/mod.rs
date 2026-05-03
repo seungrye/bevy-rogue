@@ -50,6 +50,16 @@ pub struct Villager {
     pub dialogue_idx: usize,
     pub tile_x: usize,
     pub tile_y: usize,
+    pub just_bumped: bool,
+}
+
+// 이번 턴에 주민이 이동해야 하는지 판단하고 플래그를 초기화한다
+pub fn take_turn(villager: &mut Villager) -> bool {
+    if villager.just_bumped {
+        villager.just_bumped = false;
+        return false;
+    }
+    true
 }
 
 pub struct VillagerPlugin;
@@ -135,6 +145,7 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
                 dialogue_idx: 0,
                 tile_x: cx,
                 tile_y: cy,
+                just_bumped: false,
             },
         ));
     }
@@ -152,6 +163,7 @@ fn handle_bump(
                 let msg = villager.dialogues[villager.dialogue_idx].clone();
                 log_writer.send(LogMessage(msg));
                 villager.dialogue_idx = next_dialogue_idx(villager.dialogue_idx, villager.dialogues.len());
+                villager.just_bumped = true;
                 break;
             }
         }
@@ -184,6 +196,10 @@ fn villager_turn(
 
     for (mut villager, mut transform) in villager_query.iter_mut() {
         occupied.remove(&(villager.tile_x, villager.tile_y));
+        if !take_turn(&mut villager) {
+            occupied.insert((villager.tile_x, villager.tile_y));
+            continue;
+        }
         let (nx, ny) = pick_next_tile(villager.tile_x, villager.tile_y, map, &occupied, &mut rng);
         occupied.insert((nx, ny));
 
@@ -309,6 +325,31 @@ mod tests {
             let result = pick_next_tile(5, 5, &map, &occupied, &mut rng);
             assert_eq!(result, (5, 5), "점유된 타일로 이동하면 안 된다");
         }
+    }
+
+    #[test]
+    fn take_turn_returns_false_and_resets_flag_when_bumped() {
+        let mut v = Villager {
+            dialogues: vec![],
+            dialogue_idx: 0,
+            tile_x: 0,
+            tile_y: 0,
+            just_bumped: true,
+        };
+        assert!(!take_turn(&mut v), "충돌 직후에는 이동하지 않아야 한다");
+        assert!(!v.just_bumped, "플래그는 한 번만 소모된다");
+    }
+
+    #[test]
+    fn take_turn_returns_true_when_not_bumped() {
+        let mut v = Villager {
+            dialogues: vec![],
+            dialogue_idx: 0,
+            tile_x: 0,
+            tile_y: 0,
+            just_bumped: false,
+        };
+        assert!(take_turn(&mut v), "충돌 없는 주민은 정상 이동해야 한다");
     }
 
     // villager_turn 에서 플레이어 타일(Transform 또는 MovingTo 목적지)을
