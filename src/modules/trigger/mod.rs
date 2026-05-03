@@ -74,25 +74,14 @@ pub fn spawn_triggers_for_rooms(commands: &mut Commands, rooms: &[Rect], asset_s
         commands.spawn((
             Trigger { x, y, effect: TriggerEffect::OpenChest },
             Text2dBundle {
-                text: Text::from_section("?", TextStyle { font: font.clone(), font_size: TILE_SIZE, color: Color::YELLOW }),
+                text: Text::from_section("?", TextStyle { font, font_size: TILE_SIZE, color: Color::YELLOW }),
                 transform: Transform::from_xyz(coord.x, coord.y, Z_TRIGGER),
                 ..default()
             },
         ));
     }
 
-    if let Some(r) = rooms.last() {
-        let (x, y) = r.center();
-        let coord = tile_to_world_coords(x, y);
-        commands.spawn((
-            Trigger { x, y, effect: TriggerEffect::ShowMessage("출구에 도달했습니다!".to_string()) },
-            Text2dBundle {
-                text: Text::from_section(">", TextStyle { font, font_size: TILE_SIZE, color: Color::RED }),
-                transform: Transform::from_xyz(coord.x, coord.y, Z_TRIGGER),
-                ..default()
-            },
-        ));
-    }
+    // ">" 트리거는 ZonePortal(StairDown/StairUp) 로 대체됨 — 제거
 }
 
 fn check_triggers(

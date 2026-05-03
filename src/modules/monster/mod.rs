@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use std::collections::HashSet;
+use rand::Rng;
 use crate::modules::{
     map::{
         draw_map, Map, MapResource, MapTile, MapType, MonsterTiles,
@@ -85,26 +86,45 @@ fn respawn_on_regen(
 fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer) {
     if rooms.is_empty() { return; }
     let font = asset_server.load("fonts/FiraMono-Medium.ttf");
+    let mut rng = rand::thread_rng();
 
-    for (i, room) in rooms.iter().skip(1).enumerate() {
-        let data = MONSTER_DATA[i % MONSTER_DATA.len()];
-        let (name, glyph, color, hp, atk, def) = (data.0, data.1, data.2, data.3, data.4, data.5);
-        let (cx, cy) = room.center();
-        let coord = tile_to_world_coords(cx, cy);
+    for room in rooms.iter().skip(1) {
+        let count = rng.gen_range(1..=3usize);
+        let mut placed: HashSet<(usize, usize)> = HashSet::new();
 
-        commands.spawn((
-            Text2dBundle {
-                text: Text::from_section(glyph, TextStyle {
-                    font: font.clone(),
-                    font_size: TILE_SIZE,
-                    color: Color::rgb(color[0], color[1], color[2]),
-                }),
-                transform: Transform::from_xyz(coord.x, coord.y, Z_MONSTER),
-                ..default()
-            },
-            Monster { name: name.to_string(), tile_x: cx, tile_y: cy },
-            CombatStats { hp, max_hp: hp, mp: 0, max_mp: 0, attack: atk, defense: def },
-        ));
+        for j in 0..count {
+            let data = MONSTER_DATA[j % MONSTER_DATA.len()];
+            let (name, glyph, color, hp, atk, def) = (data.0, data.1, data.2, data.3, data.4, data.5);
+
+            // 방 안에서 겹치지 않는 빈 타일 찾기 (최대 10회 시도)
+            let mut tile = room.center();
+            for _ in 0..10 {
+                let tx = rng.gen_range(room.x1..room.x2);
+                let ty = rng.gen_range(room.y1..room.y2);
+                if !placed.contains(&(tx, ty)) {
+                    tile = (tx, ty);
+                    break;
+                }
+            }
+            let (tx, ty) = tile;
+            if placed.contains(&(tx, ty)) { continue; } // 자리 없으면 스킵
+            placed.insert((tx, ty));
+
+            let coord = tile_to_world_coords(tx, ty);
+            commands.spawn((
+                Text2dBundle {
+                    text: Text::from_section(glyph, TextStyle {
+                        font: font.clone(),
+                        font_size: TILE_SIZE,
+                        color: Color::rgb(color[0], color[1], color[2]),
+                    }),
+                    transform: Transform::from_xyz(coord.x, coord.y, Z_MONSTER),
+                    ..default()
+                },
+                Monster { name: name.to_string(), tile_x: tx, tile_y: ty },
+                CombatStats { hp, max_hp: hp, mp: 0, max_mp: 0, attack: atk, defense: def },
+            ));
+        }
     }
 }
 
