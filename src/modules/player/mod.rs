@@ -46,6 +46,10 @@ pub fn hp_color(ratio: f32) -> Color {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PlayerSystemSet {
     Movement,
+    /// smooth_player_lerp 완료 후 실행되는 세트.
+    /// 이동 완료 시 PlayerActedEvent 가 여기서 발행되므로,
+    /// 픽업·몬스터·주민 등 턴 로직은 이 세트 이후에 실행해야 한다.
+    MovementComplete,
 }
 
 pub const LERP_SPEED: f32 = 7.5;
@@ -207,7 +211,7 @@ fn player_movement(
             player_path.0.pop_front();
             let wp = tile_to_world_coords(tx, ty);
             commands.entity(entity).insert(MovingTo { target: Vec3::new(wp.x, wp.y, 1.0) });
-            acted.send(PlayerActedEvent);
+            // PlayerActedEvent 는 smooth_player_lerp 가 이동 완료 시 발행
         }
         return;
     }
@@ -231,7 +235,7 @@ fn player_movement(
     } else {
         let wp = tile_to_world_coords(tx, ty);
         commands.entity(entity).insert(MovingTo { target: Vec3::new(wp.x, wp.y, 1.0) });
-        acted.send(PlayerActedEvent);
+        // PlayerActedEvent 는 smooth_player_lerp 가 이동 완료 시 발행
     }
 }
 
@@ -239,6 +243,7 @@ fn smooth_player_lerp(
     mut commands: Commands,
     time: Res<Time>,
     mut query: Query<(Entity, &mut Transform, &MovingTo), With<Player>>,
+    mut acted: EventWriter<PlayerActedEvent>,
 ) {
     for (entity, mut transform, moving) in query.iter_mut() {
         let dist = transform.translation.distance(moving.target);
@@ -246,6 +251,7 @@ fn smooth_player_lerp(
         if dist < step {
             transform.translation = moving.target;
             commands.entity(entity).remove::<MovingTo>();
+            acted.send(PlayerActedEvent);
         } else {
             let dir = (moving.target - transform.translation).normalize();
             transform.translation += dir * step;
@@ -468,12 +474,13 @@ impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MoveHoldState>()
             .init_resource::<PlayerPath>()
+            .configure_sets(Update, PlayerSystemSet::MovementComplete.after(PlayerSystemSet::Movement))
             .add_systems(Startup, spawn_player.after(draw_map))
             .add_systems(Update, (
                 on_mouse_click.before(PlayerSystemSet::Movement),
                 player_movement.in_set(PlayerSystemSet::Movement),
-                smooth_player_lerp.after(PlayerSystemSet::Movement),
-                update_fov.after(smooth_player_lerp),
+                smooth_player_lerp.in_set(PlayerSystemSet::MovementComplete),
+                update_fov.after(PlayerSystemSet::MovementComplete),
                 camera_follow_player.after(update_fov),
                 update_player_bars,
                 respawn_player_on_regen.after(MapSystemSet::ExecuteRegen),

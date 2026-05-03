@@ -6,7 +6,7 @@ use crate::modules::{
         MAP_WIDTH, MAP_HEIGHT, MapTile, tile_to_world_coords, TILE_SIZE,
         world_to_tile_coords, GlobalTurn,
     },
-    player::MovingTo,
+    player::{MovingTo, PlayerSystemSet},
     combat_feedback::{BloodStain, Z_BLOOD},
 };
 
@@ -166,7 +166,7 @@ impl Plugin for ZonePlugin {
                 spawn_portals_after_apply,
                 restore_zone_state,
                 discover_portals_in_fov,
-            ).chain());
+            ).chain().after(PlayerSystemSet::MovementComplete));
     }
 }
 

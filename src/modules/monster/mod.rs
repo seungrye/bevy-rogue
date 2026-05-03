@@ -59,7 +59,7 @@ impl Plugin for MonsterPlugin {
                 respawn_on_regen.after(MapSystemSet::ExecuteRegen),
                 (handle_player_attack, monster_turn, cleanup_dead)
                     .chain()
-                    .after(PlayerSystemSet::Movement),
+                    .after(PlayerSystemSet::MovementComplete),
                 smooth_monster_move,
             ));
     }

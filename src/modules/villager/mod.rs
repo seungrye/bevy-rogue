@@ -231,7 +231,7 @@ impl Plugin for VillagerPlugin {
                 respawn_on_regen.after(MapSystemSet::ExecuteRegen),
                 (handle_bump, villager_turn)
                     .chain()
-                    .after(PlayerSystemSet::Movement),
+                    .after(PlayerSystemSet::MovementComplete),
                 update_villager_glyph.after(handle_bump),
                 smooth_villager_move,
                 handle_kill_npc,

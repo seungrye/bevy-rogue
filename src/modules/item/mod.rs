@@ -500,7 +500,7 @@ impl Plugin for ItemPlugin {
             .add_systems(Startup, setup_glyph_fonts)
             .add_systems(Update, (
                 spawn_dropped_items,
-                pickup_items.after(PlayerSystemSet::Movement),
+                pickup_items.after(PlayerSystemSet::MovementComplete),
                 handle_despawn_world_item,
                 apply_equipment_stats,
                 update_item_glyphs,

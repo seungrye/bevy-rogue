@@ -7,7 +7,7 @@
 ## 동작
 
 - [x] chest "?" 트리거 심볼 제거 (trigger 모듈 삭제)
-- [x] 플레이어가 퀘스트 아이템 위를 지나면 자동 획득 + `QuestItemAcquiredEvent` 발행
+- [x] 플레이어가 퀘스트 아이템 위를 지나면 자동 획득 + `QuestItemAcquiredEvent` 발행 — 픽업은 이동 애니메이션 완료(PlayerSystemSet::MovementComplete) 이후에 처리된다
 - [x] 이미지 팝업이 화면 중앙에 표시된다 (z-index 100, 다른 UI 위에 렌더링)
 - [x] 플레이어가 아이템을 집은 타일을 벗어나면 팝업 닫기 — `QuestItemPopup`에 픽업 타일 `(tile_x, tile_y)` 저장, 매 프레임 플레이어 위치와 비교
 - [x] Escape 키로 즉시 닫기
