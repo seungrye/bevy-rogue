@@ -39,7 +39,7 @@ impl MapGenerator for PrefabGenerator {
         map.rooms = rooms;
         map
     }
-    fn name(&self) -> &str { "실내 - 프리팹" }
+    fn name(&self) -> &str { "prefab" }
 }
 
 fn stamp_template(map: &mut Map, ox: usize, oy: usize, w: usize, h: usize, layout: &[u8]) {

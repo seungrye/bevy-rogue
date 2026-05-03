@@ -32,7 +32,7 @@ impl MapGenerator for BspIndoorGenerator {
         map.rooms = rooms;
         map
     }
-    fn name(&self) -> &str { "실내 - BSP" }
+    fn name(&self) -> &str { "bsp_indoor" }
 }
 
 fn split_rect(rect: Rect, rooms: &mut Vec<Rect>, depth: usize) {

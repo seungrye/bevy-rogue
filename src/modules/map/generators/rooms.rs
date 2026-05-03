@@ -39,7 +39,7 @@ impl MapGenerator for SimpleRoomsGenerator {
         map.rooms = rooms;
         map
     }
-    fn name(&self) -> &str { "던전 - 랜덤 방" }
+    fn name(&self) -> &str { "simple_rooms" }
 }
 
 fn intersect(a: &Rect, b: &Rect) -> bool {

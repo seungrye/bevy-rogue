@@ -53,7 +53,7 @@ impl MapGenerator for ForestGenerator {
         add_rooms_from_floor(&mut map);
         map
     }
-    fn name(&self) -> &str { "숲 - 셀룰러 오토마타" }
+    fn name(&self) -> &str { "forest" }
 }
 
 fn carve_clearing(map: &mut Map, cx: usize, cy: usize, radius: i32) {

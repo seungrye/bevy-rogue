@@ -24,7 +24,7 @@ impl MapGenerator for BspGenerator {
         map.rooms = rooms;
         map
     }
-    fn name(&self) -> &str { "던전 - BSP" }
+    fn name(&self) -> &str { "bsp" }
 }
 
 fn split_rect(rect: Rect, rooms: &mut Vec<Rect>, depth: usize) {

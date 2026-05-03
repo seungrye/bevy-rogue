@@ -30,5 +30,5 @@ impl MapGenerator for DrunkardWalkGenerator {
         super::add_rooms_from_floor(&mut map);
         map
     }
-    fn name(&self) -> &str { "동굴 - 취한 보행" }
+    fn name(&self) -> &str { "drunkard" }
 }

@@ -39,5 +39,5 @@ impl MapGenerator for PerlinNoiseGenerator {
         add_rooms_from_floor(&mut map);
         map
     }
-    fn name(&self) -> &str { "숲 - 펄린 노이즈" }
+    fn name(&self) -> &str { "perlin" }
 }

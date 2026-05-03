@@ -1,5 +1,5 @@
 use rand::prelude::*;
-use crate::modules::map::{Map, MapTile, Rect};
+use crate::modules::map::{Map, MapTile, MapType, Rect};
 use super::super::MapGenerator;
 
 pub struct OrganicVillageGenerator;
@@ -67,7 +67,8 @@ impl MapGenerator for OrganicVillageGenerator {
         }
 
         map.rooms = rooms;
+        map.map_type = MapType::Village;
         map
     }
-    fn name(&self) -> &str { "마을 - 유기적 배치" }
+    fn name(&self) -> &str { "organic_village" }
 }

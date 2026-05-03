@@ -1,5 +1,5 @@
 use rand::prelude::*;
-use crate::modules::map::{Map, MapTile, Rect};
+use crate::modules::map::{Map, MapTile, MapType, Rect};
 use super::super::MapGenerator;
 
 pub struct GridVillageGenerator;
@@ -66,7 +66,8 @@ impl MapGenerator for GridVillageGenerator {
         }
 
         map.rooms = rooms;
+        map.map_type = MapType::Village;
         map
     }
-    fn name(&self) -> &str { "마을 - 격자 배치" }
+    fn name(&self) -> &str { "grid_village" }
 }
