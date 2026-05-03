@@ -10,7 +10,7 @@ use crate::modules::{
     },
     player::{Player, MovingTo, MoveQueue, PlayerSystemSet, LERP_SPEED},
     ui::{LogMessage, minimap::{DiscoveredMarkers, MarkerKind}},
-    quest::{QuestRegistry, QuestState, execute_actions},
+    quest::{QuestRegistry, QuestState, KillNpcEvent, execute_actions},
     item::{PlayerInventory},
     zone::WorldState,
     combat::Speed,
@@ -197,6 +197,7 @@ static VILLAGER_DATA: &[(&str, [f32; 3], &[&str], Option<&str>, f32)] = &[
 
 #[derive(Component)]
 pub struct Villager {
+    pub name: String,
     pub dialogues: Vec<String>,
     pub dialogue_idx: usize,
     pub tile_x: usize,
@@ -229,7 +230,25 @@ impl Plugin for VillagerPlugin {
                     .after(PlayerSystemSet::Movement),
                 update_villager_glyph,
                 smooth_villager_move,
+                handle_kill_npc,
             ));
+    }
+}
+
+fn handle_kill_npc(
+    mut events: EventReader<KillNpcEvent>,
+    query: Query<(Entity, &Villager)>,
+    mut commands: Commands,
+    mut log: EventWriter<LogMessage>,
+) {
+    for KillNpcEvent(name) in events.read() {
+        for (entity, villager) in &query {
+            if &villager.name == name {
+                commands.entity(entity).despawn_recursive();
+                log.send(LogMessage(format!("{}이(가) 쓰러졌다...", name)));
+                break;
+            }
+        }
     }
 }
 
@@ -322,6 +341,7 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
                 ..default()
             },
             Villager {
+                name: name.to_string(),
                 dialogues,
                 dialogue_idx: 0,
                 tile_x: cx,
@@ -347,6 +367,7 @@ fn handle_bump(
     mut inventory: ResMut<PlayerInventory>,
     mut markers: ResMut<DiscoveredMarkers>,
     world_state: Res<WorldState>,
+    mut kill_npc: EventWriter<KillNpcEvent>,
 ) {
     for BumpTileEvent(bx, by) in events.read() {
         for mut villager in villager_query.iter_mut() {
@@ -354,7 +375,7 @@ fn handle_bump(
 
             if let Some(quest_id) = villager.quest_id.clone() {
                 let phase_before = quest_state.phases.get(&quest_id).cloned();
-                show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state);
+                show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut kill_npc);
                 let phase_after = quest_state.phases.get(&quest_id).cloned();
                 // 퀘스트가 active 상태로 전환됐을 때 QuestGiver 마커 추가
                 if phase_before.as_deref() != Some("active") && phase_after.as_deref() == Some("active") {
@@ -379,6 +400,7 @@ fn show_quest_dialog(
     inventory: &mut PlayerInventory,
     log: &mut EventWriter<LogMessage>,
     world: &WorldState,
+    kill_npc: &mut EventWriter<KillNpcEvent>,
 ) {
     // 퀘스트가 초기화되지 않았으면 initial_phase 로 초기화
     if !state.phases.contains_key(quest_id) {
@@ -407,7 +429,7 @@ fn show_quest_dialog(
     // 마지막 줄에서 액션 실행
     if !dialog.is_empty() && idx + 1 >= dialog.len() {
         villager.quest_dialogue_idx = 0;
-        execute_actions(&actions, quest_id, state, inventory, log, world);
+        execute_actions(&actions, quest_id, state, inventory, log, world, kill_npc);
     } else {
         villager.quest_dialogue_idx = idx + 1;
     }
@@ -628,6 +650,7 @@ mod tests {
 
     fn make_villager(just_bumped: bool) -> Villager {
         Villager {
+            name: "테스트".to_string(),
             dialogues: vec![],
             dialogue_idx: 0,
             tile_x: 0,
@@ -655,6 +678,7 @@ mod tests {
     #[test]
     fn quest_villager_fields_default_correctly() {
         let v = Villager {
+            name: "장로".to_string(),
             dialogues: vec![],
             dialogue_idx: 0,
             tile_x: 0,

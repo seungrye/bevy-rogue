@@ -42,6 +42,8 @@ pub enum QuestCondition {
     HasItem(String),
     InZone(ZoneId),
     PhaseIs { quest: String, phase: String },
+    FlagIs { flag: String, value: String },
+    HasFlag(String),
     And(Vec<QuestCondition>),
     Or(Vec<QuestCondition>),
     Not(Box<QuestCondition>),
@@ -53,6 +55,9 @@ pub enum QuestAction {
     GiveItem(String),
     RemoveItem(String),
     Log(String),
+    SetFlag { flag: String, value: String },
+    ClearFlag(String),
+    KillNpc(String),
     Branch {
         condition: Box<QuestCondition>,
         if_true: Vec<QuestAction>,
@@ -66,6 +71,11 @@ pub struct QuestSpawn {
     pub item: String,
     pub zone: ZoneId,
 }
+
+// ── 이벤트 ───────────────────────────────────────────────────────────────────
+
+#[derive(Event)]
+pub struct KillNpcEvent(pub String);
 
 // ── 런타임 상태 ───────────────────────────────────────────────────────────────
 
@@ -87,8 +97,9 @@ impl QuestRegistry {
 
 #[derive(Resource, Default)]
 pub struct QuestState {
-    pub phases: HashMap<String, String>,        // quest_id → current_phase_id
+    pub phases: HashMap<String, String>,            // quest_id → current_phase_id
     pub spawned: std::collections::HashSet<String>, // "quest_id:item_id" 이미 스폰됨
+    pub flags: HashMap<String, String>,             // 자유 플래그 (관계·세계 상태 추적)
 }
 
 impl QuestState {
@@ -108,6 +119,26 @@ impl QuestState {
     pub fn mark_spawned(&mut self, quest_id: &str, item_id: &str) {
         self.spawned.insert(format!("{}:{}", quest_id, item_id));
     }
+
+    pub fn set_flag(&mut self, flag: &str, value: &str) {
+        self.flags.insert(flag.to_string(), value.to_string());
+    }
+
+    pub fn clear_flag(&mut self, flag: &str) {
+        self.flags.remove(flag);
+    }
+
+    pub fn get_flag(&self, flag: &str) -> Option<&str> {
+        self.flags.get(flag).map(|s| s.as_str())
+    }
+
+    pub fn has_flag(&self, flag: &str) -> bool {
+        self.flags.contains_key(flag)
+    }
+
+    pub fn flag_is(&self, flag: &str, value: &str) -> bool {
+        self.flags.get(flag).map(|v| v == value).unwrap_or(false)
+    }
 }
 
 // ── Plugin ───────────────────────────────────────────────────────────────────
@@ -118,6 +149,7 @@ impl Plugin for QuestPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<QuestRegistry>()
             .init_resource::<QuestState>()
+            .add_event::<KillNpcEvent>()
             .add_systems(Startup, load_quests)
             .add_systems(Update, (check_auto_advance, spawn_quest_items));
     }
@@ -189,6 +221,7 @@ pub fn execute_actions(
     inventory: &mut PlayerInventory,
     log: &mut EventWriter<crate::modules::ui::LogMessage>,
     world: &crate::modules::zone::WorldState,
+    kill_npc: &mut EventWriter<KillNpcEvent>,
 ) {
     for action in actions {
         match action {
@@ -215,13 +248,25 @@ pub fn execute_actions(
             QuestAction::Log(msg) => {
                 log.send(crate::modules::ui::LogMessage(msg.clone()));
             }
+            QuestAction::SetFlag { flag, value } => {
+                state.set_flag(flag, value);
+                info!("퀘스트 플래그 설정: {} = {}", flag, value);
+            }
+            QuestAction::ClearFlag(flag) => {
+                state.clear_flag(flag);
+                info!("퀘스트 플래그 해제: {}", flag);
+            }
+            QuestAction::KillNpc(name) => {
+                kill_npc.send(KillNpcEvent(name.clone()));
+                info!("NPC 사망 이벤트: {}", name);
+            }
             QuestAction::Branch { condition, if_true, if_false } => {
                 let branch = if eval_condition(condition, inventory, world, state) {
                     if_true.as_slice()
                 } else {
                     if_false.as_slice()
                 };
-                execute_actions(branch, quest_id, state, inventory, log, world);
+                execute_actions(branch, quest_id, state, inventory, log, world, kill_npc);
             }
         }
     }
@@ -244,6 +289,8 @@ pub fn eval_condition(
         QuestCondition::PhaseIs { quest, phase } => {
             quest_state.phases.get(quest).map(|p| p == phase).unwrap_or(false)
         }
+        QuestCondition::FlagIs { flag, value } => quest_state.flag_is(flag, value),
+        QuestCondition::HasFlag(flag) => quest_state.has_flag(flag),
         QuestCondition::And(conds) => {
             conds.iter().all(|c| eval_condition(c, inventory, world, quest_state))
         }
@@ -544,5 +591,45 @@ mod tests {
     fn new_item_ids_mapped_correctly() {
         assert!(matches!(item_id_to_kind("dragon_scale"), Some(ItemKind::QuestItem(QuestItemKind::DragonScale))));
         assert!(matches!(item_id_to_kind("ancient_scroll"), Some(ItemKind::QuestItem(QuestItemKind::AncientScroll))));
+    }
+
+    #[test]
+    fn flag_set_get_clear() {
+        let mut state = QuestState::default();
+        assert!(!state.has_flag("trust_elara"));
+        assert_eq!(state.get_flag("trust_elara"), None);
+
+        state.set_flag("trust_elara", "high");
+        assert!(state.has_flag("trust_elara"));
+        assert_eq!(state.get_flag("trust_elara"), Some("high"));
+        assert!(state.flag_is("trust_elara", "high"));
+        assert!(!state.flag_is("trust_elara", "low"));
+
+        state.clear_flag("trust_elara");
+        assert!(!state.has_flag("trust_elara"));
+    }
+
+    #[test]
+    fn eval_flag_is_condition() {
+        let inv = PlayerInventory::default();
+        let world = make_world();
+        let mut state = QuestState::default();
+        let cond = QuestCondition::FlagIs { flag: "npc_alive".to_string(), value: "true".to_string() };
+        assert!(!eval_condition(&cond, &inv, &world, &state));
+        state.set_flag("npc_alive", "true");
+        assert!(eval_condition(&cond, &inv, &world, &state));
+    }
+
+    #[test]
+    fn eval_has_flag_condition() {
+        let inv = PlayerInventory::default();
+        let world = make_world();
+        let mut state = QuestState::default();
+        let cond = QuestCondition::HasFlag("village_burned".to_string());
+        assert!(!eval_condition(&cond, &inv, &world, &state));
+        state.set_flag("village_burned", "true");
+        assert!(eval_condition(&cond, &inv, &world, &state));
+        state.clear_flag("village_burned");
+        assert!(!eval_condition(&cond, &inv, &world, &state));
     }
 }
