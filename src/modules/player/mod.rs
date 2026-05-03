@@ -50,8 +50,6 @@ pub struct MoveHoldState {
     pub elapsed: f32,
 }
 
-/// 방향키 홀드 상태를 관리하고 이동 가능 여부를 반환한다.
-/// just_pressed=true이고 정지 상태에서 처음 누른 경우 즉시 true, 방향 전환 시 false.
 pub fn tick_hold(state: &mut MoveHoldState, dir: IVec2, just_pressed: bool, dt: f32) -> bool {
     if dir == IVec2::ZERO {
         state.dir = IVec2::ZERO;
@@ -59,10 +57,11 @@ pub fn tick_hold(state: &mut MoveHoldState, dir: IVec2, just_pressed: bool, dt: 
         return false;
     }
     if dir != state.dir {
+        let was_continuous = state.elapsed >= INITIAL_HOLD_DELAY;
         let from_stopped = state.dir == IVec2::ZERO;
         state.dir = dir;
-        state.elapsed = 0.0;
-        return from_stopped && just_pressed;
+        state.elapsed = if was_continuous { INITIAL_HOLD_DELAY } else { 0.0 };
+        return was_continuous || (from_stopped && just_pressed);
     }
     state.elapsed += dt;
     state.elapsed >= INITIAL_HOLD_DELAY
@@ -366,14 +365,28 @@ mod tests {
     }
 
     #[test]
-    fn tick_hold_resets_on_direction_change() {
+    fn tick_hold_resets_on_direction_change_during_delay() {
         let mut state = MoveHoldState::default();
         let dir = IVec2::new(-1, 0);
         tick_hold(&mut state, dir, true, 0.0);
+        // 2 frames (0.032s) — still in initial delay (< 0.12s)
+        tick_hold(&mut state, dir, false, 0.016);
+        tick_hold(&mut state, dir, false, 0.016);
+        let result = tick_hold(&mut state, IVec2::new(1, 0), false, 0.016);
+        assert!(!result, "초기 지연 중 방향 전환 직후에는 이동하지 않아야 한다");
+        assert_eq!(state.elapsed, 0.0, "초기 지연 중 방향 전환 시 타이머가 리셋돼야 한다");
+    }
+
+    #[test]
+    fn tick_hold_direction_change_in_continuous_is_immediate() {
+        let mut state = MoveHoldState::default();
+        let dir = IVec2::new(-1, 0);
+        tick_hold(&mut state, dir, true, 0.0);
+        // 10 frames (0.16s) — past INITIAL_HOLD_DELAY (0.12s) → continuous mode
         for _ in 0..10 { tick_hold(&mut state, dir, false, 0.016); }
         let result = tick_hold(&mut state, IVec2::new(1, 0), false, 0.016);
-        assert!(!result, "방향 전환 직후에는 이동하지 않아야 한다");
-        assert_eq!(state.elapsed, 0.0, "방향 전환 시 타이머가 리셋돼야 한다");
+        assert!(result, "연속 이동 중 방향 전환 시 즉시 이동해야 한다");
+        assert_eq!(state.elapsed, INITIAL_HOLD_DELAY, "연속 이동 중 방향 전환 시 타이머는 INITIAL_HOLD_DELAY여야 한다");
     }
 }
 
