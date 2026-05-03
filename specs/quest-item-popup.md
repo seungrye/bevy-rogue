@@ -9,7 +9,7 @@
 - [x] chest "?" 트리거 심볼 제거 (trigger 모듈 삭제)
 - [x] 플레이어가 퀘스트 아이템 위를 지나면 자동 획득 + `QuestItemAcquiredEvent` 발행
 - [x] 이미지 팝업이 화면 중앙에 표시된다 (z-index 100, 다른 UI 위에 렌더링)
-- [x] 플레이어가 이동·행동(`PlayerActedEvent`)하면 팝업 닫기 — 아이템을 집은 프레임은 건너뜀
+- [x] 플레이어가 이동·행동(`PlayerActedEvent`)하면 팝업 닫기 — 팝업이 처음 보이는 프레임에 `acted.clear()`로 오래된 이벤트를 비워 즉시 닫힘 방지 (`Local<bool> seen` 사용)
 - [x] Escape 키로 즉시 닫기
 - [x] 팝업이 이미 열려 있으면 중복 스폰하지 않는다
 
