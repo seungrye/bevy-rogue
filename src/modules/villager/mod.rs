@@ -10,7 +10,7 @@ use crate::modules::{
     },
     player::{Player, MovingTo, MoveQueue, PlayerSystemSet, LERP_SPEED},
     ui::{LogMessage, minimap::{DiscoveredMarkers, MarkerKind}},
-    quest::{QuestRegistry, QuestState, KillNpcEvent, DespawnWorldItemEvent, execute_actions, QuestDef, eval_condition},
+    quest::{QuestRegistry, QuestState, KillNpcEvent, DespawnWorldItemEvent, execute_actions, QuestDef, QuestAction, eval_condition},
     item::{PlayerInventory},
     zone::{WorldState, SpawnQuestPortalEvent},
     combat::Speed,
@@ -572,11 +572,23 @@ fn update_villager_glyph(
     }
 }
 
+/// on_interact 액션 트리 안에 AdvancePhase 가 있는지 재귀 탐색한다.
+/// Branch 의 if_true/if_false 를 포함해 모든 경로를 탐색한다.
+/// Log·SetFlag 등 순수 힌트 액션만 있는 페이즈에서는 false 를 반환한다.
+pub fn on_interact_can_advance(actions: &[QuestAction]) -> bool {
+    actions.iter().any(|a| match a {
+        QuestAction::AdvancePhase(_) => true,
+        QuestAction::Branch { if_true, if_false, .. } =>
+            on_interact_can_advance(if_true) || on_interact_can_advance(if_false),
+        _ => false,
+    })
+}
+
 /// 퀘스트 NPC 의 현재 퀘스트 상태에 따라 표시 글리프와 색상을 결정한다
 ///
 /// - `?` (노란색) : 퀘스트 있음 — initial_phase 이거나 아직 수락 전
 /// - `?` (초록색) : 퀘스트 수락, 다음 페이즈로 넘어갈 수 없는 상태 (아이템 수집·이동 중)
-/// - `!` (초록색) : 다음 페이즈로 넘어갈 수 있는 상태 (on_interact 실행 가능 또는 auto_advance 조건 충족)
+/// - `!` (초록색) : 다음 페이즈로 넘어갈 수 있는 상태 (on_interact 가 AdvancePhase 포함 또는 auto_advance 조건 충족)
 /// - `v` (base_color) : 터미널 (퀘스트 완료)
 pub fn quest_npc_glyph(
     quest_id: &str,
@@ -612,8 +624,9 @@ pub fn quest_npc_glyph(
         return ("v", base_color);
     };
 
-    // on_interact 있으면 플레이어가 NPC 에게 말을 걸어 다음 페이즈로 넘어갈 수 있다
-    if !phase.on_interact.is_empty() {
+    // on_interact 에 AdvancePhase 가 있으면 NPC 에게 말을 걸어 다음 페이즈로 넘어갈 수 있다.
+    // Log·Branch(Log) 등 순수 힌트 액션만 있는 경우는 진행 불가로 간주한다.
+    if on_interact_can_advance(&phase.on_interact) {
         return ("!", green);
     }
 
@@ -908,5 +921,76 @@ mod tests {
         let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, base);
         assert_eq!(glyph, "v");
         assert_eq!(color, base, "터미널 = v + 기본 색상");
+    }
+
+    // on_interact_can_advance 단위 테스트
+    #[test]
+    fn can_advance_true_for_direct_advance_phase() {
+        let actions = vec![QuestAction::AdvancePhase("next".to_string())];
+        assert!(on_interact_can_advance(&actions));
+    }
+
+    #[test]
+    fn can_advance_false_for_log_only() {
+        let actions = vec![QuestAction::Log("힌트".to_string())];
+        assert!(!on_interact_can_advance(&actions));
+    }
+
+    #[test]
+    fn can_advance_true_for_branch_containing_advance() {
+        let actions = vec![QuestAction::Branch {
+            condition: Box::new(QuestCondition::HasItem("x".to_string())),
+            if_true: vec![QuestAction::AdvancePhase("next".to_string())],
+            if_false: vec![QuestAction::Log("없음".to_string())],
+        }];
+        assert!(on_interact_can_advance(&actions));
+    }
+
+    #[test]
+    fn can_advance_false_for_branch_with_log_only() {
+        let actions = vec![QuestAction::Branch {
+            condition: Box::new(QuestCondition::HasItem("x".to_string())),
+            if_true: vec![QuestAction::Log("a".to_string())],
+            if_false: vec![QuestAction::Log("b".to_string())],
+        }];
+        assert!(!on_interact_can_advance(&actions));
+    }
+
+    #[test]
+    fn glyph_green_question_when_on_interact_is_hint_only() {
+        // gathering 페이즈처럼 on_interact 에 Log/Branch(Log) 만 있는 경우 초록 '?'
+        // initial_phase 는 "not_started", 현재 페이즈는 "gathering" — initial 분기에 걸리지 않음
+        let mut phases = HM::new();
+        phases.insert("not_started".to_string(), QuestPhaseDef {
+            dialog: vec![],
+            on_interact: vec![QuestAction::AdvancePhase("gathering".to_string())],
+            auto_advance: vec![],
+            objective: None,
+        });
+        phases.insert("gathering".to_string(), QuestPhaseDef {
+            dialog: vec!["아직 재료가 부족하네.".to_string()],
+            on_interact: vec![QuestAction::Branch {
+                condition: Box::new(QuestCondition::HasItem("dragon_scale".to_string())),
+                if_true: vec![QuestAction::Log("있군".to_string())],
+                if_false: vec![QuestAction::Log("없군".to_string())],
+            }],
+            auto_advance: vec![],
+            objective: None,
+        });
+        let def = QuestDef {
+            id: "alchemist_quest".to_string(),
+            title: "연금술사".to_string(),
+            giver_npc: "연금술사".to_string(),
+            initial_phase: "not_started".to_string(),
+            phases,
+            spawns: vec![],
+        };
+        let mut state = QuestState::default();
+        state.phases.insert("alchemist_quest".to_string(), "gathering".to_string());
+        let inv = empty_inventory();
+        let world = default_world();
+        let (glyph, color) = quest_npc_glyph("alchemist_quest", &def, &state, &inv, &world, Color::WHITE);
+        assert_eq!(glyph, "?", "힌트만 있는 on_interact 는 '?' 여야 한다");
+        assert_eq!(color, Color::rgb(0.3, 1.0, 0.6));
     }
 }
