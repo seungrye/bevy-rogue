@@ -69,6 +69,7 @@ impl QuestRegistry {
         self.quests.get(id)
     }
 
+    #[allow(dead_code)]
     pub fn phase<'a>(&'a self, quest_id: &str, phase_id: &str) -> Option<&'a QuestPhaseDef> {
         self.quests.get(quest_id)?.phases.get(phase_id)
     }
@@ -81,6 +82,7 @@ pub struct QuestState {
 }
 
 impl QuestState {
+    #[allow(dead_code)]
     pub fn current_phase<'a>(&'a self, quest_id: &str) -> Option<&'a str> {
         self.phases.get(quest_id).map(|s| s.as_str())
     }

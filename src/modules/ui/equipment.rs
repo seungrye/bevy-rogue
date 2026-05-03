@@ -324,6 +324,7 @@ pub(crate) fn build_panel_sections(
     s
 }
 
+#[cfg(test)]
 pub(crate) fn build_panel_text(
     inventory: &PlayerInventory,
     equipment: &PlayerEquipment,

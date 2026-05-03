@@ -6,7 +6,6 @@ use crate::modules::map::{
     MapSystemSet, TriggerRespawnEvent,
 };
 use crate::modules::player::Player;
-use crate::modules::ui::LogMessage;
 
 mod chest;
 use chest::spawn_chest_on_event;
@@ -29,7 +28,6 @@ impl Plugin for TriggerPlugin {
 
 #[derive(Component, Clone, Debug, PartialEq, Eq)]
 pub enum TriggerEffect {
-    ShowMessage(String),
     OpenChest,
 }
 
@@ -120,11 +118,9 @@ fn handle_trigger_events(
     mut events: EventReader<TriggerEvent>,
     asset_server: Res<AssetServer>,
     q_effect: Query<Entity, With<TriggerEffect>>,
-    mut log_writer: EventWriter<LogMessage>,
 ) {
     for TriggerEvent(effect) in events.read() {
         match effect {
-            TriggerEffect::ShowMessage(msg) => { log_writer.send(LogMessage(msg.clone())); }
             TriggerEffect::OpenChest => {
                 spawn_chest_on_event(&mut commands, &*asset_server, !q_effect.is_empty());
             }

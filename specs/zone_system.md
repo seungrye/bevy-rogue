@@ -49,6 +49,7 @@ Town ←→ Forest ←→ Dungeon(1) ←→ Dungeon(2)
 - [x] 계단 포털은 `>` (내려가기) / `<` (올라가기) 글리프로 맵에 표시
 - [x] 마을·숲 구분: `MapType::Village` vs `MapType::Dungeon` 유지
 - [x] 포털 충돌은 `MovingTo` 목적지 기준 — Transform 은 lerp 중간값이므로 미사용
+- [x] `TriggerEffect::ShowMessage` 제거 — ZonePortal 로그 메시지로 대체됨
 
 ## 시작 존
 

@@ -54,6 +54,7 @@ impl WorldState {
     pub fn cache_current(&mut self, map: Map) {
         self.maps.insert(self.current.clone(), map);
     }
+    #[allow(dead_code)]
     pub fn get_cached(&self, id: &ZoneId) -> Option<&Map> {
         self.maps.get(id)
     }
