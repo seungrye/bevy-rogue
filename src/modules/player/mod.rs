@@ -11,6 +11,9 @@ use crate::modules::{
 };
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
+use std::collections::VecDeque;
+
+pub mod pathfinding;
 
 pub const PLAYER_HP: i32 = 30;
 pub const PLAYER_MP: i32 = 20;
@@ -50,6 +53,9 @@ pub struct MoveHoldState {
     pub dir: IVec2,
     pub elapsed: f32,
 }
+
+#[derive(Resource, Default)]
+pub struct PlayerPath(pub VecDeque<(usize, usize)>);
 
 pub fn tick_hold(state: &mut MoveHoldState, dir: IVec2, just_pressed: bool, dt: f32) -> bool {
     if dir == IVec2::ZERO {
@@ -140,6 +146,7 @@ fn player_movement(
     keyboard_input: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     mut hold_state: ResMut<MoveHoldState>,
+    mut player_path: ResMut<PlayerPath>,
     player_query: Query<(Entity, &Transform), (With<Player>, Without<MovingTo>, Without<Defeated>)>,
     map_res: Res<MapResource>,
     occupied: Res<OccupiedTiles>,
@@ -157,6 +164,7 @@ fn player_movement(
     if keyboard_input.just_pressed(KeyCode::Space) {
         hold_state.dir = IVec2::ZERO;
         hold_state.elapsed = 0.0;
+        player_path.0.clear();
         acted.send(PlayerActedEvent);
         return;
     }
@@ -171,6 +179,34 @@ fn player_movement(
         || keyboard_input.just_pressed(KeyCode::ArrowRight) || keyboard_input.just_pressed(KeyCode::KeyD)
         || keyboard_input.just_pressed(KeyCode::ArrowUp) || keyboard_input.just_pressed(KeyCode::KeyW)
         || keyboard_input.just_pressed(KeyCode::ArrowDown) || keyboard_input.just_pressed(KeyCode::KeyS);
+
+    // 키 입력이 있으면 자동 이동 경로 취소
+    if dir != IVec2::ZERO || just_pressed {
+        player_path.0.clear();
+    }
+
+    // 자동 이동 경로 소비 (키 입력 없을 때)
+    if dir == IVec2::ZERO && !player_path.0.is_empty() {
+        if !tick_hold(&mut hold_state, IVec2::ONE, false, time.delta_seconds()) { return; }
+
+        let (tx, ty) = player_path.0.front().copied().unwrap();
+
+        if monster_tiles.0.contains(&(tx, ty)) {
+            player_path.0.clear();
+            attack.send(AttackMonsterEvent(tx, ty));
+            acted.send(PlayerActedEvent);
+        } else if occupied.0.contains(&(tx, ty)) {
+            player_path.0.clear();
+            bump.send(BumpTileEvent(tx, ty));
+            acted.send(PlayerActedEvent);
+        } else {
+            player_path.0.pop_front();
+            let wp = tile_to_world_coords(tx, ty);
+            commands.entity(entity).insert(MovingTo { target: Vec3::new(wp.x, wp.y, 1.0) });
+            acted.send(PlayerActedEvent);
+        }
+        return;
+    }
 
     if !tick_hold(&mut hold_state, dir, just_pressed, time.delta_seconds()) { return; }
     let delta = hold_state.dir;
@@ -213,16 +249,47 @@ fn smooth_player_lerp(
     }
 }
 
+fn on_mouse_click(
+    mouse_input: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<Camera>>,
+    player_query: Query<&Transform, With<Player>>,
+    map_res: Res<MapResource>,
+    mut player_path: ResMut<PlayerPath>,
+    equipment_open: Res<EquipmentPanelOpen>,
+) {
+    if !mouse_input.just_pressed(MouseButton::Left) { return; }
+    if equipment_open.0 { return; }
+
+    let Ok(window) = windows.get_single() else { return };
+    let Ok((camera, cam_transform)) = camera_q.get_single() else { return };
+    let Ok(player_transform) = player_query.get_single() else { return };
+
+    let Some(cursor_pos) = window.cursor_position() else { return };
+    let Some(world_pos) = camera.viewport_to_world_2d(cam_transform, cursor_pos) else { return };
+
+    let world_vec3 = Vec3::new(world_pos.x, world_pos.y, 0.0);
+    let (tx, ty) = world_to_tile_coords(world_vec3);
+    let map = map_res.map();
+    if map.get_tile(tx, ty) != MapTile::Floor { return; }
+
+    let (px, py) = world_to_tile_coords(player_transform.translation);
+    let path = pathfinding::find_path(map, (px, py), (tx, ty));
+    player_path.0 = VecDeque::from(path);
+}
+
 fn respawn_player_on_regen(
     mut commands: Commands,
     mut events: EventReader<PlayerRespawnEvent>,
     mut player_query: Query<(Entity, &mut Transform), With<Player>>,
+    mut player_path: ResMut<PlayerPath>,
 ) {
     for PlayerRespawnEvent(x, y) in events.read() {
         if let Ok((entity, mut transform)) = player_query.get_single_mut() {
             let wp = tile_to_world_coords(*x, *y);
             transform.translation = Vec3::new(wp.x, wp.y, 1.0);
             commands.entity(entity).remove::<MovingTo>();
+            player_path.0.clear();
         }
     }
 }
@@ -413,8 +480,10 @@ mod tests {
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MoveHoldState>()
+            .init_resource::<PlayerPath>()
             .add_systems(Startup, spawn_player.after(draw_map))
             .add_systems(Update, (
+                on_mouse_click.before(PlayerSystemSet::Movement),
                 player_movement.in_set(PlayerSystemSet::Movement),
                 smooth_player_lerp.after(PlayerSystemSet::Movement),
                 update_fov.after(smooth_player_lerp),

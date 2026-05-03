@@ -9,9 +9,10 @@ use crate::modules::{
         MapSystemSet, VillagerRespawnEvent, PlayerActedEvent, BumpTileEvent,
     },
     player::{Player, MovingTo, PlayerSystemSet},
-    ui::LogMessage,
+    ui::{LogMessage, minimap::{DiscoveredMarkers, MarkerKind}},
     quest::{QuestRegistry, QuestState, execute_actions},
     item::{PlayerInventory},
+    zone::WorldState,
 };
 
 const VILLAGER_STAY_CHANCE: f64 = 0.3;
@@ -166,13 +167,21 @@ fn handle_bump(
     registry: Res<QuestRegistry>,
     mut quest_state: ResMut<QuestState>,
     mut inventory: ResMut<PlayerInventory>,
+    mut markers: ResMut<DiscoveredMarkers>,
+    world_state: Res<WorldState>,
 ) {
     for BumpTileEvent(bx, by) in events.read() {
         for mut villager in villager_query.iter_mut() {
             if villager.tile_x != *bx || villager.tile_y != *by { continue; }
 
             if let Some(quest_id) = villager.quest_id.clone() {
+                let phase_before = quest_state.phases.get(&quest_id).cloned();
                 show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer);
+                let phase_after = quest_state.phases.get(&quest_id).cloned();
+                // 퀘스트가 active 상태로 전환됐을 때 QuestGiver 마커 추가
+                if phase_before.as_deref() != Some("active") && phase_after.as_deref() == Some("active") {
+                    markers.add(villager.tile_x, villager.tile_y, MarkerKind::QuestGiver, world_state.current.clone());
+                }
             } else if !villager.dialogues.is_empty() {
                 let msg = villager.dialogues[villager.dialogue_idx].clone();
                 log_writer.send(LogMessage(msg));

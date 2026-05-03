@@ -108,6 +108,7 @@ impl Plugin for ZonePlugin {
                 check_portal_collision,
                 handle_zone_transition,
                 spawn_portals_after_apply,
+                discover_portals_in_fov,
             ).chain());
     }
 }
@@ -238,6 +239,28 @@ fn spawn_portals_after_apply(
                 ZonePortal { target, arrive_from: dir },
             ));
         }
+    }
+}
+
+/// 포털 엔티티가 FOV 안에 들어오면 DiscoveredMarkers 에 추가한다
+fn discover_portals_in_fov(
+    map_res: Res<MapResource>,
+    world: Res<WorldState>,
+    portal_q: Query<(&Transform, &ZonePortal)>,
+    mut markers: ResMut<crate::modules::ui::minimap::DiscoveredMarkers>,
+) {
+    let map = map_res.map();
+    for (transform, portal) in portal_q.iter() {
+        let (tx, ty) = world_to_tile_coords(transform.translation);
+        if tx >= map.width || ty >= map.height { continue; }
+        let idx = map.index(tx, ty);
+        if !map.visible_tiles[idx] { continue; }
+        let kind = match portal.arrive_from {
+            PortalDirection::StairDown => crate::modules::ui::minimap::MarkerKind::StairDown,
+            PortalDirection::StairUp   => crate::modules::ui::minimap::MarkerKind::StairUp,
+            _                          => crate::modules::ui::minimap::MarkerKind::Portal,
+        };
+        markers.add(tx, ty, kind, world.current.clone());
     }
 }
 

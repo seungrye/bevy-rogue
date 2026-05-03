@@ -9,7 +9,49 @@ use bevy::{
 use crate::modules::{
     map::{Map, MapResource, MapTile, MAP_HEIGHT, MAP_WIDTH, MapGeneratorRegistry},
     player::Player,
+    zone::{WorldState, ZoneId},
 };
+
+#[derive(Clone, PartialEq, Eq)]
+pub enum MarkerKind {
+    QuestGiver,
+    Portal,
+    StairDown,
+    StairUp,
+}
+
+impl MarkerKind {
+    pub fn color(&self) -> [u8; 4] {
+        match self {
+            MarkerKind::QuestGiver => [255, 255,   0, 255],
+            MarkerKind::Portal     => [  0, 255, 255, 255],
+            MarkerKind::StairDown  => [255, 153,   0, 255],
+            MarkerKind::StairUp    => [128, 255, 128, 255],
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct MapMarker {
+    pub tile_x: usize,
+    pub tile_y: usize,
+    pub kind: MarkerKind,
+    pub zone: ZoneId,
+}
+
+#[derive(Resource, Default)]
+pub struct DiscoveredMarkers(pub Vec<MapMarker>);
+
+impl DiscoveredMarkers {
+    pub fn add(&mut self, tile_x: usize, tile_y: usize, kind: MarkerKind, zone: ZoneId) {
+        let already = self.0.iter().any(|m| {
+            m.tile_x == tile_x && m.tile_y == tile_y && m.kind == kind && m.zone == zone
+        });
+        if !already {
+            self.0.push(MapMarker { tile_x, tile_y, kind, zone });
+        }
+    }
+}
 
 pub const MINIMAP_RADIUS: i32 = 20;
 const WALL_BOOST: f32 = 5.0;
@@ -43,6 +85,7 @@ pub struct MinimapPlugin;
 impl Plugin for MinimapPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MinimapConfig>()
+            .init_resource::<DiscoveredMarkers>()
             .add_systems(Startup, (
                 setup_minimap,
                 spawn_minimap_overlay.after(setup_minimap),
@@ -187,7 +230,7 @@ pub(crate) fn box_weight(tile: i32, lo: f32, hi: f32, scale: f32) -> f32 {
 /// 맵 경계 밖이거나 미탐험 타일은 어두운 배경색을 반환한다.
 pub(crate) fn tile_color_f32(map: &Map, x: i32, y: i32, player_x: usize, player_y: usize) -> [f32; 4] {
     if x < 0 || x >= MAP_WIDTH as i32 || y < 0 || y >= MAP_HEIGHT as i32 {
-        return [10.0, 8.0, 6.0, 200.0];
+        return [10.0, 8.0, 6.0, 255.0];
     }
     let ux = x as usize;
     let uy = y as usize;
@@ -197,15 +240,15 @@ pub(crate) fn tile_color_f32(map: &Map, x: i32, y: i32, player_x: usize, player_
     } else if map.visible_tiles[idx] {
         match map.tiles[idx] {
             MapTile::Wall  => [220, 200, 155, 255],
-            MapTile::Floor => [130, 110, 80,  200],
+            MapTile::Floor => [130, 110, 80,  255],
         }
     } else if map.revealed_tiles[idx] {
         match map.tiles[idx] {
-            MapTile::Wall  => [110, 95,  70,  200],
-            MapTile::Floor => [60,  50,  35,  160],
+            MapTile::Wall  => [110, 95,  70,  255],
+            MapTile::Floor => [60,  50,  35,  255],
         }
     } else {
-        [10, 8, 6, 200]
+        [10, 8, 6, 255]
     };
     [c[0] as f32, c[1] as f32, c[2] as f32, c[3] as f32]
 }
@@ -237,6 +280,8 @@ fn update_minimap(
     config: Res<MinimapConfig>,
     overlay_q: Query<&Visibility, With<MinimapOverlay>>,
     mut last_pos: Local<Option<IVec2>>,
+    world_state: Res<WorldState>,
+    markers: Res<DiscoveredMarkers>,
 ) {
     // 미니맵이 숨겨져 있으면 텍스처 업데이트 불필요
     if let Ok(vis) = overlay_q.get_single() {
@@ -251,7 +296,7 @@ fn update_minimap(
     let (player_x, player_y) = crate::modules::map::world_to_tile_coords(player_transform.translation);
     let current_pos = IVec2::new(player_x as i32, player_y as i32);
 
-    if Some(current_pos) == *last_pos { return; }
+    if Some(current_pos) == *last_pos && !markers.is_changed() { return; }
     *last_pos = Some(current_pos);
 
     let map = map_res.map();
@@ -268,7 +313,7 @@ fn update_minimap(
                 continue;
             }
             if is_diamond_border(tx, ty) {
-                image.data[pixel_idx..pixel_idx + 4].copy_from_slice(&[160, 140, 100, 230]);
+                image.data[pixel_idx..pixel_idx + 4].copy_from_slice(&[160, 140, 100, 255]);
                 continue;
             }
 
@@ -302,6 +347,20 @@ fn update_minimap(
 
             image.data[pixel_idx..pixel_idx + 4].copy_from_slice(&color);
         }
+    }
+
+    // 마커 오버레이 패스: 현재 존의 발견된 마커를 픽셀로 표시
+    for marker in markers.0.iter().filter(|m| m.zone == world_state.current) {
+        let mx = marker.tile_x as f32;
+        let my = marker.tile_y as f32;
+        let mtx = MINIMAP_RADIUS + ((mx - player_x as f32) / scale).round() as i32;
+        let mty = MINIMAP_RADIUS - ((my - player_y as f32) / scale).round() as i32;
+        if mtx < 0 || mty < 0 { continue; }
+        let (mtx, mty) = (mtx as u32, mty as u32);
+        if mtx >= MINIMAP_SIDE || mty >= MINIMAP_SIDE { continue; }
+        if is_outside_diamond(mtx, mty) || is_diamond_border(mtx, mty) { continue; }
+        let pixel_idx = (mty * MINIMAP_SIDE + mtx) as usize * 4;
+        image.data[pixel_idx..pixel_idx + 4].copy_from_slice(&marker.kind.color());
     }
 }
 
@@ -471,16 +530,16 @@ mod tests {
     fn tile_color_f32_out_of_bounds_returns_dark() {
         let map = Map::new(10, 10);
         let c = tile_color_f32(&map, -1, 0, 0, 0);
-        assert_eq!(c, [10.0, 8.0, 6.0, 200.0]);
+        assert_eq!(c, [10.0, 8.0, 6.0, 255.0]);
         let c = tile_color_f32(&map, 10, 0, 0, 0);
-        assert_eq!(c, [10.0, 8.0, 6.0, 200.0]);
+        assert_eq!(c, [10.0, 8.0, 6.0, 255.0]);
     }
 
     #[test]
     fn tile_color_f32_unrevealed_returns_dark() {
         let map = Map::new(10, 10); // 모든 타일 미탐험
         let c = tile_color_f32(&map, 5, 5, 0, 0);
-        assert_eq!(c, [10.0, 8.0, 6.0, 200.0]);
+        assert_eq!(c, [10.0, 8.0, 6.0, 255.0]);
     }
 
     #[test]
@@ -524,5 +583,45 @@ mod tests {
         let original = Visibility::Inherited;
         let after_two_toggles = toggle_visibility(toggle_visibility(original));
         assert_eq!(after_two_toggles, Visibility::Inherited);
+    }
+
+    #[test]
+    fn discovered_markers_no_duplicate() {
+        let mut dm = DiscoveredMarkers::default();
+        dm.add(5, 5, MarkerKind::Portal, ZoneId::Town);
+        dm.add(5, 5, MarkerKind::Portal, ZoneId::Town);
+        assert_eq!(dm.0.len(), 1, "동일 위치·종류의 마커는 중복 추가되지 않아야 한다");
+    }
+
+    #[test]
+    fn discovered_markers_different_kind_allowed() {
+        let mut dm = DiscoveredMarkers::default();
+        dm.add(5, 5, MarkerKind::Portal, ZoneId::Town);
+        dm.add(5, 5, MarkerKind::QuestGiver, ZoneId::Town);
+        assert_eq!(dm.0.len(), 2);
+    }
+
+    #[test]
+    fn discovered_markers_different_zone_allowed() {
+        let mut dm = DiscoveredMarkers::default();
+        dm.add(5, 5, MarkerKind::Portal, ZoneId::Town);
+        dm.add(5, 5, MarkerKind::Portal, ZoneId::Forest);
+        assert_eq!(dm.0.len(), 2);
+    }
+
+    #[test]
+    fn marker_pixel_coords_in_range_for_center_tile() {
+        // 플레이어와 동일 위치 마커 → 미니맵 정중앙 픽셀
+        let px = 40usize;
+        let py = 50usize;
+        let scale = 1.0f32;
+        let mx = px as f32;
+        let my = py as f32;
+        let mtx = MINIMAP_RADIUS + ((mx - px as f32) / scale).round() as i32;
+        let mty = MINIMAP_RADIUS - ((my - py as f32) / scale).round() as i32;
+        assert_eq!(mtx, MINIMAP_RADIUS);
+        assert_eq!(mty, MINIMAP_RADIUS);
+        assert!((mtx as u32) < MINIMAP_SIDE);
+        assert!((mty as u32) < MINIMAP_SIDE);
     }
 }
