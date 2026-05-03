@@ -10,6 +10,16 @@
             "statusMessage": "TDD 커밋 검사 중..."
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/spec-check.sh",
+            "statusMessage": "스펙 파일 확인 중..."
+          }
+        ]
       }
     ],
     "PostToolUse": [
