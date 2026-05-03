@@ -10,6 +10,107 @@ use crate::modules::{
 pub const POTION_HEAL: i32 = 8;
 const Z_ITEM: f32 = 0.3;
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum GlyphStyle {
+    #[default]
+    Ascii,
+    Unicode,
+    GameIcon,
+}
+
+impl GlyphStyle {
+    pub fn next(self) -> Self {
+        match self {
+            GlyphStyle::Ascii    => GlyphStyle::Unicode,
+            GlyphStyle::Unicode  => GlyphStyle::GameIcon,
+            GlyphStyle::GameIcon => GlyphStyle::Ascii,
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            GlyphStyle::Ascii    => "ASCII",
+            GlyphStyle::Unicode  => "유니코드",
+            GlyphStyle::GameIcon => "RPG 아이콘",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "ascii"              => Some(GlyphStyle::Ascii),
+            "unicode"            => Some(GlyphStyle::Unicode),
+            "icon" | "gameicon"  => Some(GlyphStyle::GameIcon),
+            _                    => None,
+        }
+    }
+}
+
+#[derive(Resource)]
+pub struct GlyphConfig {
+    pub style: GlyphStyle,
+}
+
+impl Default for GlyphConfig {
+    fn default() -> Self { Self { style: GlyphStyle::default() } }
+}
+
+#[derive(Resource)]
+pub struct GlyphFontHandles {
+    pub ascii:     Handle<Font>,
+    pub unicode:   Handle<Font>,
+    pub game_icon: Handle<Font>,
+}
+
+impl GlyphFontHandles {
+    pub fn for_style(&self, style: GlyphStyle) -> Handle<Font> {
+        match style {
+            GlyphStyle::Ascii    => self.ascii.clone(),
+            GlyphStyle::Unicode  => self.unicode.clone(),
+            GlyphStyle::GameIcon => self.game_icon.clone(),
+        }
+    }
+}
+
+pub fn glyph_for_style(kind: ItemKind, style: GlyphStyle) -> &'static str {
+    match style {
+        GlyphStyle::Ascii    => kind.glyph(),
+        GlyphStyle::Unicode  => glyph_unicode(kind),
+        GlyphStyle::GameIcon => glyph_game_icon(kind),
+    }
+}
+
+fn glyph_unicode(kind: ItemKind) -> &'static str {
+    match kind {
+        ItemKind::Weapon(w) => match w {
+            WeaponKind::Sword => "\u{1F5E1}", // 🗡 dagger
+            WeaponKind::Spear => "\u{2B06}",  // ⬆ upward arrow
+            WeaponKind::Bow   => "\u{27A4}",  // ➤ arrowhead right
+        },
+        ItemKind::Armor(a) => match a {
+            ArmorKind::LeatherArmor => "\u{1F6E1}", // 🛡 shield
+        },
+        ItemKind::Consumable(c) => match c {
+            ConsumableKind::HealthPotion => "\u{2764}", // ❤ heavy heart
+        },
+    }
+}
+
+fn glyph_game_icon(kind: ItemKind) -> &'static str {
+    match kind {
+        ItemKind::Weapon(w) => match w {
+            WeaponKind::Sword => "\u{E946}", // ra-broadsword
+            WeaponKind::Spear => "\u{EAAC}", // ra-spear-head
+            WeaponKind::Bow   => "\u{E978}", // ra-crossbow
+        },
+        ItemKind::Armor(a) => match a {
+            ArmorKind::LeatherArmor => "\u{EA96}", // ra-shield
+        },
+        ItemKind::Consumable(c) => match c {
+            ConsumableKind::HealthPotion => "\u{EA72}", // ra-potion
+        },
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum WeaponKind {
     Sword,
@@ -220,26 +321,45 @@ pub fn monster_drop_table(monster_name: &str) -> &'static [(ItemKind, f32)] {
     }
 }
 
-pub struct ItemPlugin;
+pub struct ItemPlugin {
+    pub initial_glyph_style: GlyphStyle,
+}
+
+impl Default for ItemPlugin {
+    fn default() -> Self { Self { initial_glyph_style: GlyphStyle::Ascii } }
+}
 
 impl Plugin for ItemPlugin {
     fn build(&self, app: &mut App) {
-        app.add_event::<ItemDropEvent>()
+        app.insert_resource(GlyphConfig { style: self.initial_glyph_style })
+            .add_event::<ItemDropEvent>()
             .init_resource::<PlayerInventory>()
             .init_resource::<PlayerEquipment>()
             .init_resource::<EquipmentPanelOpen>()
+            .add_systems(Startup, setup_glyph_fonts)
             .add_systems(Update, (
                 spawn_dropped_items,
                 pickup_items.after(PlayerSystemSet::Movement),
                 apply_equipment_stats,
+                update_item_glyphs,
+                cycle_glyph_style,
             ));
     }
+}
+
+fn setup_glyph_fonts(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.insert_resource(GlyphFontHandles {
+        ascii:     asset_server.load("fonts/FiraMono-Medium.ttf"),
+        unicode:   asset_server.load("fonts/NotoSansSymbols2-Regular.ttf"),
+        game_icon: asset_server.load("fonts/rpg-awesome.ttf"),
+    });
 }
 
 fn spawn_dropped_items(
     mut events: EventReader<ItemDropEvent>,
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
+    config: Res<GlyphConfig>,
+    font_handles: Res<GlyphFontHandles>,
 ) {
     let mut rng = rand::thread_rng();
     for event in events.read() {
@@ -248,17 +368,43 @@ fn spawn_dropped_items(
             let pos = tile_to_world_coords(event.tile_x, event.tile_y);
             commands.spawn((
                 Text2dBundle {
-                    text: Text::from_section(kind.glyph(), TextStyle {
-                        font: asset_server.load("fonts/FiraMono-Medium.ttf"),
-                        font_size: TILE_SIZE,
-                        color: kind.color(),
-                    }),
+                    text: Text::from_section(
+                        glyph_for_style(kind, config.style),
+                        TextStyle {
+                            font: font_handles.for_style(config.style),
+                            font_size: TILE_SIZE,
+                            color: kind.color(),
+                        },
+                    ),
                     transform: Transform::from_xyz(pos.x, pos.y, Z_ITEM),
                     ..default()
                 },
                 Item { kind, tile_x: event.tile_x, tile_y: event.tile_y },
             ));
         }
+    }
+}
+
+fn update_item_glyphs(
+    config: Res<GlyphConfig>,
+    font_handles: Res<GlyphFontHandles>,
+    mut item_query: Query<(&Item, &mut Text)>,
+) {
+    if !config.is_changed() { return; }
+    for (item, mut text) in item_query.iter_mut() {
+        text.sections[0].value = glyph_for_style(item.kind, config.style).to_string();
+        text.sections[0].style.font = font_handles.for_style(config.style);
+    }
+}
+
+fn cycle_glyph_style(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut config: ResMut<GlyphConfig>,
+    mut log: EventWriter<LogMessage>,
+) {
+    if keyboard.just_pressed(KeyCode::KeyG) {
+        config.style = config.style.next();
+        log.send(LogMessage(format!("글리프 스타일: {}", config.style.display_name())));
     }
 }
 
@@ -414,5 +560,52 @@ mod tests {
     #[test]
     fn equipment_panel_open_default_is_false() {
         assert!(!EquipmentPanelOpen::default().0);
+    }
+
+    #[test]
+    fn glyph_style_cycles_through_all_variants() {
+        assert_eq!(GlyphStyle::Ascii.next(),    GlyphStyle::Unicode);
+        assert_eq!(GlyphStyle::Unicode.next(),  GlyphStyle::GameIcon);
+        assert_eq!(GlyphStyle::GameIcon.next(), GlyphStyle::Ascii);
+    }
+
+    #[test]
+    fn glyph_style_from_str_valid() {
+        assert_eq!(GlyphStyle::from_str("ascii"),   Some(GlyphStyle::Ascii));
+        assert_eq!(GlyphStyle::from_str("unicode"), Some(GlyphStyle::Unicode));
+        assert_eq!(GlyphStyle::from_str("icon"),    Some(GlyphStyle::GameIcon));
+    }
+
+    #[test]
+    fn glyph_style_from_str_invalid_returns_none() {
+        assert_eq!(GlyphStyle::from_str("unknown"), None);
+    }
+
+    #[test]
+    fn glyph_for_style_ascii_returns_ascii_chars() {
+        assert_eq!(glyph_for_style(ItemKind::Weapon(WeaponKind::Sword), GlyphStyle::Ascii), "/");
+        assert_eq!(glyph_for_style(ItemKind::Weapon(WeaponKind::Spear), GlyphStyle::Ascii), "|");
+        assert_eq!(glyph_for_style(ItemKind::Weapon(WeaponKind::Bow),   GlyphStyle::Ascii), ")");
+    }
+
+    #[test]
+    fn glyph_for_style_unicode_returns_symbols() {
+        let s = glyph_for_style(ItemKind::Weapon(WeaponKind::Sword), GlyphStyle::Unicode);
+        assert_eq!(s, "\u{1F5E1}");
+        let shield = glyph_for_style(ItemKind::Armor(ArmorKind::LeatherArmor), GlyphStyle::Unicode);
+        assert_eq!(shield, "\u{1F6E1}");
+    }
+
+    #[test]
+    fn glyph_for_style_game_icon_returns_pua_codepoints() {
+        let s = glyph_for_style(ItemKind::Weapon(WeaponKind::Sword), GlyphStyle::GameIcon);
+        assert_eq!(s, "\u{E946}");
+        let potion = glyph_for_style(ItemKind::Consumable(ConsumableKind::HealthPotion), GlyphStyle::GameIcon);
+        assert_eq!(potion, "\u{EA72}");
+    }
+
+    #[test]
+    fn glyph_style_default_is_ascii() {
+        assert_eq!(GlyphStyle::default(), GlyphStyle::Ascii);
     }
 }
