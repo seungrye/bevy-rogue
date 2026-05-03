@@ -10,7 +10,7 @@ use crate::modules::{
     },
     player::{Player, MovingTo, MoveQueue, PlayerSystemSet, LERP_SPEED},
     ui::{LogMessage, minimap::{DiscoveredMarkers, MarkerKind}},
-    quest::{QuestRegistry, QuestState, KillNpcEvent, DespawnWorldItemEvent, execute_actions, QuestDef},
+    quest::{QuestRegistry, QuestState, KillNpcEvent, DespawnWorldItemEvent, execute_actions, QuestDef, eval_condition},
     item::{PlayerInventory},
     zone::{WorldState, SpawnQuestPortalEvent},
     combat::Speed,
@@ -554,17 +554,19 @@ pub fn is_quest_terminal(registry: &QuestRegistry, state: &QuestState, quest_id:
     phase.on_interact.is_empty() && phase.auto_advance.is_empty()
 }
 
-/// QuestState가 바뀔 때마다 퀘스트 수여자의 글리프와 색을 갱신한다
+/// QuestState 또는 PlayerInventory가 바뀔 때마다 퀘스트 수여자의 글리프와 색을 갱신한다
 fn update_villager_glyph(
     registry: Res<QuestRegistry>,
     quest_state: Res<QuestState>,
+    inventory: Res<PlayerInventory>,
+    world: Res<WorldState>,
     mut query: Query<(&Villager, &mut Text)>,
 ) {
-    if !quest_state.is_changed() { return; }
+    if !quest_state.is_changed() && !inventory.is_changed() { return; }
     for (villager, mut text) in query.iter_mut() {
         let Some(ref qid) = villager.quest_id else { continue };
         let Some(def) = registry.get(qid) else { continue };
-        let (glyph, color) = quest_npc_glyph(qid, def, &quest_state, villager.base_color);
+        let (glyph, color) = quest_npc_glyph(qid, def, &quest_state, &inventory, &world, villager.base_color);
         text.sections[0].value = glyph.to_string();
         text.sections[0].style.color = color;
     }
@@ -573,13 +575,15 @@ fn update_villager_glyph(
 /// 퀘스트 NPC 의 현재 퀘스트 상태에 따라 표시 글리프와 색상을 결정한다
 ///
 /// - `?` (노란색) : 퀘스트 있음 — initial_phase 이거나 아직 수락 전
-/// - `?` (초록색) : 퀘스트 수락, 진행 중 — 플레이어가 아이템 수집·이동 중
-/// - `!` (초록색) : 완료 조건 성립 — NPC 에게 돌아와야 함
+/// - `?` (초록색) : 퀘스트 수락, 다음 페이즈로 넘어갈 수 없는 상태 (아이템 수집·이동 중)
+/// - `!` (초록색) : 다음 페이즈로 넘어갈 수 있는 상태 (on_interact 실행 가능 또는 auto_advance 조건 충족)
 /// - `v` (base_color) : 터미널 (퀘스트 완료)
 pub fn quest_npc_glyph(
     quest_id: &str,
     def: &QuestDef,
     state: &QuestState,
+    inventory: &PlayerInventory,
+    world: &WorldState,
     base_color: Color,
 ) -> (&'static str, Color) {
     let yellow = Color::rgb(1.0, 0.9, 0.1);
@@ -608,13 +612,20 @@ pub fn quest_npc_glyph(
         return ("v", base_color);
     };
 
+    // on_interact 있으면 플레이어가 NPC 에게 말을 걸어 다음 페이즈로 넘어갈 수 있다
     if !phase.on_interact.is_empty() {
-        // 완료 조건 성립 — NPC 에게 아이템 납품·보상 수령 대기
-        ("!", green)
-    } else {
-        // 퀘스트 진행 중 — 플레이어가 이동·탐색·아이템 수집 중
-        ("?", green)
+        return ("!", green);
     }
+
+    // auto_advance 조건이 현재 충족됐으면 다음 페이즈로 넘어갈 수 있다
+    let can_advance = phase.auto_advance.iter()
+        .any(|aa| eval_condition(&aa.condition, inventory, world, state));
+    if can_advance {
+        return ("!", green);
+    }
+
+    // 조건 미충족 — 아직 진행 중
+    ("?", green)
 }
 
 fn is_quest_terminal_def(def: &QuestDef, state: &QuestState, quest_id: &str) -> bool {
@@ -774,6 +785,8 @@ mod tests {
     }
 
     use crate::modules::quest::{QuestDef, QuestPhaseDef, QuestState, QuestAction, AutoAdvance, QuestCondition};
+    use crate::modules::item::{PlayerInventory, InventoryItem, ItemKind, QuestItemKind};
+    use crate::modules::zone::WorldState;
     use std::collections::HashMap as HM;
 
     fn make_test_quest_def() -> QuestDef {
@@ -823,11 +836,16 @@ mod tests {
         s
     }
 
+    fn empty_inventory() -> PlayerInventory { PlayerInventory::default() }
+    fn default_world() -> WorldState { WorldState::default() }
+
     #[test]
     fn glyph_yellow_when_quest_not_in_state() {
         let def = make_test_quest_def();
-        let state = QuestState::default(); // 아무것도 없음
-        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, Color::WHITE);
+        let state = QuestState::default();
+        let inv = empty_inventory();
+        let world = default_world();
+        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, Color::WHITE);
         assert_eq!(glyph, "?");
         assert_eq!(color, Color::rgb(1.0, 0.9, 0.1), "퀘스트 있음 = 노란색");
     }
@@ -836,35 +854,58 @@ mod tests {
     fn glyph_yellow_when_at_initial_phase() {
         let def = make_test_quest_def();
         let state = make_state_at("not_started");
-        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, Color::WHITE);
+        let inv = empty_inventory();
+        let world = default_world();
+        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, Color::WHITE);
         assert_eq!(glyph, "?");
         assert_eq!(color, Color::rgb(1.0, 0.9, 0.1), "initial_phase = 노란 ?");
     }
 
     #[test]
-    fn glyph_green_question_when_in_progress() {
+    fn glyph_green_question_when_in_progress_no_item() {
         let def = make_test_quest_def();
         let state = make_state_at("active");
-        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, Color::WHITE);
+        let inv = empty_inventory(); // 아이템 없음 → auto_advance 조건 미충족
+        let world = default_world();
+        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, Color::WHITE);
         assert_eq!(glyph, "?");
-        assert_eq!(color, Color::rgb(0.3, 1.0, 0.6), "퀘스트 수락·진행 중 = 초록 ?");
+        assert_eq!(color, Color::rgb(0.3, 1.0, 0.6), "조건 미충족 = 초록 ?");
     }
 
     #[test]
-    fn glyph_green_exclamation_when_ready_to_complete() {
+    fn glyph_green_exclamation_when_auto_advance_condition_met() {
+        let def = make_test_quest_def();
+        let state = make_state_at("active");
+        // eternal_gem 보유 → auto_advance 조건 충족 → 다음 페이즈로 넘어갈 수 있다
+        let mut inv = empty_inventory();
+        inv.items.push(InventoryItem {
+            kind: ItemKind::QuestItem(QuestItemKind::EternalGem),
+        });
+        let world = default_world();
+        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, Color::WHITE);
+        assert_eq!(glyph, "!");
+        assert_eq!(color, Color::rgb(0.3, 1.0, 0.6), "auto_advance 조건 충족 = 초록 !");
+    }
+
+    #[test]
+    fn glyph_green_exclamation_when_has_on_interact() {
         let def = make_test_quest_def();
         let state = make_state_at("ready");
-        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, Color::WHITE);
+        let inv = empty_inventory();
+        let world = default_world();
+        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, Color::WHITE);
         assert_eq!(glyph, "!");
-        assert_eq!(color, Color::rgb(0.3, 1.0, 0.6), "완료 조건 성립 = 초록 !");
+        assert_eq!(color, Color::rgb(0.3, 1.0, 0.6), "on_interact 있음 = 초록 !");
     }
 
     #[test]
     fn glyph_v_when_terminal() {
         let def = make_test_quest_def();
         let state = make_state_at("done");
+        let inv = empty_inventory();
+        let world = default_world();
         let base = Color::rgb(0.9, 0.8, 0.5);
-        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, base);
+        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, base);
         assert_eq!(glyph, "v");
         assert_eq!(color, base, "터미널 = v + 기본 색상");
     }
