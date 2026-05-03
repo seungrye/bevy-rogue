@@ -11,6 +11,7 @@ use crate::modules::{
     combat::{CombatStats, Defeated, calc_damage},
     ui::LogMessage,
     combat_feedback::CombatFeedbackEvent,
+    item::ItemDropEvent,
 };
 
 const Z_MONSTER: f32 = 0.8;
@@ -113,6 +114,7 @@ fn handle_player_attack(
     mut monster_query: Query<(Entity, &Monster, &mut CombatStats), Without<Player>>,
     mut log_writer: EventWriter<LogMessage>,
     mut feedback_writer: EventWriter<CombatFeedbackEvent>,
+    mut drop_writer: EventWriter<ItemDropEvent>,
 ) {
     for AttackMonsterEvent(tx, ty) in events.read() {
         let Ok(player_stats) = player_query.get_single() else { continue };
@@ -134,6 +136,11 @@ fn handle_player_attack(
                 log_writer.send(LogMessage(format!(
                     "{}을(를) 처치했다! ({} 데미지)", monster.name, dmg
                 )));
+                drop_writer.send(ItemDropEvent {
+                    tile_x: *tx,
+                    tile_y: *ty,
+                    monster_name: monster.name.clone(),
+                });
             } else {
                 log_writer.send(LogMessage(format!(
                     "{}에게 {} 데미지! (HP: {}/{})",
