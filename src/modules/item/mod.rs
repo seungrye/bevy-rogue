@@ -681,15 +681,24 @@ fn spawn_quest_item_popup(
 
 fn close_quest_item_popup(
     mut commands: Commands,
+    mut acted: EventReader<PlayerActedEvent>,
+    mut acquired: EventReader<QuestItemAcquiredEvent>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
     popup_q: Query<Entity, With<QuestItemPopup>>,
 ) {
     let Ok(entity) = popup_q.get_single() else { return };
-    let close_keys = [
-        KeyCode::ArrowUp, KeyCode::ArrowDown, KeyCode::ArrowLeft, KeyCode::ArrowRight,
-        KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD, KeyCode::Escape,
-    ];
-    if close_keys.iter().any(|&k| keyboard_input.just_pressed(k)) {
+
+    // Escape 는 언제든 즉시 닫기
+    if keyboard_input.just_pressed(KeyCode::Escape) {
+        commands.entity(entity).despawn_recursive();
+        return;
+    }
+
+    // 이번 프레임에 아이템을 집었으면 팝업이 막 생성된 것 — 닫지 않는다
+    if acquired.read().next().is_some() { return; }
+
+    // 플레이어가 행동(이동·대기 등)하면 팝업 닫기
+    if acted.read().next().is_some() {
         commands.entity(entity).despawn_recursive();
     }
 }
