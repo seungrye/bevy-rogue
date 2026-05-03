@@ -366,6 +366,14 @@ pub fn item_id_to_kind(id: &str) -> Option<ItemKind> {
         "bow"                 => Some(ItemKind::Weapon(crate::modules::item::WeaponKind::Bow)),
         "leather_armor"       => Some(ItemKind::Armor(crate::modules::item::ArmorKind::LeatherArmor)),
         "health_potion"       => Some(ItemKind::Consumable(crate::modules::item::ConsumableKind::HealthPotion)),
+        // prologue_fog
+        "prologue_greatsword" => Some(ItemKind::QuestItem(QuestItemKind::PrologueGreatsword)),
+        "prologue_daggers"    => Some(ItemKind::QuestItem(QuestItemKind::PrologueDaggers)),
+        "prologue_bowtorch"   => Some(ItemKind::QuestItem(QuestItemKind::PrologueBowTorch)),
+        "family_crest"        => Some(ItemKind::QuestItem(QuestItemKind::FamilyCrest)),
+        "ice_sword"           => Some(ItemKind::QuestItem(QuestItemKind::IceSword)),
+        "dragon_egg"          => Some(ItemKind::QuestItem(QuestItemKind::DragonEgg)),
+        "ghost_wolf"          => Some(ItemKind::QuestItem(QuestItemKind::GhostWolf)),
         _ => None,
     }
 }

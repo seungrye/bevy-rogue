@@ -98,6 +98,13 @@ fn glyph_unicode(kind: ItemKind) -> &'static str {
             QuestItemKind::PhilosophersStone => "\u{2295}", // ⊕ circled plus
             QuestItemKind::DragonScale       => "\u{25B2}", // ▲ triangle
             QuestItemKind::AncientScroll     => "\u{2393}", // ⎓ scroll-like
+            QuestItemKind::PrologueGreatsword => "\u{2694}", // ⚔ crossed swords
+            QuestItemKind::PrologueDaggers    => "\u{25B8}", // ▸ small right triangle
+            QuestItemKind::PrologueBowTorch   => "\u{2600}", // ☀ fire/sun
+            QuestItemKind::FamilyCrest        => "\u{269C}", // ⚜ fleur-de-lis
+            QuestItemKind::IceSword           => "\u{2746}", // ❆ snowflake
+            QuestItemKind::DragonEgg          => "\u{25CE}", // ◎ bullseye
+            QuestItemKind::GhostWolf          => "\u{25D4}", // ◔ circle arc
         },
     }
 }
@@ -120,16 +127,34 @@ fn glyph_game_icon(kind: ItemKind) -> &'static str {
             QuestItemKind::PhilosophersStone => "\u{2295}", // fallback: ⊕
             QuestItemKind::DragonScale       => "\u{25B2}", // fallback: ▲
             QuestItemKind::AncientScroll     => "\u{2393}", // fallback: ⎓
+            QuestItemKind::PrologueGreatsword => "\u{2694}", // fallback: ⚔
+            QuestItemKind::PrologueDaggers    => "\u{25B8}", // fallback: ▸
+            QuestItemKind::PrologueBowTorch   => "\u{2600}", // fallback: ☀
+            QuestItemKind::FamilyCrest        => "\u{269C}", // fallback: ⚜
+            QuestItemKind::IceSword           => "\u{2746}", // fallback: ❆
+            QuestItemKind::DragonEgg          => "\u{25CE}", // fallback: ◎
+            QuestItemKind::GhostWolf          => "\u{25D4}", // fallback: ◔
         },
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum QuestItemKind {
+    // world_fracture 퀘스트
     EternalGem,
     PhilosophersStone,
     DragonScale,
     AncientScroll,
+    // prologue_fog 퀘스트 — 무기 선택
+    PrologueGreatsword,
+    PrologueDaggers,
+    PrologueBowTorch,
+    // prologue_fog 퀘스트 — 스토리 아이템
+    FamilyCrest,
+    // prologue_fog 퀘스트 — 각성 보상
+    IceSword,
+    DragonEgg,
+    GhostWolf,
 }
 
 impl QuestItemKind {
@@ -139,6 +164,13 @@ impl QuestItemKind {
             QuestItemKind::PhilosophersStone => "현자의 돌",
             QuestItemKind::DragonScale       => "용비늘",
             QuestItemKind::AncientScroll     => "고대 주문서",
+            QuestItemKind::PrologueGreatsword => "대검",
+            QuestItemKind::PrologueDaggers    => "단검과 투척물",
+            QuestItemKind::PrologueBowTorch   => "부러진 활과 횃불",
+            QuestItemKind::FamilyCrest        => "가문 문장 유물",
+            QuestItemKind::IceSword           => "아이스",
+            QuestItemKind::DragonEgg          => "용의 알",
+            QuestItemKind::GhostWolf          => "고스트",
         }
     }
 }
@@ -219,6 +251,13 @@ impl ItemKind {
                 QuestItemKind::PhilosophersStone => "%",
                 QuestItemKind::DragonScale       => "§",
                 QuestItemKind::AncientScroll     => "~",
+                QuestItemKind::PrologueGreatsword => "/",
+                QuestItemKind::PrologueDaggers    => ")",
+                QuestItemKind::PrologueBowTorch   => "}",
+                QuestItemKind::FamilyCrest        => "^",
+                QuestItemKind::IceSword           => "!",
+                QuestItemKind::DragonEgg          => "o",
+                QuestItemKind::GhostWolf          => "w",
             },
         }
     }
@@ -259,6 +298,13 @@ impl ItemKind {
                 QuestItemKind::PhilosophersStone => "현자의 돌을 획득했다!",
                 QuestItemKind::DragonScale       => "용비늘을 획득했다!",
                 QuestItemKind::AncientScroll     => "고대 주문서를 획득했다!",
+                QuestItemKind::PrologueGreatsword => "대검을 집어들었다. 손에 익숙하게 맞는다.",
+                QuestItemKind::PrologueDaggers    => "단검과 투척물을 집었다. 가볍고 빠르다.",
+                QuestItemKind::PrologueBowTorch   => "부러진 활과 횃불을 집었다. 거리가 곧 생명이다.",
+                QuestItemKind::FamilyCrest        => "오래된 문장 유물을 발견했다. 어디선가 본 것 같다...",
+                QuestItemKind::IceSword           => "아이스 — 스타크 가문의 검이 손 안에서 차갑게 빛난다.",
+                QuestItemKind::DragonEgg          => "용의 알이 손바닥 위에서 뜨겁게 맥박친다.",
+                QuestItemKind::GhostWolf          => "하얀 늑대 고스트가 곁에 나타났다.",
             },
         }
     }
@@ -517,6 +563,13 @@ fn quest_item_image_path(kind: QuestItemKind) -> &'static str {
         QuestItemKind::PhilosophersStone => "scene/open-chest.png",
         QuestItemKind::DragonScale       => "scene/open-chest.png",
         QuestItemKind::AncientScroll     => "scene/open-chest.png",
+        QuestItemKind::PrologueGreatsword => "scene/open-chest.png",
+        QuestItemKind::PrologueDaggers    => "scene/open-chest.png",
+        QuestItemKind::PrologueBowTorch   => "scene/open-chest.png",
+        QuestItemKind::FamilyCrest        => "scene/open-chest.png",
+        QuestItemKind::IceSword           => "scene/open-chest.png",
+        QuestItemKind::DragonEgg          => "scene/open-chest.png",
+        QuestItemKind::GhostWolf          => "scene/open-chest.png",
     }
 }
 
