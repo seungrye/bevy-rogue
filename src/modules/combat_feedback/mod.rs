@@ -1,13 +1,16 @@
 use bevy::prelude::*;
+use rand::Rng;
 use crate::modules::map::{tile_to_world_coords, TILE_SIZE, PlayerActedEvent};
 
-pub const BLOOD_DECAY_PER_TURN: f32 = 0.25;
 pub const HIT_FLASH_DURATION: f32 = 0.15;
 const Z_BLOOD: f32 = 0.5;
+const BLOOD_LIFETIME_MIN: u32 = 4;
+const BLOOD_LIFETIME_MAX: u32 = 12;
 
 #[derive(Component)]
 pub struct BloodStain {
     pub alpha: f32,
+    pub decay_per_turn: f32,
 }
 
 #[derive(Component)]
@@ -45,6 +48,7 @@ fn handle_combat_feedback(
 ) {
     for event in events.read() {
         let pos = tile_to_world_coords(event.tile_x, event.tile_y);
+        let lifetime = rand::thread_rng().gen_range(BLOOD_LIFETIME_MIN..=BLOOD_LIFETIME_MAX);
         commands.spawn((
             Text2dBundle {
                 text: Text::from_section("%", TextStyle {
@@ -55,7 +59,7 @@ fn handle_combat_feedback(
                 transform: Transform::from_xyz(pos.x, pos.y, Z_BLOOD),
                 ..default()
             },
-            BloodStain { alpha: 1.0 },
+            BloodStain { alpha: 1.0, decay_per_turn: 1.0 / lifetime as f32 },
         ));
 
         if let Some(mut ec) = commands.get_entity(event.hit_entity) {
@@ -77,7 +81,7 @@ fn fade_blood_stains(
 ) {
     if turn_events.read().next().is_none() { return; }
     for (entity, mut stain, mut text) in query.iter_mut() {
-        stain.alpha = blood_stain_alpha_after_decay(stain.alpha, BLOOD_DECAY_PER_TURN);
+        stain.alpha = blood_stain_alpha_after_decay(stain.alpha, stain.decay_per_turn);
         text.sections[0].style.color = Color::rgba(0.8, 0.0, 0.0, stain.alpha);
         if stain.alpha <= 0.0 {
             commands.entity(entity).despawn();
@@ -106,6 +110,10 @@ pub fn blood_stain_alpha_after_decay(current: f32, per_turn: f32) -> f32 {
     (current - per_turn).max(0.0)
 }
 
+pub fn decay_per_turn_for(lifetime_turns: u32) -> f32 {
+    1.0 / lifetime_turns as f32
+}
+
 pub fn hit_flash_remaining_after(remaining: f32, dt: f32) -> f32 {
     (remaining - dt).max(0.0)
 }
@@ -120,22 +128,40 @@ mod tests {
     }
 
     #[test]
-    fn blood_stain_decays_per_turn() {
-        let a = blood_stain_alpha_after_decay(1.0, BLOOD_DECAY_PER_TURN);
-        assert!((a - 0.75).abs() < 1e-6);
-    }
-
-    #[test]
     fn blood_stain_alpha_clamps_to_zero() {
-        let a = blood_stain_alpha_after_decay(0.1, BLOOD_DECAY_PER_TURN);
+        let decay = decay_per_turn_for(4);
+        let a = blood_stain_alpha_after_decay(0.1, decay);
         assert_eq!(a, 0.0);
     }
 
     #[test]
-    fn blood_stain_gone_after_four_turns() {
+    fn blood_stain_gone_at_min_lifetime() {
+        let decay = decay_per_turn_for(BLOOD_LIFETIME_MIN);
         let mut a = 1.0_f32;
-        for _ in 0..4 { a = blood_stain_alpha_after_decay(a, BLOOD_DECAY_PER_TURN); }
-        assert_eq!(a, 0.0);
+        for _ in 0..BLOOD_LIFETIME_MIN { a = blood_stain_alpha_after_decay(a, decay); }
+        assert!(a <= 0.0, "최소 수명({} 턴) 후 사라져야 한다", BLOOD_LIFETIME_MIN);
+    }
+
+    #[test]
+    fn blood_stain_gone_at_max_lifetime() {
+        let decay = decay_per_turn_for(BLOOD_LIFETIME_MAX);
+        let mut a = 1.0_f32;
+        for _ in 0..BLOOD_LIFETIME_MAX { a = blood_stain_alpha_after_decay(a, decay); }
+        assert!(a < 1e-4, "최대 수명({} 턴) 후 거의 사라져야 한다 (실제: {})", BLOOD_LIFETIME_MAX, a);
+    }
+
+    #[test]
+    fn blood_stain_still_visible_before_lifetime_ends() {
+        let decay = decay_per_turn_for(BLOOD_LIFETIME_MAX);
+        let mut a = 1.0_f32;
+        for _ in 0..BLOOD_LIFETIME_MIN { a = blood_stain_alpha_after_decay(a, decay); }
+        assert!(a > 0.0, "최소 수명보다 적은 턴 후엔 아직 보여야 한다");
+    }
+
+    #[test]
+    fn lifetime_range_is_valid() {
+        assert!(BLOOD_LIFETIME_MIN >= 1);
+        assert!(BLOOD_LIFETIME_MAX >= BLOOD_LIFETIME_MIN);
     }
 
     #[test]
