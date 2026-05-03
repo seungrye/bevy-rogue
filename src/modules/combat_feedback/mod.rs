@@ -1,7 +1,7 @@
 use bevy::prelude::*;
-use crate::modules::map::{tile_to_world_coords, TILE_SIZE};
+use crate::modules::map::{tile_to_world_coords, TILE_SIZE, PlayerActedEvent};
 
-pub const BLOOD_DECAY_RATE: f32 = 0.25;
+pub const BLOOD_DECAY_PER_TURN: f32 = 0.25;
 pub const HIT_FLASH_DURATION: f32 = 0.15;
 const Z_BLOOD: f32 = 0.5;
 
@@ -72,12 +72,12 @@ fn handle_combat_feedback(
 
 fn fade_blood_stains(
     mut commands: Commands,
-    time: Res<Time>,
+    mut turn_events: EventReader<PlayerActedEvent>,
     mut query: Query<(Entity, &mut BloodStain, &mut Text)>,
 ) {
-    let dt = time.delta_seconds();
+    if turn_events.read().next().is_none() { return; }
     for (entity, mut stain, mut text) in query.iter_mut() {
-        stain.alpha = blood_stain_alpha_after_decay(stain.alpha, BLOOD_DECAY_RATE, dt);
+        stain.alpha = blood_stain_alpha_after_decay(stain.alpha, BLOOD_DECAY_PER_TURN);
         text.sections[0].style.color = Color::rgba(0.8, 0.0, 0.0, stain.alpha);
         if stain.alpha <= 0.0 {
             commands.entity(entity).despawn();
@@ -102,8 +102,8 @@ fn apply_hit_flash(
     }
 }
 
-pub fn blood_stain_alpha_after_decay(current: f32, rate: f32, dt: f32) -> f32 {
-    (current - rate * dt).max(0.0)
+pub fn blood_stain_alpha_after_decay(current: f32, per_turn: f32) -> f32 {
+    (current - per_turn).max(0.0)
 }
 
 pub fn hit_flash_remaining_after(remaining: f32, dt: f32) -> f32 {
@@ -116,26 +116,31 @@ mod tests {
 
     #[test]
     fn blood_stain_starts_fully_visible() {
-        // 스폰 직후(dt=0)에는 alpha가 감소하지 않는다
-        assert_eq!(blood_stain_alpha_after_decay(1.0, BLOOD_DECAY_RATE, 0.0), 1.0);
+        assert_eq!(blood_stain_alpha_after_decay(1.0, 0.0), 1.0);
     }
 
     #[test]
-    fn hit_flash_starts_active() {
-        // 스폰 직후(dt=0)에는 remaining이 초기값 그대로여야 한다
-        assert!(hit_flash_remaining_after(HIT_FLASH_DURATION, 0.0) > 0.0);
-    }
-
-    #[test]
-    fn blood_stain_decays_at_given_rate() {
-        let a = blood_stain_alpha_after_decay(1.0, 0.25, 1.0);
+    fn blood_stain_decays_per_turn() {
+        let a = blood_stain_alpha_after_decay(1.0, BLOOD_DECAY_PER_TURN);
         assert!((a - 0.75).abs() < 1e-6);
     }
 
     #[test]
     fn blood_stain_alpha_clamps_to_zero() {
-        let a = blood_stain_alpha_after_decay(0.1, 0.25, 1.0);
+        let a = blood_stain_alpha_after_decay(0.1, BLOOD_DECAY_PER_TURN);
         assert_eq!(a, 0.0);
+    }
+
+    #[test]
+    fn blood_stain_gone_after_four_turns() {
+        let mut a = 1.0_f32;
+        for _ in 0..4 { a = blood_stain_alpha_after_decay(a, BLOOD_DECAY_PER_TURN); }
+        assert_eq!(a, 0.0);
+    }
+
+    #[test]
+    fn hit_flash_starts_active() {
+        assert!(hit_flash_remaining_after(HIT_FLASH_DURATION, 0.0) > 0.0);
     }
 
     #[test]
