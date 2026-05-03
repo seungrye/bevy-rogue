@@ -651,41 +651,44 @@ fn spawn_quest_item_popup(
     popup_q: Query<(), With<QuestItemPopup>>,
     player_q: Query<(Option<&MovingTo>, &Transform), With<Player>>,
 ) {
-    for QuestItemAcquiredEvent(kind) in events.read() {
-        if !popup_q.is_empty() { continue; }
-        let Ok((moving_to, transform)) = player_q.get_single() else { continue };
-        let (tile_x, tile_y) = moving_to
-            .map(|m| world_to_tile_coords(m.target))
-            .unwrap_or_else(|| world_to_tile_coords(transform.translation));
+    // Drain all events first to avoid processing stale events on future frames.
+    // Only the first event is used; others are intentionally discarded.
+    let all_events: Vec<_> = events.read().collect();
+    if all_events.is_empty() || !popup_q.is_empty() { return; }
 
-        let image = asset_server.load(quest_item_image_path(*kind));
-        commands.spawn((
-            NodeBundle {
-                style: Style {
-                    width: Val::Percent(100.0),
-                    height: Val::Percent(100.0),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    position_type: PositionType::Absolute,
-                    ..default()
-                },
-                z_index: ZIndex::Global(Z_QUEST_POPUP),
-                background_color: Color::NONE.into(),
+    let QuestItemAcquiredEvent(kind) = all_events[0];
+    let Ok((moving_to, transform)) = player_q.get_single() else { return };
+    let (tile_x, tile_y) = moving_to
+        .map(|m| world_to_tile_coords(m.target))
+        .unwrap_or_else(|| world_to_tile_coords(transform.translation));
+
+    let image = asset_server.load(quest_item_image_path(*kind));
+    commands.spawn((
+        NodeBundle {
+            style: Style {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                position_type: PositionType::Absolute,
                 ..default()
             },
-            QuestItemPopup { tile_x, tile_y },
-        )).with_children(|parent| {
-            parent.spawn(ImageBundle {
-                image: image.into(),
-                style: Style {
-                    width: Val::Percent(50.0),
-                    height: Val::Auto,
-                    ..default()
-                },
+            z_index: ZIndex::Global(Z_QUEST_POPUP),
+            background_color: Color::NONE.into(),
+            ..default()
+        },
+        QuestItemPopup { tile_x, tile_y },
+    )).with_children(|parent| {
+        parent.spawn(ImageBundle {
+            image: image.into(),
+            style: Style {
+                width: Val::Percent(50.0),
+                height: Val::Auto,
                 ..default()
-            });
+            },
+            ..default()
         });
-    }
+    });
 }
 
 fn close_quest_item_popup(
@@ -694,10 +697,12 @@ fn close_quest_item_popup(
     popup_q: Query<(Entity, &QuestItemPopup)>,
     player_q: Query<(Option<&MovingTo>, &Transform), With<Player>>,
 ) {
-    let Ok((entity, popup)) = popup_q.get_single() else { return };
+    if popup_q.is_empty() { return; }
 
     if keyboard_input.just_pressed(KeyCode::Escape) {
-        commands.entity(entity).despawn_recursive();
+        for (entity, _) in popup_q.iter() {
+            commands.entity(entity).despawn_recursive();
+        }
         return;
     }
 
@@ -706,9 +711,10 @@ fn close_quest_item_popup(
         .map(|m| world_to_tile_coords(m.target))
         .unwrap_or_else(|| world_to_tile_coords(transform.translation));
 
-    // 픽업한 타일을 벗어나면 팝업 닫기
-    if px != popup.tile_x || py != popup.tile_y {
-        commands.entity(entity).despawn_recursive();
+    for (entity, popup) in popup_q.iter() {
+        if px != popup.tile_x || py != popup.tile_y {
+            commands.entity(entity).despawn_recursive();
+        }
     }
 }
 
