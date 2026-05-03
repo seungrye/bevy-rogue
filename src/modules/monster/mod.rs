@@ -8,7 +8,7 @@ use crate::modules::{
         MAP_HEIGHT, MAP_WIDTH, TILE_SIZE,
         MapSystemSet, MonsterRespawnEvent, PlayerActedEvent, AttackMonsterEvent, Rect,
     },
-    player::{Player, MovingTo, PlayerSystemSet},
+    player::{Player, MovingTo, MoveQueue, PlayerSystemSet, LERP_SPEED},
     combat::{CombatStats, Defeated, Speed, calc_damage},
     ui::LogMessage,
     combat_feedback::CombatFeedbackEvent,
@@ -57,6 +57,7 @@ impl Plugin for MonsterPlugin {
                 (handle_player_attack, monster_turn, cleanup_dead)
                     .chain()
                     .after(PlayerSystemSet::Movement),
+                smooth_monster_move,
             ));
     }
 }
@@ -140,6 +141,7 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
                 Monster { name: name.to_string(), tile_x: tx, tile_y: ty, vision_radius: vis, alert_turns: 0 },
                 CombatStats { hp, max_hp: hp, mp: 0, max_mp: 0, attack: atk, defense: def },
                 Speed::new(spd),
+                MoveQueue::default(),
             ));
         }
     }
@@ -193,7 +195,7 @@ fn monster_turn(
     mut commands: Commands,
     mut events: EventReader<PlayerActedEvent>,
     map_res: Res<MapResource>,
-    mut monster_query: Query<(&mut Monster, &mut Transform, &CombatStats, &mut Speed), Without<Player>>,
+    mut monster_query: Query<(&mut Monster, &mut MoveQueue, &CombatStats, &mut Speed), Without<Player>>,
     mut player_query: Query<(Entity, &Transform, Option<&MovingTo>, &mut CombatStats), (With<Player>, Without<Monster>)>,
     mut log_writer: EventWriter<LogMessage>,
     mut feedback_writer: EventWriter<CombatFeedbackEvent>,
@@ -216,7 +218,7 @@ fn monster_turn(
     let mut player_dead = false;
     let mut rng = rand::thread_rng();
 
-    for (mut monster, mut transform, monster_stats, mut speed) in monster_query.iter_mut() {
+    for (mut monster, mut move_queue, monster_stats, mut speed) in monster_query.iter_mut() {
         if monster_stats.hp <= 0 { continue; }
 
         occupied.remove(&(monster.tile_x, monster.tile_y));
@@ -264,20 +266,44 @@ fn monster_turn(
                 let (nx, ny) = move_toward(monster.tile_x, monster.tile_y, px, py, map, &occupied);
                 occupied.remove(&(monster.tile_x, monster.tile_y));
                 occupied.insert((nx, ny));
+                let wp = tile_to_world_coords(nx, ny);
+                move_queue.0.push_back(Vec3::new(wp.x, wp.y, Z_MONSTER));
                 monster.tile_x = nx;
                 monster.tile_y = ny;
             } else {
                 let (nx, ny) = wander(monster.tile_x, monster.tile_y, map, &occupied, &mut rng);
                 occupied.remove(&(monster.tile_x, monster.tile_y));
                 occupied.insert((nx, ny));
+                let wp = tile_to_world_coords(nx, ny);
+                move_queue.0.push_back(Vec3::new(wp.x, wp.y, Z_MONSTER));
                 monster.tile_x = nx;
                 monster.tile_y = ny;
             }
         }
 
-        let wp = tile_to_world_coords(monster.tile_x, monster.tile_y);
-        transform.translation = Vec3::new(wp.x, wp.y, Z_MONSTER);
         occupied.insert((monster.tile_x, monster.tile_y));
+    }
+}
+
+fn smooth_monster_move(
+    time: Res<Time>,
+    mut query: Query<(&mut Transform, &mut MoveQueue, &Speed), With<Monster>>,
+) {
+    let dt = time.delta_seconds();
+    for (mut transform, mut queue, speed) in query.iter_mut() {
+        let anim_speed = LERP_SPEED * speed.value.max(0.5);
+        let step = anim_speed * TILE_SIZE * dt;
+        while let Some(&target) = queue.0.front() {
+            let dist = transform.translation.distance(target);
+            if dist <= step {
+                transform.translation = target;
+                queue.0.pop_front();
+            } else {
+                let dir = (target - transform.translation).normalize();
+                transform.translation += dir * step;
+                break;
+            }
+        }
     }
 }
 

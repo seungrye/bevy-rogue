@@ -15,6 +15,9 @@ use std::collections::VecDeque;
 
 pub mod pathfinding;
 
+#[derive(Component, Default)]
+pub struct MoveQueue(pub VecDeque<Vec3>);
+
 pub const PLAYER_HP: i32 = 30;
 pub const PLAYER_MP: i32 = 20;
 pub const PLAYER_ATK: i32 = 5;
@@ -45,7 +48,7 @@ pub enum PlayerSystemSet {
     Movement,
 }
 
-const LERP_SPEED: f32 = 7.5;
+pub const LERP_SPEED: f32 = 7.5;
 const INITIAL_HOLD_DELAY: f32 = 0.12;
 
 #[derive(Resource, Default)]

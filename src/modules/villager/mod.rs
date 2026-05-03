@@ -8,7 +8,7 @@ use crate::modules::{
         MAP_HEIGHT, MAP_WIDTH, TILE_SIZE,
         MapSystemSet, VillagerRespawnEvent, PlayerActedEvent, BumpTileEvent,
     },
-    player::{Player, MovingTo, PlayerSystemSet},
+    player::{Player, MovingTo, MoveQueue, PlayerSystemSet, LERP_SPEED},
     ui::{LogMessage, minimap::{DiscoveredMarkers, MarkerKind}},
     quest::{QuestRegistry, QuestState, execute_actions},
     item::{PlayerInventory},
@@ -83,6 +83,7 @@ impl Plugin for VillagerPlugin {
                     .chain()
                     .after(PlayerSystemSet::Movement),
                 update_villager_glyph,
+                smooth_villager_move,
             ));
     }
 }
@@ -186,6 +187,7 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
                 base_color,
             },
             Speed::new(spd),
+            MoveQueue::default(),
         ));
     }
 }
@@ -270,7 +272,7 @@ fn show_quest_dialog(
 fn villager_turn(
     mut events: EventReader<PlayerActedEvent>,
     map_res: Res<crate::modules::map::MapResource>,
-    mut villager_query: Query<(&mut Villager, &mut Transform, &mut Speed)>,
+    mut villager_query: Query<(&mut Villager, &mut MoveQueue, &mut Speed)>,
     player_query: Query<(&Transform, Option<&MovingTo>), (With<Player>, Without<Villager>)>,
 ) {
     if events.read().next().is_none() { return; }
@@ -288,13 +290,12 @@ fn villager_turn(
         occupied.insert(player_tile);
     }
 
-    for (mut villager, mut transform, mut speed) in villager_query.iter_mut() {
+    for (mut villager, mut move_queue, mut speed) in villager_query.iter_mut() {
         occupied.remove(&(villager.tile_x, villager.tile_y));
 
         speed.energy += speed.value;
 
         if !take_turn(&mut villager) {
-            // 충돌(대화) 턴 — 에너지는 쌓되 행동하지 않음
             occupied.insert((villager.tile_x, villager.tile_y));
             continue;
         }
@@ -304,13 +305,35 @@ fn villager_turn(
             let (nx, ny) = pick_next_tile(villager.tile_x, villager.tile_y, map, &occupied, &mut rng);
             occupied.remove(&(villager.tile_x, villager.tile_y));
             occupied.insert((nx, ny));
+            let wp = tile_to_world_coords(nx, ny);
+            move_queue.0.push_back(Vec3::new(wp.x, wp.y, Z_VILLAGER));
             villager.tile_x = nx;
             villager.tile_y = ny;
         }
 
-        let wp = tile_to_world_coords(villager.tile_x, villager.tile_y);
-        transform.translation = Vec3::new(wp.x, wp.y, Z_VILLAGER);
         occupied.insert((villager.tile_x, villager.tile_y));
+    }
+}
+
+fn smooth_villager_move(
+    time: Res<Time>,
+    mut query: Query<(&mut Transform, &mut MoveQueue, &Speed), With<Villager>>,
+) {
+    let dt = time.delta_seconds();
+    for (mut transform, mut queue, speed) in query.iter_mut() {
+        let anim_speed = LERP_SPEED * speed.value.max(0.5);
+        let step = anim_speed * TILE_SIZE * dt;
+        while let Some(&target) = queue.0.front() {
+            let dist = transform.translation.distance(target);
+            if dist <= step {
+                transform.translation = target;
+                queue.0.pop_front();
+            } else {
+                let dir = (target - transform.translation).normalize();
+                transform.translation += dir * step;
+                break;
+            }
+        }
     }
 }
 
