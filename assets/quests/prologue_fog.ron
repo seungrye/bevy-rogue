@@ -61,14 +61,27 @@ QuestDef(
                 AutoAdvance(
                     condition: HasItem("prologue_greatsword"),
                     next_phase: "soldier_test_sword",
+                    // 대검을 집는 순간 나머지 두 무기는 월드에서 사라진다
+                    actions: [
+                        DespawnWorldItem("prologue_daggers"),
+                        DespawnWorldItem("prologue_bowtorch"),
+                    ],
                 ),
                 AutoAdvance(
                     condition: HasItem("prologue_daggers"),
                     next_phase: "soldier_test_daggers",
+                    actions: [
+                        DespawnWorldItem("prologue_greatsword"),
+                        DespawnWorldItem("prologue_bowtorch"),
+                    ],
                 ),
                 AutoAdvance(
                     condition: HasItem("prologue_bowtorch"),
                     next_phase: "soldier_test_bowtorch",
+                    actions: [
+                        DespawnWorldItem("prologue_greatsword"),
+                        DespawnWorldItem("prologue_daggers"),
+                    ],
                 ),
             ],
             objective: Some("던전 폐허 안 무기 더미에서 무기를 집어라. 세 가지 중 하나를 선택하게 된다."),

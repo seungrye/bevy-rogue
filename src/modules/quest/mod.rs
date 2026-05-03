@@ -35,6 +35,9 @@ pub struct QuestPhaseDef {
 pub struct AutoAdvance {
     pub condition: QuestCondition,
     pub next_phase: String,
+    /// 조건 발동 시 즉시 실행되는 액션 (RemoveItem, DespawnWorldItem, SetFlag 지원)
+    #[serde(default)]
+    pub actions: Vec<QuestAction>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -60,6 +63,8 @@ pub enum QuestAction {
     KillNpc(String),
     /// 현재 존에 Named 존으로 이어지는 포탈을 즉시 스폰한다
     OpenPortal { zone: String, generator: String },
+    /// 월드에 놓인 아이템 엔티티를 즉시 제거한다 (인벤토리는 건들지 않음)
+    DespawnWorldItem(String),
     Branch {
         condition: Box<QuestCondition>,
         if_true: Vec<QuestAction>,
@@ -78,6 +83,10 @@ pub struct QuestSpawn {
 
 #[derive(Event)]
 pub struct KillNpcEvent(pub String);
+
+/// 월드에 놓인 특정 아이템 엔티티를 제거하도록 요청하는 이벤트
+#[derive(Event)]
+pub struct DespawnWorldItemEvent(pub String);
 
 // ── 런타임 상태 ───────────────────────────────────────────────────────────────
 
@@ -152,6 +161,7 @@ impl Plugin for QuestPlugin {
         app.init_resource::<QuestRegistry>()
             .init_resource::<QuestState>()
             .add_event::<KillNpcEvent>()
+            .add_event::<DespawnWorldItemEvent>()
             .add_systems(Startup, load_quests)
             .add_systems(Update, (check_auto_advance, spawn_quest_items));
     }
@@ -186,10 +196,11 @@ fn load_quests(mut registry: ResMut<QuestRegistry>) {
 fn check_auto_advance(
     registry: Res<QuestRegistry>,
     mut state: ResMut<QuestState>,
-    inventory: Res<PlayerInventory>,
+    mut inventory: ResMut<PlayerInventory>,
     world: Res<crate::modules::zone::WorldState>,
+    mut despawn_item: EventWriter<DespawnWorldItemEvent>,
 ) {
-    let mut advances: Vec<(String, String)> = Vec::new();
+    let mut advances: Vec<(String, String, Vec<QuestAction>)> = Vec::new();
 
     for (quest_id, quest_def) in &registry.quests {
         let current = match state.phases.get(quest_id) {
@@ -202,15 +213,32 @@ fn check_auto_advance(
         };
         for auto in &phase_def.auto_advance {
             if eval_condition(&auto.condition, &inventory, &world, &state) {
-                advances.push((quest_id.clone(), auto.next_phase.clone()));
+                advances.push((quest_id.clone(), auto.next_phase.clone(), auto.actions.clone()));
                 break; // 첫 번째 충족 조건만 사용
             }
         }
     }
 
-    for (quest_id, next_phase) in advances {
+    for (quest_id, next_phase, actions) in advances {
         info!("퀘스트 [{}] 자동 전진: {}", quest_id, next_phase);
         state.set_phase(&quest_id, &next_phase);
+        // auto_advance 전용 인라인 실행 (DespawnWorldItem, RemoveItem, SetFlag 지원)
+        for action in &actions {
+            match action {
+                QuestAction::DespawnWorldItem(item_id) => {
+                    despawn_item.send(DespawnWorldItemEvent(item_id.clone()));
+                }
+                QuestAction::RemoveItem(item_id) => {
+                    if let Some(kind) = item_id_to_kind(item_id) {
+                        inventory.items.retain(|i| i.kind != kind);
+                    }
+                }
+                QuestAction::SetFlag { flag, value } => {
+                    state.set_flag(flag, value);
+                }
+                _ => {} // on_interact 전용 액션(OpenPortal, KillNpc 등)은 auto_advance에서 미지원
+            }
+        }
     }
 }
 
@@ -225,6 +253,7 @@ pub fn execute_actions(
     world: &crate::modules::zone::WorldState,
     kill_npc: &mut EventWriter<KillNpcEvent>,
     open_portal: &mut EventWriter<SpawnQuestPortalEvent>,
+    despawn_item: &mut EventWriter<DespawnWorldItemEvent>,
 ) {
     for action in actions {
         match action {
@@ -273,13 +302,17 @@ pub fn execute_actions(
                 ));
                 info!("퀘스트 포탈 열기: {} (생성기: {})", zone, generator);
             }
+            QuestAction::DespawnWorldItem(item_id) => {
+                despawn_item.send(DespawnWorldItemEvent(item_id.clone()));
+                info!("월드 아이템 제거: {}", item_id);
+            }
             QuestAction::Branch { condition, if_true, if_false } => {
                 let branch = if eval_condition(condition, inventory, world, state) {
                     if_true.as_slice()
                 } else {
                     if_false.as_slice()
                 };
-                execute_actions(branch, quest_id, state, inventory, log, world, kill_npc, open_portal);
+                execute_actions(branch, quest_id, state, inventory, log, world, kill_npc, open_portal, despawn_item);
             }
         }
     }
@@ -428,6 +461,7 @@ mod tests {
                     auto_advance: vec![AutoAdvance {
                         condition: QuestCondition::HasItem("eternal_gem".into()),
                         next_phase: "ready".into(),
+                        actions: vec![],
                     }],
                     objective: Some("영원의 보석을 찾아라".into()),
                 });
@@ -551,10 +585,12 @@ mod tests {
                         QuestCondition::HasItem("ancient_scroll".into()),
                     ]),
                     next_phase: "both_ready".into(),
+                    actions: vec![],
                 },
                 AutoAdvance {
                     condition: QuestCondition::HasItem("dragon_scale".into()),
                     next_phase: "has_scale_hint".into(),
+                    actions: vec![],
                 },
             ],
             objective: None,
@@ -664,5 +700,64 @@ mod tests {
         assert!(eval_condition(&cond, &inv, &world, &state));
         state.clear_flag("village_burned");
         assert!(!eval_condition(&cond, &inv, &world, &state));
+    }
+
+    #[test]
+    fn auto_advance_actions_field_defaults_to_empty() {
+        let def: QuestDef = ron::de::from_str(r#"
+            QuestDef(
+                id: "test",
+                title: "test",
+                giver_npc: "npc",
+                initial_phase: "start",
+                phases: {
+                    "start": QuestPhaseDef(
+                        dialog: [],
+                        auto_advance: [
+                            AutoAdvance(
+                                condition: HasItem("eternal_gem"),
+                                next_phase: "done",
+                            ),
+                        ],
+                    ),
+                    "done": QuestPhaseDef(dialog: []),
+                },
+            )
+        "#).expect("RON 파싱 성공해야 한다");
+        let phase = def.phases.get("start").unwrap();
+        assert!(phase.auto_advance[0].actions.is_empty(), "actions 미지정 시 빈 vec이어야 한다");
+    }
+
+    #[test]
+    fn auto_advance_actions_parsed_from_ron() {
+        let def: QuestDef = ron::de::from_str(r#"
+            QuestDef(
+                id: "test",
+                title: "test",
+                giver_npc: "npc",
+                initial_phase: "start",
+                phases: {
+                    "start": QuestPhaseDef(
+                        dialog: [],
+                        auto_advance: [
+                            AutoAdvance(
+                                condition: HasItem("prologue_greatsword"),
+                                next_phase: "done",
+                                actions: [
+                                    DespawnWorldItem("prologue_daggers"),
+                                    DespawnWorldItem("prologue_bowtorch"),
+                                ],
+                            ),
+                        ],
+                    ),
+                    "done": QuestPhaseDef(dialog: []),
+                },
+            )
+        "#).expect("RON 파싱 성공해야 한다");
+        let phase = def.phases.get("start").unwrap();
+        let actions = &phase.auto_advance[0].actions;
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(&actions[0], QuestAction::DespawnWorldItem(id) if id == "prologue_daggers"));
+        assert!(matches!(&actions[1], QuestAction::DespawnWorldItem(id) if id == "prologue_bowtorch"));
     }
 }

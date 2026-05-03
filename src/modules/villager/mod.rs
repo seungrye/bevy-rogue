@@ -10,7 +10,7 @@ use crate::modules::{
     },
     player::{Player, MovingTo, MoveQueue, PlayerSystemSet, LERP_SPEED},
     ui::{LogMessage, minimap::{DiscoveredMarkers, MarkerKind}},
-    quest::{QuestRegistry, QuestState, KillNpcEvent, execute_actions},
+    quest::{QuestRegistry, QuestState, KillNpcEvent, DespawnWorldItemEvent, execute_actions},
     item::{PlayerInventory},
     zone::{WorldState, SpawnQuestPortalEvent},
     combat::Speed,
@@ -373,6 +373,7 @@ fn handle_bump(
     world_state: Res<WorldState>,
     mut kill_npc: EventWriter<KillNpcEvent>,
     mut open_portal: EventWriter<SpawnQuestPortalEvent>,
+    mut despawn_item: EventWriter<DespawnWorldItemEvent>,
 ) {
     for BumpTileEvent(bx, by) in events.read() {
         for mut villager in villager_query.iter_mut() {
@@ -380,7 +381,7 @@ fn handle_bump(
 
             if let Some(quest_id) = villager.quest_id.clone() {
                 let phase_before = quest_state.phases.get(&quest_id).cloned();
-                show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut kill_npc, &mut open_portal);
+                show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut kill_npc, &mut open_portal, &mut despawn_item);
                 let phase_after = quest_state.phases.get(&quest_id).cloned();
                 // 퀘스트가 active 상태로 전환됐을 때 QuestGiver 마커 추가
                 if phase_before.as_deref() != Some("active") && phase_after.as_deref() == Some("active") {
@@ -407,6 +408,7 @@ fn show_quest_dialog(
     world: &WorldState,
     kill_npc: &mut EventWriter<KillNpcEvent>,
     open_portal: &mut EventWriter<SpawnQuestPortalEvent>,
+    despawn_item: &mut EventWriter<DespawnWorldItemEvent>,
 ) {
     // 퀘스트가 초기화되지 않았으면 initial_phase 로 초기화
     if !state.phases.contains_key(quest_id) {
@@ -435,7 +437,7 @@ fn show_quest_dialog(
     // 마지막 줄에서 액션 실행
     if !dialog.is_empty() && idx + 1 >= dialog.len() {
         villager.quest_dialogue_idx = 0;
-        execute_actions(&actions, quest_id, state, inventory, log, world, kill_npc, open_portal);
+        execute_actions(&actions, quest_id, state, inventory, log, world, kill_npc, open_portal, despawn_item);
     } else {
         villager.quest_dialogue_idx = idx + 1;
     }

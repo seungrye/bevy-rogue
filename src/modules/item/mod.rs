@@ -5,6 +5,7 @@ use crate::modules::{
     player::{Player, MovingTo, PlayerSystemSet, PLAYER_ATK, PLAYER_DEF},
     combat::CombatStats,
     ui::LogMessage,
+    quest::{DespawnWorldItemEvent, item_id_to_kind},
 };
 
 pub const POTION_HEAL: i32 = 8;
@@ -497,6 +498,7 @@ impl Plugin for ItemPlugin {
             .add_systems(Update, (
                 spawn_dropped_items,
                 pickup_items.after(PlayerSystemSet::Movement),
+                handle_despawn_world_item,
                 apply_equipment_stats,
                 update_item_glyphs,
                 cycle_glyph_style,
@@ -689,6 +691,22 @@ fn close_quest_item_popup(
     ];
     if close_keys.iter().any(|&k| keyboard_input.just_pressed(k)) {
         commands.entity(entity).despawn_recursive();
+    }
+}
+
+/// DespawnWorldItemEvent 를 받아 월드에 있는 해당 아이템 엔티티를 제거한다
+fn handle_despawn_world_item(
+    mut events: EventReader<DespawnWorldItemEvent>,
+    item_query: Query<(Entity, &Item)>,
+    mut commands: Commands,
+) {
+    for DespawnWorldItemEvent(item_id) in events.read() {
+        let Some(kind) = item_id_to_kind(item_id) else { continue };
+        for (entity, item) in item_query.iter() {
+            if item.kind == kind {
+                commands.entity(entity).despawn();
+            }
+        }
     }
 }
 

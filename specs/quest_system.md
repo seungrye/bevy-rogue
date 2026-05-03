@@ -83,11 +83,19 @@ QuestDef(
 | `GiveItem("item_id")` | 플레이어에게 아이템 지급 |
 | `RemoveItem("item_id")` | 플레이어 인벤토리에서 아이템 제거 |
 | `Log("message")` | 로그 창에 메시지 출력 |
+| `SetFlag { flag, value }` | 퀘스트 플래그 설정 |
+| `ClearFlag("flag")` | 퀘스트 플래그 해제 |
+| `KillNpc("name")` | NPC 월드 제거 |
+| `OpenPortal { zone, generator }` | 현재 맵에 Named 존 포탈 스폰 |
+| `DespawnWorldItem("item_id")` | 월드에 놓인 아이템 엔티티 즉시 제거 (인벤토리 영향 없음) |
 | `Branch { condition, if_true, if_false }` | 조건 분기 (중첩 가능) |
 
 ### auto_advance
 - `Vec<AutoAdvance>` — 우선순위 순서, **첫 번째 충족 조건만** 실행
 - 빈 배열이면 자동 전진 없음
+- `actions: Vec<QuestAction>` 필드 (기본값 빈 배열) — 조건 발동과 동시에 실행
+  - `DespawnWorldItem`, `RemoveItem`, `SetFlag` 지원
+  - `OpenPortal`, `KillNpc` 등 NPC 상호작용 전용 액션은 미지원
 
 ## 퀘스트 아이템 ID 목록
 
@@ -105,6 +113,7 @@ QuestDef(
 - [x] NPC가 퀘스트 수여자(`giver_npc`)이면 `QuestState` 에 따른 조건부 대화 출력
 - [x] 마지막 대화 줄에서 Interact(이동키/Esc) 시 `on_interact` 액션 실행
 - [x] `auto_advance` 는 Vec 순서로 평가, 첫 번째 충족 조건이 단계를 전진시킨다
+- [x] `AutoAdvance.actions` 는 조건 발동 직후 실행 (DespawnWorldItem, RemoveItem, SetFlag 지원)
 - [x] `PhaseIs` 조건은 `QuestState` 를 참조해 다른 퀘스트의 단계를 비교한다
 - [x] `Branch` 액션은 중첩 가능하며 런타임 조건에 따라 액션 목록을 선택한다
 - [x] `QuestSpawn` 은 해당 `phase` 활성 + 해당 `zone` 진입 시 아이템 스폰
