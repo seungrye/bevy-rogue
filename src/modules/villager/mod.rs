@@ -378,12 +378,15 @@ fn handle_bump(
     mut kill_npc: EventWriter<KillNpcEvent>,
     mut open_portal: EventWriter<SpawnQuestPortalEvent>,
     mut despawn_item: EventWriter<DespawnWorldItemEvent>,
+    mut shop_open: EventWriter<crate::modules::ui::shop::ShopOpenEvent>,
 ) {
     for BumpTileEvent(bx, by) in events.read() {
         for mut villager in villager_query.iter_mut() {
             if villager.tile_x != *bx || villager.tile_y != *by { continue; }
 
-            if let Some(quest_id) = villager.quest_id.clone() {
+            if villager.name == "상인" {
+                shop_open.send(crate::modules::ui::shop::ShopOpenEvent);
+            } else if let Some(quest_id) = villager.quest_id.clone() {
                 let phase_before = quest_state.phases.get(&quest_id).cloned();
                 show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut kill_npc, &mut open_portal, &mut despawn_item);
                 let phase_after = quest_state.phases.get(&quest_id).cloned();

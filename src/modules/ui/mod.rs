@@ -2,6 +2,7 @@ use bevy::prelude::*;
 pub mod equipment;
 pub mod minimap;
 pub mod quest_panel;
+pub mod shop;
 use crate::modules::map::{MAP_WIDTH, TILE_SIZE};
 
 const DIALOG_PANEL_BG_COLOR: Color = Color::rgba(0.1, 0.1, 0.1, 0.8);
@@ -16,6 +17,7 @@ impl Plugin for GameUiPlugin {
         app.add_plugins(minimap::MinimapPlugin)
             .add_plugins(equipment::EquipmentPlugin)
             .add_plugins(quest_panel::QuestPanelPlugin)
+            .add_plugins(shop::ShopPlugin)
             .add_systems(Startup, setup_ui)
             .add_event::<LogMessage>()
             .init_resource::<MessageLog>()

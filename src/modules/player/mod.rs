@@ -7,7 +7,7 @@ use crate::modules::{
     },
     combat::{CombatStats, Defeated, Speed},
     item::EquipmentPanelOpen,
-    ui::LogMessage,
+    ui::{LogMessage, shop::ShopPanelOpen},
 };
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
@@ -164,8 +164,9 @@ fn player_movement(
     mut attack: EventWriter<AttackMonsterEvent>,
     _log_writer: EventWriter<LogMessage>,
     equipment_open: Res<EquipmentPanelOpen>,
+    shop_open: Res<ShopPanelOpen>,
 ) {
-    if equipment_open.0 { return; }
+    if equipment_open.0 || shop_open.0 { return; }
     let Ok((entity, transform)) = player_query.get_single() else { return };
 
     // 스페이스바: 제자리 대기 — hold state 초기화 후 턴 소비
@@ -267,9 +268,10 @@ fn on_mouse_click(
     map_res: Res<MapResource>,
     mut player_path: ResMut<PlayerPath>,
     equipment_open: Res<EquipmentPanelOpen>,
+    shop_open: Res<ShopPanelOpen>,
 ) {
     if !mouse_input.just_pressed(MouseButton::Left) { return; }
-    if equipment_open.0 { return; }
+    if equipment_open.0 || shop_open.0 { return; }
 
     let Ok(window) = windows.get_single() else { return };
     let Ok((camera, cam_transform)) = camera_q.get_single() else { return };

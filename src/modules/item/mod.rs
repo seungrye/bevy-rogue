@@ -396,13 +396,25 @@ pub struct InventoryItem {
     pub kind: ItemKind,
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct PlayerInventory {
     pub items: Vec<InventoryItem>,
     pub consumables: Vec<(ConsumableKind, u32)>,
+    pub gold: u32,
+}
+
+impl Default for PlayerInventory {
+    fn default() -> Self {
+        Self { items: Vec::new(), consumables: Vec::new(), gold: 50 }
+    }
 }
 
 impl PlayerInventory {
+    pub fn earn_gold(&mut self, amount: u32) { self.gold += amount; }
+    pub fn spend_gold(&mut self, amount: u32) -> bool {
+        if self.gold >= amount { self.gold -= amount; true } else { false }
+    }
+
     pub fn add_consumable(&mut self, kind: ConsumableKind) {
         if let Some(slot) = self.consumables.iter_mut().find(|(k, _)| *k == kind) {
             slot.1 += 1;
