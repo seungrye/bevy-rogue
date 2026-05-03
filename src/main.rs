@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::modules::ui::{DIALOG_PANEL_HEIGHT_PX, STATS_PANEL_WIDTH_PX};
+use crate::modules::ui::DIALOG_PANEL_HEIGHT_PX;
 mod modules;
 
 const HELP_TEXT: &str = "\
@@ -72,7 +72,7 @@ fn main() {
             primary_window: Some(Window {
                 title: "Bevy Rogue Map".into(),
                 resolution: (
-                    40_f32 * tile_size + STATS_PANEL_WIDTH_PX,
+                    40_f32 * tile_size,
                     25_f32 * tile_size + DIALOG_PANEL_HEIGHT_PX,
                 ).into(),
                 ..default()

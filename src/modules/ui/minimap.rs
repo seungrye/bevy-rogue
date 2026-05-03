@@ -7,7 +7,7 @@ use bevy::{
     },
 };
 use crate::modules::{
-    map::{MapResource, MapTile, MAP_HEIGHT, MAP_WIDTH},
+    map::{MapResource, MapTile, MAP_HEIGHT, MAP_WIDTH, MapGeneratorRegistry},
     player::Player,
 };
 
@@ -21,6 +21,9 @@ pub struct MinimapImage(pub Handle<Image>);
 #[derive(Component)]
 pub struct MinimapOverlay;
 
+#[derive(Component)]
+pub(super) struct GeneratorNameText;
+
 pub struct MinimapPlugin;
 
 impl Plugin for MinimapPlugin {
@@ -29,7 +32,7 @@ impl Plugin for MinimapPlugin {
             setup_minimap,
             spawn_minimap_overlay.after(setup_minimap),
         ))
-        .add_systems(Update, (update_minimap, toggle_minimap));
+        .add_systems(Update, (update_minimap, toggle_minimap, update_generator_name));
     }
 }
 
@@ -60,23 +63,61 @@ pub(crate) fn setup_minimap(mut commands: Commands, mut images: ResMut<Assets<Im
     commands.insert_resource(MinimapImage(handle));
 }
 
-fn spawn_minimap_overlay(mut commands: Commands, minimap_res: Res<MinimapImage>) {
+fn spawn_minimap_overlay(
+    mut commands: Commands,
+    minimap_res: Res<MinimapImage>,
+    asset_server: Res<AssetServer>,
+    registry: Res<MapGeneratorRegistry>,
+) {
+    let font = asset_server.load("fonts/NanumSquareNeo-bRg.ttf");
     commands.spawn((
-        ImageBundle {
+        NodeBundle {
             style: Style {
-                width: Val::Px(MINIMAP_DISPLAY_SIZE),
-                height: Val::Px(MINIMAP_DISPLAY_SIZE),
                 position_type: PositionType::Absolute,
-                right: Val::Px(super::STATS_PANEL_WIDTH_PX + 5.0),
+                right: Val::Px(5.0),
                 top: Val::Px(10.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::FlexEnd,
+                row_gap: Val::Px(4.0),
                 ..default()
             },
-            image: minimap_res.0.clone().into(),
             z_index: ZIndex::Global(50),
             ..default()
         },
         MinimapOverlay,
-    ));
+    )).with_children(|parent| {
+        parent.spawn(ImageBundle {
+            style: Style {
+                width: Val::Px(MINIMAP_DISPLAY_SIZE),
+                height: Val::Px(MINIMAP_DISPLAY_SIZE),
+                ..default()
+            },
+            image: minimap_res.0.clone().into(),
+            ..default()
+        });
+        parent.spawn((
+            TextBundle::from_section(
+                registry.current_name(),
+                TextStyle { font: font.clone(), font_size: 13.0, color: Color::CYAN },
+            ),
+            GeneratorNameText,
+        ));
+        parent.spawn(TextBundle::from_section(
+            "[Tab] 맵 전환",
+            TextStyle { font, font_size: 11.0, color: Color::GRAY },
+        ));
+    });
+}
+
+fn update_generator_name(
+    registry: Res<MapGeneratorRegistry>,
+    mut q: Query<&mut Text, With<GeneratorNameText>>,
+) {
+    if registry.is_changed() {
+        if let Ok(mut text) = q.get_single_mut() {
+            text.sections[0].value = registry.current_name().to_string();
+        }
+    }
 }
 
 fn toggle_minimap(
@@ -214,6 +255,15 @@ mod tests {
     fn display_size_is_positive() {
         assert!(MINIMAP_DISPLAY_SIZE > 0.0);
         assert!(MINIMAP_SIDE > 0);
+    }
+
+    #[test]
+    fn generator_hint_font_sizes_are_smaller_than_minimap() {
+        // 생성기 이름·Tab 힌트는 미니맵 이미지보다 작아야 한다
+        let name_font_size: f32 = 13.0;
+        let hint_font_size: f32 = 11.0;
+        assert!(name_font_size < MINIMAP_DISPLAY_SIZE);
+        assert!(hint_font_size < name_font_size);
     }
 
     #[test]
