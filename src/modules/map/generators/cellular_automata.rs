@@ -6,9 +6,10 @@ use super::{count_wall_neighbors, ensure_connectivity, add_rooms_from_floor};
 pub struct CellularAutomataGenerator;
 
 impl MapGenerator for CellularAutomataGenerator {
-    fn generate(&self, width: usize, height: usize) -> Map {
+    fn generate(&self, width: usize, height: usize, seed: u64) -> Map {
         let mut map = Map::new(width, height);
-        let mut rng = thread_rng();
+        let mut rng = StdRng::seed_from_u64(seed);
+        map.seed = seed;
 
         for y in 1..height - 1 {
             for x in 1..width - 1 {

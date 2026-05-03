@@ -121,7 +121,7 @@ QuestDef(
 - [x] `QuestSpawn` 은 해당 `phase` 활성 + 해당 `zone` 진입 시 아이템 스폰
 - [x] 이미 수집한 퀘스트 아이템은 재스폰 안 됨 (`QuestState.spawned` HashSet)
 - [x] 퀘스트 아이템은 플레이어 스폰 방(첫 번째)을 제외한 랜덤 방의 랜덤 Floor 타일에 배치 — 계단·다른 아이템과 중복 없음 (`UsedSpawnTiles` 공유)
-- [ ] 퀘스트 진행상황은 `save/progress.ron` 에 저장·복원 (추후 구현)
+- [x] 퀘스트 진행상황은 `save/progress.ron` 에 저장·복원 (`QuestState` 포함 전체 게임 상태 자동 저장)
 
 ## 퀘스트 패널 (Q 키)
 

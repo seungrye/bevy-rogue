@@ -106,7 +106,7 @@ impl QuestRegistry {
     }
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct QuestState {
     pub phases: HashMap<String, String>,            // quest_id → current_phase_id
     pub spawned: std::collections::HashSet<String>, // "quest_id:item_id" 이미 스폰됨

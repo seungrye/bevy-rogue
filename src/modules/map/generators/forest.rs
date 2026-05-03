@@ -6,9 +6,10 @@ use super::{count_wall_neighbors, ensure_connectivity, add_rooms_from_floor};
 pub struct ForestGenerator;
 
 impl MapGenerator for ForestGenerator {
-    fn generate(&self, width: usize, height: usize) -> Map {
+    fn generate(&self, width: usize, height: usize, seed: u64) -> Map {
         let mut map = Map::new(width, height);
-        let mut rng = thread_rng();
+        let mut rng = StdRng::seed_from_u64(seed);
+        map.seed = seed;
 
         // 나무 밀도 65%
         for y in 1..height - 1 {
@@ -66,7 +67,7 @@ fn carve_clearing(map: &mut Map, cx: usize, cy: usize, radius: i32) {
     }
 }
 
-fn carve_path(map: &mut Map, x1: usize, y1: usize, x2: usize, y2: usize, rng: &mut ThreadRng) {
+fn carve_path(map: &mut Map, x1: usize, y1: usize, x2: usize, y2: usize, rng: &mut impl Rng) {
     let mut x = x1 as i32;
     let mut y = y1 as i32;
     let tx = x2 as i32;

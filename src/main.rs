@@ -106,6 +106,7 @@ fn main() {
         .add_plugins(modules::villager::VillagerPlugin)
         .add_plugins(modules::zone::ZonePlugin)
         .add_plugins(modules::quest::QuestPlugin)
+        .add_plugins(modules::save::SavePlugin)
         .run();
 }
 

@@ -5,7 +5,7 @@ pub mod generators;
 // --- Trait ---
 
 pub trait MapGenerator: Send + Sync {
-    fn generate(&self, width: usize, height: usize) -> Map;
+    fn generate(&self, width: usize, height: usize, seed: u64) -> Map;
     fn name(&self) -> &str;
 }
 
@@ -19,14 +19,14 @@ pub struct TileEntity {
 
 // --- Enums / Types ---
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub enum MapTile {
     #[default]
     Wall,
     Floor,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub enum MapType {
     #[default]
     Dungeon,
@@ -54,7 +54,7 @@ impl Rect {
 
 // --- Map ---
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Map {
     pub width: usize,
     pub height: usize,
@@ -63,6 +63,10 @@ pub struct Map {
     pub revealed_tiles: Vec<bool>,
     pub visible_tiles: Vec<bool>,
     pub map_type: MapType,
+    #[serde(default)]
+    pub seed: u64,
+    #[serde(default)]
+    pub algorithm: String,
 }
 
 impl Map {
@@ -75,6 +79,8 @@ impl Map {
             revealed_tiles: vec![false; size],
             visible_tiles: vec![false; size],
             map_type: MapType::Dungeon,
+            seed: 0,
+            algorithm: String::new(),
         }
     }
     pub fn index(&self, x: usize, y: usize) -> usize { y * self.width + x }
@@ -125,6 +131,12 @@ impl MapGeneratorRegistry {
     }
     pub fn current_name(&self) -> &str {
         self.current().map(|g| g.name()).unwrap_or("없음")
+    }
+    pub fn generate_with(&self, algo: &str, width: usize, height: usize, seed: u64) -> Map {
+        self.generators.iter()
+            .find(|g| g.name() == algo)
+            .map(|g| g.generate(width, height, seed))
+            .unwrap_or_else(|| Map::new(width, height))
     }
 }
 
@@ -221,6 +233,7 @@ impl Plugin for MapPlugin {
         }
 
         app.insert_resource(registry)
+            .insert_resource(GlobalSeed(rand::random()))
             .init_resource::<GlobalTurn>()
             .init_resource::<OccupiedTiles>()
             .init_resource::<MonsterTiles>()
@@ -259,10 +272,17 @@ fn increment_global_turn(
     for _ in events.read() { turn.0 += 1; }
 }
 
-fn create_and_store_map(mut commands: Commands, registry: Res<MapGeneratorRegistry>) {
-    let map = registry.current()
-        .map(|g| g.generate(MAP_WIDTH, MAP_HEIGHT))
+fn create_and_store_map(
+    mut commands: Commands,
+    registry: Res<MapGeneratorRegistry>,
+    global_seed: Res<GlobalSeed>,
+) {
+    let seed = zone_seed_from_idx(global_seed.0, 0); // Town = index 0
+    let algo = registry.current_name().to_string();
+    let mut map = registry.current()
+        .map(|g| g.generate(MAP_WIDTH, MAP_HEIGHT, seed))
         .unwrap_or_else(|| Map::new(MAP_WIDTH, MAP_HEIGHT));
+    map.algorithm = algo;
     commands.insert_resource(MapResource(map));
 }
 
@@ -323,9 +343,12 @@ fn execute_regen(
             commands.entity(entity).despawn();
         }
 
-        let map = registry.current()
-            .map(|g| g.generate(MAP_WIDTH, MAP_HEIGHT))
+        let seed: u64 = rand::random();
+        let algo = registry.current_name().to_string();
+        let mut map = registry.current()
+            .map(|g| g.generate(MAP_WIDTH, MAP_HEIGHT, seed))
             .unwrap_or_else(|| Map::new(MAP_WIDTH, MAP_HEIGHT));
+        map.algorithm = algo;
 
         let font = asset_server.load("fonts/FiraMono-Medium.ttf");
         for y in 0..map.height {
@@ -483,6 +506,18 @@ pub const TILE_SIZE: f32 = 16.0;
 #[derive(Resource, Default)]
 pub struct GlobalTurn(pub u64);
 
+#[derive(Resource, Clone)]
+pub struct GlobalSeed(pub u64);
+
+/// global_seed 와 zone 인덱스로부터 해당 존의 맵 시드를 결정론적으로 파생한다.
+/// splitmix64 방식 — Rust 버전에 무관하게 안정적.
+pub fn zone_seed_from_idx(global_seed: u64, zone_idx: u64) -> u64 {
+    let mut x = global_seed.wrapping_add(zone_idx).wrapping_add(0x9e3779b97f4a7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
+    x ^ (x >> 31)
+}
+
 // --- Coords ---
 
 pub fn tile_to_world_coords(x: usize, y: usize) -> Vec2 {
@@ -559,7 +594,7 @@ mod tests {
 
     struct NamedGen(&'static str);
     impl MapGenerator for NamedGen {
-        fn generate(&self, width: usize, height: usize) -> Map { Map::new(width, height) }
+        fn generate(&self, width: usize, height: usize, _seed: u64) -> Map { Map::new(width, height) }
         fn name(&self) -> &str { self.0 }
     }
 

@@ -5,9 +5,10 @@ use super::super::MapGenerator;
 pub struct DrunkardWalkGenerator;
 
 impl MapGenerator for DrunkardWalkGenerator {
-    fn generate(&self, width: usize, height: usize) -> Map {
+    fn generate(&self, width: usize, height: usize, seed: u64) -> Map {
         let mut map = Map::new(width, height);
-        let mut rng = thread_rng();
+        let mut rng = StdRng::seed_from_u64(seed);
+        map.seed = seed;
         let (mut x, mut y) = (width / 2, height / 2);
         map.set_tile(x, y, MapTile::Floor);
         let target = ((width * height) as f32 * 0.4) as usize;

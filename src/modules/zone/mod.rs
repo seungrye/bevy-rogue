@@ -4,7 +4,7 @@ use crate::modules::{
     map::{
         Map, MapResource, MapGeneratorRegistry, ApplyMapEvent,
         MAP_WIDTH, MAP_HEIGHT, MapTile, tile_to_world_coords, TILE_SIZE,
-        world_to_tile_coords, GlobalTurn,
+        world_to_tile_coords, GlobalTurn, GlobalSeed, zone_seed_from_idx,
     },
     player::{MovingTo, PlayerSystemSet},
     map::{UsedSpawnTiles, random_floor_tile_in_room},
@@ -42,6 +42,25 @@ impl ZoneId {
     }
 }
 
+/// global_seed 와 ZoneId 로부터 해당 존의 맵 시드를 파생한다.
+pub fn zone_seed(global_seed: u64, zone_id: &ZoneId) -> u64 {
+    let idx: u64 = match zone_id {
+        ZoneId::Town       => 0,
+        ZoneId::Forest     => 1,
+        ZoneId::Dungeon(n) => 100 + *n as u64,
+        ZoneId::Named(s)   => {
+            // FNV-1a — 안정적이고 표준 해시
+            let mut h: u64 = 0xcbf29ce484222325;
+            for b in s.bytes() {
+                h ^= b as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            h
+        }
+    };
+    zone_seed_from_idx(global_seed, idx)
+}
+
 // ── NamedZoneConfig ───────────────────────────────────────────────────────────
 
 /// 퀘스트 포탈이 동적으로 등록하는 Named 존 설정
@@ -65,7 +84,7 @@ pub struct SpawnQuestPortalEvent {
 
 // ── ZonePersistence ──────────────────────────────────────────────────────────
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct SavedBloodStain {
     pub tile_x: usize,
     pub tile_y: usize,
@@ -73,20 +92,20 @@ pub struct SavedBloodStain {
     pub decay_per_turn: f32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct MonsterSlot {
     pub data_idx: usize,
     pub respawn_at_turn: Option<u64>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ZoneSnapshot {
     pub blood_stains: Vec<SavedBloodStain>,
     pub monster_slots: Vec<MonsterSlot>,
     pub last_visited_turn: u64,
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ZonePersistence(pub HashMap<ZoneId, ZoneSnapshot>);
 
 // ── WorldState ───────────────────────────────────────────────────────────────
@@ -230,6 +249,7 @@ fn handle_zone_transition(
     global_turn: Res<GlobalTurn>,
     mut persistence: ResMut<ZonePersistence>,
     named_config: Res<NamedZoneConfig>,
+    global_seed: Res<GlobalSeed>,
 ) {
     for transition in ev.read() {
         // 떠나는 존의 혈흔을 스냅샷에 저장하고 엔티티 제거
@@ -262,9 +282,12 @@ fn handle_zone_transition(
                 target.algorithm().to_string()
             };
             registry.select_by_name(&algo);
-            registry.current()
-                .map(|g| g.generate(MAP_WIDTH, MAP_HEIGHT))
-                .unwrap_or_else(|| Map::new(MAP_WIDTH, MAP_HEIGHT))
+            let seed = zone_seed(global_seed.0, &target);
+            let mut new_map = registry.current()
+                .map(|g| g.generate(MAP_WIDTH, MAP_HEIGHT, seed))
+                .unwrap_or_else(|| Map::new(MAP_WIDTH, MAP_HEIGHT));
+            new_map.algorithm = algo;
+            new_map
         };
 
         // 도착 위치 계산

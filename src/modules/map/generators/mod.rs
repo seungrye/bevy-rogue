@@ -153,7 +153,7 @@ mod tests {
 
     fn check_contract(gen: &dyn MapGenerator) {
         let name = gen.name();
-        let map = gen.generate(W, H);
+        let map = gen.generate(W, H, 42);
 
         // 바닥 비율 ≥ 10%
         let floor_count = map.tiles.iter().filter(|&&t| t == MapTile::Floor).count();

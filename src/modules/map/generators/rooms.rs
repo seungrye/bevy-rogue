@@ -5,10 +5,11 @@ use super::super::MapGenerator;
 pub struct SimpleRoomsGenerator;
 
 impl MapGenerator for SimpleRoomsGenerator {
-    fn generate(&self, width: usize, height: usize) -> Map {
+    fn generate(&self, width: usize, height: usize, seed: u64) -> Map {
         let mut map = Map::new(width, height);
         let mut rooms: Vec<Rect> = Vec::new();
-        let mut rng = thread_rng();
+        let mut rng = StdRng::seed_from_u64(seed);
+        map.seed = seed;
 
         for _ in 0..200 {
             if rooms.len() >= 10 { break; }

@@ -5,9 +5,10 @@ use super::super::MapGenerator;
 pub struct BspGenerator;
 
 impl MapGenerator for BspGenerator {
-    fn generate(&self, width: usize, height: usize) -> Map {
+    fn generate(&self, width: usize, height: usize, seed: u64) -> Map {
         let mut map = Map::new(width, height);
-        let mut rng = thread_rng();
+        let mut rng = StdRng::seed_from_u64(seed);
+        map.seed = seed;
 
         // 1단계: BSP 분할 → 리프 렉트 수집
         let mut leaves: Vec<Rect> = Vec::new();
@@ -41,7 +42,7 @@ impl MapGenerator for BspGenerator {
 }
 
 /// BSP 재귀 분할 — 리프 렉트를 `leaves`에 수집한다
-fn split_rect(rect: Rect, leaves: &mut Vec<Rect>, depth: usize, rng: &mut ThreadRng) {
+fn split_rect(rect: Rect, leaves: &mut Vec<Rect>, depth: usize, rng: &mut impl Rng) {
     const MIN_LEAF: usize = 10; // 리프 최소 크기
 
     let too_small = rect.width() < MIN_LEAF * 2 && rect.height() < MIN_LEAF * 2;
@@ -77,7 +78,7 @@ fn split_rect(rect: Rect, leaves: &mut Vec<Rect>, depth: usize, rng: &mut Thread
 }
 
 /// 리프 렉트 안에 여백을 두고 랜덤 크기의 방을 생성한다
-fn carve_room_in_leaf(leaf: &Rect, rng: &mut ThreadRng) -> Option<Rect> {
+fn carve_room_in_leaf(leaf: &Rect, rng: &mut impl Rng) -> Option<Rect> {
     const MARGIN: usize = 1;
     const MIN_ROOM: usize = 4;
 
@@ -107,7 +108,7 @@ mod tests {
     fn bsp_rooms_do_not_touch_each_other() {
         let gen = BspGenerator;
         for _ in 0..10 {
-            let map = gen.generate(80, 50);
+            let map = gen.generate(80, 50, 42);
             // 각 방 사이에 최소 1타일 벽이 있어야 한다
             for i in 0..map.rooms.len() {
                 for j in (i + 1)..map.rooms.len() {
@@ -129,7 +130,7 @@ mod tests {
     fn bsp_produces_multiple_rooms() {
         let gen = BspGenerator;
         for _ in 0..5 {
-            let map = gen.generate(80, 50);
+            let map = gen.generate(80, 50, 42);
             assert!(map.rooms.len() >= 4, "방이 최소 4개 이상 생성돼야 한다 (실제: {})", map.rooms.len());
         }
     }
@@ -137,7 +138,7 @@ mod tests {
     #[test]
     fn bsp_rooms_within_map_bounds() {
         let gen = BspGenerator;
-        let map = gen.generate(80, 50);
+        let map = gen.generate(80, 50, 42);
         for room in &map.rooms {
             assert!(room.x1 >= 1 && room.x2 <= 79, "방이 맵 가로 경계를 벗어남");
             assert!(room.y1 >= 1 && room.y2 <= 49, "방이 맵 세로 경계를 벗어남");

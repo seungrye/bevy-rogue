@@ -5,9 +5,10 @@ use super::super::MapGenerator;
 pub struct OrganicVillageGenerator;
 
 impl MapGenerator for OrganicVillageGenerator {
-    fn generate(&self, width: usize, height: usize) -> Map {
+    fn generate(&self, width: usize, height: usize, seed: u64) -> Map {
         let mut map = Map::new(width, height);
-        let mut rng = thread_rng();
+        let mut rng = StdRng::seed_from_u64(seed);
+        map.seed = seed;
 
         // 전체를 야외(바닥)로 채운다
         for y in 1..height - 1 {

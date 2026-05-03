@@ -6,9 +6,10 @@ use super::add_rooms_from_floor;
 pub struct DlaGenerator;
 
 impl MapGenerator for DlaGenerator {
-    fn generate(&self, width: usize, height: usize) -> Map {
+    fn generate(&self, width: usize, height: usize, seed: u64) -> Map {
         let mut map = Map::new(width, height);
-        let mut rng = thread_rng();
+        let mut rng = StdRng::seed_from_u64(seed);
+        map.seed = seed;
 
         let cx = width / 2;
         let cy = height / 2;

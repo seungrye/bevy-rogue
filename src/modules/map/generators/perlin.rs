@@ -7,9 +7,10 @@ use super::{ensure_connectivity, add_rooms_from_floor};
 pub struct PerlinNoiseGenerator;
 
 impl MapGenerator for PerlinNoiseGenerator {
-    fn generate(&self, width: usize, height: usize) -> Map {
+    fn generate(&self, width: usize, height: usize, seed: u64) -> Map {
         let mut map = Map::new(width, height);
-        let mut rng = thread_rng();
+        let mut rng = StdRng::seed_from_u64(seed);
+        map.seed = seed;
         let perlin = Perlin::new(rng.gen::<u32>());
         let scale = 0.09;
 

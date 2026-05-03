@@ -12,7 +12,7 @@ use crate::modules::{
     zone::{WorldState, ZoneId},
 };
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MarkerKind {
     QuestGiver,
     Portal,
@@ -31,7 +31,7 @@ impl MarkerKind {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct MapMarker {
     pub tile_x: usize,
     pub tile_y: usize,
@@ -39,7 +39,7 @@ pub struct MapMarker {
     pub zone: ZoneId,
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DiscoveredMarkers(pub Vec<MapMarker>);
 
 impl DiscoveredMarkers {

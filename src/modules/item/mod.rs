@@ -157,7 +157,7 @@ fn glyph_game_icon(kind: ItemKind) -> &'static str {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum QuestItemKind {
     // world_fracture 퀘스트
     EternalGem,
@@ -215,7 +215,7 @@ impl QuestItemKind {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum WeaponKind {
     Sword,
     Spear,
@@ -232,7 +232,7 @@ impl WeaponKind {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum ArmorKind {
     LeatherArmor,
 }
@@ -245,7 +245,7 @@ impl ArmorKind {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum ConsumableKind {
     HealthPotion,
 }
@@ -264,7 +264,7 @@ impl ConsumableKind {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum ItemKind {
     Weapon(WeaponKind),
     Armor(ArmorKind),
@@ -391,12 +391,12 @@ pub fn effective_defense(equipment: &PlayerEquipment) -> i32 {
     PLAYER_DEF + bonus
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct InventoryItem {
     pub kind: ItemKind,
 }
 
-#[derive(Resource)]
+#[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlayerInventory {
     pub items: Vec<InventoryItem>,
     pub consumables: Vec<(ConsumableKind, u32)>,
@@ -437,7 +437,7 @@ impl PlayerInventory {
     }
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlayerEquipment {
     pub weapon: Option<WeaponKind>,
     pub armor:  Option<ArmorKind>,
