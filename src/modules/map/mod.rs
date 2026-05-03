@@ -137,9 +137,6 @@ pub struct RegenerateMapEvent;
 pub struct PlayerRespawnEvent(pub usize, pub usize);
 
 #[derive(Event)]
-pub struct TriggerRespawnEvent(pub Vec<Rect>);
-
-#[derive(Event)]
 pub struct VillagerRespawnEvent {
     pub map_type: MapType,
     pub rooms: Vec<Rect>,
@@ -225,7 +222,6 @@ impl Plugin for MapPlugin {
             .add_event::<RegenerateMapEvent>()
             .add_event::<ApplyMapEvent>()
             .add_event::<PlayerRespawnEvent>()
-            .add_event::<TriggerRespawnEvent>()
             .add_event::<VillagerRespawnEvent>()
             .add_event::<MonsterRespawnEvent>()
             .add_event::<PlayerActedEvent>()
@@ -313,7 +309,6 @@ fn execute_regen(
     asset_server: Res<AssetServer>,
     registry: Res<MapGeneratorRegistry>,
     mut player_respawn: EventWriter<PlayerRespawnEvent>,
-    mut trigger_respawn: EventWriter<TriggerRespawnEvent>,
     mut villager_respawn: EventWriter<VillagerRespawnEvent>,
     mut monster_respawn: EventWriter<MonsterRespawnEvent>,
 ) {
@@ -355,7 +350,6 @@ fn execute_regen(
         commands.insert_resource(MapResource(map));
 
         player_respawn.send(PlayerRespawnEvent(sx, sy));
-        trigger_respawn.send(TriggerRespawnEvent(rooms.clone()));
         villager_respawn.send(VillagerRespawnEvent { map_type, rooms: rooms.clone() });
         monster_respawn.send(MonsterRespawnEvent { map_type, rooms });
     }
@@ -411,7 +405,6 @@ fn execute_apply(
     tile_query: Query<Entity, With<TileEntity>>,
     asset_server: Res<AssetServer>,
     mut player_respawn: EventWriter<PlayerRespawnEvent>,
-    mut trigger_respawn: EventWriter<TriggerRespawnEvent>,
     mut villager_respawn: EventWriter<VillagerRespawnEvent>,
     mut monster_respawn: EventWriter<MonsterRespawnEvent>,
 ) {
@@ -450,7 +443,6 @@ fn execute_apply(
         commands.insert_resource(MapResource(map.clone()));
 
         player_respawn.send(PlayerRespawnEvent(sx, sy));
-        trigger_respawn.send(TriggerRespawnEvent(rooms.clone()));
         villager_respawn.send(VillagerRespawnEvent { map_type, rooms: rooms.clone() });
         monster_respawn.send(MonsterRespawnEvent { map_type, rooms });
     }

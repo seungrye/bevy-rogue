@@ -6,7 +6,6 @@ pub mod map;
 pub mod monster;
 pub mod player;
 pub mod quest;
-pub mod trigger;
 pub mod ui;
 pub mod villager;
 pub mod zone;

@@ -9,6 +9,7 @@ use crate::modules::{
 
 pub const POTION_HEAL: i32 = 8;
 const Z_ITEM: f32 = 0.3;
+const Z_QUEST_POPUP: i32 = 100;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum GlyphStyle {
@@ -336,6 +337,12 @@ pub struct Item {
     pub tile_y: usize,
 }
 
+#[derive(Event)]
+pub struct QuestItemAcquiredEvent(pub QuestItemKind);
+
+#[derive(Component)]
+struct QuestItemPopup;
+
 /// 몬스터 처치 시 아이템 드롭을 요청하는 이벤트
 #[derive(Event)]
 pub struct ItemDropEvent {
@@ -379,6 +386,7 @@ impl Plugin for ItemPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(GlyphConfig { style: self.initial_glyph_style })
             .add_event::<ItemDropEvent>()
+            .add_event::<QuestItemAcquiredEvent>()
             .init_resource::<PlayerInventory>()
             .init_resource::<PlayerEquipment>()
             .init_resource::<EquipmentPanelOpen>()
@@ -389,6 +397,8 @@ impl Plugin for ItemPlugin {
                 apply_equipment_stats,
                 update_item_glyphs,
                 cycle_glyph_style,
+                spawn_quest_item_popup,
+                close_quest_item_popup,
             ));
     }
 }
@@ -461,6 +471,7 @@ fn pickup_items(
     item_query: Query<(Entity, &Item)>,
     mut inventory: ResMut<PlayerInventory>,
     mut log: EventWriter<LogMessage>,
+    mut quest_acquired: EventWriter<QuestItemAcquiredEvent>,
 ) {
     if turn_events.read().next().is_none() { return; }
     let Ok((moving_to, transform)) = player_query.get_single() else { return };
@@ -482,6 +493,9 @@ fn pickup_items(
                 inventory.add_consumable(ck);
             }
         }
+        if let ItemKind::QuestItem(qk) = kind {
+            quest_acquired.send(QuestItemAcquiredEvent(qk));
+        }
         log.send(LogMessage(kind.pickup_message().to_string()));
         commands.entity(entity).despawn();
     }
@@ -495,6 +509,68 @@ fn apply_equipment_stats(
     let Ok(mut stats) = player_query.get_single_mut() else { return };
     stats.attack  = effective_attack(&equipment);
     stats.defense = effective_defense(&equipment);
+}
+
+fn quest_item_image_path(kind: QuestItemKind) -> &'static str {
+    match kind {
+        QuestItemKind::EternalGem        => "scene/open-chest.png",
+        QuestItemKind::PhilosophersStone => "scene/open-chest.png",
+        QuestItemKind::DragonScale       => "scene/open-chest.png",
+        QuestItemKind::AncientScroll     => "scene/open-chest.png",
+    }
+}
+
+fn spawn_quest_item_popup(
+    mut commands: Commands,
+    mut events: EventReader<QuestItemAcquiredEvent>,
+    asset_server: Res<AssetServer>,
+    popup_q: Query<(), With<QuestItemPopup>>,
+) {
+    for QuestItemAcquiredEvent(kind) in events.read() {
+        if !popup_q.is_empty() { continue; }
+        let image = asset_server.load(quest_item_image_path(*kind));
+        commands.spawn((
+            NodeBundle {
+                style: Style {
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    position_type: PositionType::Absolute,
+                    ..default()
+                },
+                z_index: ZIndex::Global(Z_QUEST_POPUP),
+                background_color: Color::NONE.into(),
+                ..default()
+            },
+            QuestItemPopup,
+        )).with_children(|parent| {
+            parent.spawn(ImageBundle {
+                image: image.into(),
+                style: Style {
+                    width: Val::Percent(50.0),
+                    height: Val::Auto,
+                    ..default()
+                },
+                ..default()
+            });
+        });
+    }
+}
+
+fn close_quest_item_popup(
+    mut commands: Commands,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    popup_q: Query<Entity, With<QuestItemPopup>>,
+) {
+    let Ok(entity) = popup_q.get_single() else { return };
+    let close_keys = [
+        KeyCode::ArrowUp, KeyCode::ArrowDown, KeyCode::ArrowLeft, KeyCode::ArrowRight,
+        KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD, KeyCode::Escape,
+    ];
+    if close_keys.iter().any(|&k| keyboard_input.just_pressed(k)) {
+        commands.entity(entity).despawn_recursive();
+    }
 }
 
 #[cfg(test)]

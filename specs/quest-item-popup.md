@@ -1,0 +1,31 @@
+# 퀘스트 아이템 획득 팝업
+
+## 목적
+
+퀘스트 아이템을 획득했을 때 이미지 팝업을 출력하여 중요한 획득 순간을 강조한다.
+
+## 동작
+
+- [x] chest "?" 트리거 심볼 제거 (trigger 모듈 삭제)
+- [x] 플레이어가 퀘스트 아이템 위를 지나면 자동 획득 + `QuestItemAcquiredEvent` 발행
+- [x] 이미지 팝업이 화면 중앙에 표시된다 (z-index 100, 다른 UI 위에 렌더링)
+- [x] 이동키(←→↑↓, WASD) 또는 Escape 키로 팝업을 닫는다
+- [x] 팝업이 이미 열려 있으면 중복 스폰하지 않는다
+
+## 이미지 매핑
+
+각 퀘스트 아이템 종류별로 이미지 경로를 `quest_item_image_path()` 함수에서 관리한다.
+현재는 `scene/open-chest.png`를 공통으로 사용하며, 이후 아이템별 이미지로 교체한다.
+
+| 아이템 | 경로 |
+|--------|------|
+| 영원의 보석 | scene/open-chest.png (placeholder) |
+| 현자의 돌   | scene/open-chest.png (placeholder) |
+| 용비늘      | scene/open-chest.png (placeholder) |
+| 고대 주문서 | scene/open-chest.png (placeholder) |
+
+## 제거된 기능
+
+- `trigger` 모듈 전체 삭제
+- `TriggerRespawnEvent` 삭제 (map 모듈에서 발행 제거)
+- 맵 방 중앙의 "?" 랜덤 배치 제거

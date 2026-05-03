@@ -102,7 +102,6 @@ fn main() {
         .add_plugins(modules::monster::MonsterPlugin)
         .add_plugins(modules::combat_feedback::CombatFeedbackPlugin)
         .add_plugins(ItemPlugin { initial_glyph_style })
-        .add_plugins(modules::trigger::TriggerPlugin)
         .add_plugins(modules::ui::GameUiPlugin)
         .add_plugins(modules::villager::VillagerPlugin)
         .add_plugins(modules::zone::ZonePlugin)
