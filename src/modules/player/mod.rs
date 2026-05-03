@@ -1,13 +1,18 @@
 use crate::modules::{
     map::{
-        draw_map, Map, MapResource, MapTile,
+        draw_map, Map, MapResource, MapTile, OccupiedTiles,
         tile_to_world_coords, world_to_tile_coords,
         MAP_HEIGHT, MAP_WIDTH, TILE_SIZE,
-        MapSystemSet, PlayerRespawnEvent,
+        MapSystemSet, PlayerRespawnEvent, PlayerActedEvent, BumpTileEvent,
     },
     ui::LogMessage,
 };
 use bevy::prelude::*;
+
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PlayerSystemSet {
+    Movement,
+}
 
 const LERP_SPEED: f32 = 7.5;
 
@@ -47,24 +52,34 @@ fn player_movement(
     keyboard_input: Res<ButtonInput<KeyCode>>,
     player_query: Query<(Entity, &Transform), (With<Player>, Without<MovingTo>)>,
     map_res: Res<MapResource>,
+    occupied: Res<OccupiedTiles>,
+    mut acted: EventWriter<PlayerActedEvent>,
+    mut bump: EventWriter<BumpTileEvent>,
     mut log_writer: EventWriter<LogMessage>,
 ) {
     let Ok((entity, transform)) = player_query.get_single() else { return };
     let mut delta = IVec2::ZERO;
-    if keyboard_input.pressed(KeyCode::ArrowLeft)  || keyboard_input.pressed(KeyCode::KeyA) { delta.x -= 1; }
-    if keyboard_input.pressed(KeyCode::ArrowRight) || keyboard_input.pressed(KeyCode::KeyD) { delta.x += 1; }
-    if keyboard_input.pressed(KeyCode::ArrowUp)    || keyboard_input.pressed(KeyCode::KeyW) { delta.y += 1; }
-    if keyboard_input.pressed(KeyCode::ArrowDown)  || keyboard_input.pressed(KeyCode::KeyS) { delta.y -= 1; }
+    if keyboard_input.just_pressed(KeyCode::ArrowLeft)  || keyboard_input.just_pressed(KeyCode::KeyA) { delta.x -= 1; }
+    if keyboard_input.just_pressed(KeyCode::ArrowRight) || keyboard_input.just_pressed(KeyCode::KeyD) { delta.x += 1; }
+    if keyboard_input.just_pressed(KeyCode::ArrowUp)    || keyboard_input.just_pressed(KeyCode::KeyW) { delta.y += 1; }
+    if keyboard_input.just_pressed(KeyCode::ArrowDown)  || keyboard_input.just_pressed(KeyCode::KeyS) { delta.y -= 1; }
     if delta == IVec2::ZERO { return; }
 
     let (cx, cy) = world_to_tile_coords(transform.translation);
     let tx = (cx as i32 + delta.x) as usize;
     let ty = (cy as i32 + delta.y) as usize;
 
-    if map_res.map().get_tile(tx, ty) == MapTile::Floor {
+    if map_res.map().get_tile(tx, ty) != MapTile::Floor { return; }
+
+    if occupied.0.contains(&(tx, ty)) {
+        // 주민과 충돌: 대사 트리거 + 턴 소비
+        bump.send(BumpTileEvent(tx, ty));
+        acted.send(PlayerActedEvent);
+    } else {
         log_writer.send(LogMessage(format!("({}, {}) 로 이동합니다.", tx, ty)));
         let wp = tile_to_world_coords(tx, ty);
         commands.entity(entity).insert(MovingTo { target: Vec3::new(wp.x, wp.y, 1.0) });
+        acted.send(PlayerActedEvent);
     }
 }
 
@@ -170,8 +185,8 @@ impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_player.after(draw_map))
             .add_systems(Update, (
-                player_movement,
-                smooth_player_lerp.after(player_movement),
+                player_movement.in_set(PlayerSystemSet::Movement),
+                smooth_player_lerp.after(PlayerSystemSet::Movement),
                 update_fov.after(smooth_player_lerp),
                 camera_follow_player.after(update_fov),
                 respawn_player_on_regen.after(MapSystemSet::ExecuteRegen),

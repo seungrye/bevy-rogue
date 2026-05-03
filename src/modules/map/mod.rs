@@ -19,10 +19,18 @@ pub struct TileEntity {
 
 // --- Enums / Types ---
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub enum MapTile {
+    #[default]
     Wall,
     Floor,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+pub enum MapType {
+    #[default]
+    Dungeon,
+    Village,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -53,6 +61,7 @@ pub struct Map {
     pub rooms: Vec<Rect>,
     pub revealed_tiles: Vec<bool>,
     pub visible_tiles: Vec<bool>,
+    pub map_type: MapType,
 }
 
 impl Map {
@@ -64,6 +73,7 @@ impl Map {
             rooms: Vec::new(),
             revealed_tiles: vec![false; size],
             visible_tiles: vec![false; size],
+            map_type: MapType::Dungeon,
         }
     }
     pub fn index(&self, x: usize, y: usize) -> usize { y * self.width + x }
@@ -128,6 +138,23 @@ pub struct PlayerRespawnEvent(pub usize, pub usize);
 #[derive(Event)]
 pub struct TriggerRespawnEvent(pub Vec<Rect>);
 
+#[derive(Event)]
+pub struct VillagerRespawnEvent {
+    pub map_type: MapType,
+    pub rooms: Vec<Rect>,
+}
+
+#[derive(Resource, Default)]
+pub struct OccupiedTiles(pub std::collections::HashSet<(usize, usize)>);
+
+/// 플레이어가 이동하거나 주민과 부딪혀 턴을 소비했을 때 발행
+#[derive(Event)]
+pub struct PlayerActedEvent;
+
+/// 플레이어가 주민이 점유한 타일로 이동을 시도했을 때 발행
+#[derive(Event)]
+pub struct BumpTileEvent(pub usize, pub usize);
+
 // --- System Set ---
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -137,7 +164,15 @@ pub enum MapSystemSet {
 
 // --- Plugin ---
 
-pub struct MapPlugin;
+pub struct MapPlugin {
+    pub initial_algorithm: Option<String>,
+}
+
+impl Default for MapPlugin {
+    fn default() -> Self {
+        Self { initial_algorithm: None }
+    }
+}
 
 impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
@@ -156,10 +191,18 @@ impl Plugin for MapPlugin {
         registry.register(Box::new(forest::ForestGenerator));
         registry.register(Box::new(perlin::PerlinNoiseGenerator));
 
+        if let Some(name) = &self.initial_algorithm {
+            registry.select_by_name(name);
+        }
+
         app.insert_resource(registry)
+            .init_resource::<OccupiedTiles>()
             .add_event::<RegenerateMapEvent>()
             .add_event::<PlayerRespawnEvent>()
             .add_event::<TriggerRespawnEvent>()
+            .add_event::<VillagerRespawnEvent>()
+            .add_event::<PlayerActedEvent>()
+            .add_event::<BumpTileEvent>()
             .add_systems(Startup, (
                 create_and_store_map,
                 draw_map.after(create_and_store_map),
@@ -233,6 +276,7 @@ fn execute_regen(
     registry: Res<MapGeneratorRegistry>,
     mut player_respawn: EventWriter<PlayerRespawnEvent>,
     mut trigger_respawn: EventWriter<TriggerRespawnEvent>,
+    mut villager_respawn: EventWriter<VillagerRespawnEvent>,
 ) {
     for _ in events.read() {
         for entity in tile_query.iter() {
@@ -268,10 +312,12 @@ fn execute_regen(
 
         let (sx, sy) = find_spawn_point(&map);
         let rooms = map.rooms.clone();
+        let map_type = map.map_type;
         commands.insert_resource(MapResource(map));
 
         player_respawn.send(PlayerRespawnEvent(sx, sy));
-        trigger_respawn.send(TriggerRespawnEvent(rooms));
+        trigger_respawn.send(TriggerRespawnEvent(rooms.clone()));
+        villager_respawn.send(VillagerRespawnEvent { map_type, rooms });
     }
 }
 

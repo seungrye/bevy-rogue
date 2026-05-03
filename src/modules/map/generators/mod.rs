@@ -11,7 +11,6 @@ pub mod forest;
 pub mod perlin;
 
 use super::{Map, MapTile, Rect};
-use rand::prelude::*;
 
 /// 연결되지 않은 바닥 타일을 벽으로 채워 맵의 접근 가능 영역을 단일 연결 요소로 만든다.
 pub fn ensure_connectivity(map: &mut Map) {
@@ -136,17 +135,6 @@ pub fn carve_corridor(map: &mut Map, x1: usize, y1: usize, x2: usize, y2: usize)
     map.set_tile(x as usize, y as usize, MapTile::Floor);
 }
 
-/// 맵에서 임의의 바닥 타일 좌표를 반환한다.
-pub fn random_floor_tile(map: &Map, rng: &mut ThreadRng) -> (usize, usize) {
-    let tiles: Vec<(usize, usize)> = (1..map.height - 1)
-        .flat_map(|y| (1..map.width - 1).map(move |x| (x, y)))
-        .filter(|&(x, y)| map.get_tile(x, y) == MapTile::Floor)
-        .collect();
-    if tiles.is_empty() {
-        return (map.width / 2, map.height / 2);
-    }
-    tiles[rng.gen_range(0..tiles.len())]
-}
 
 #[cfg(test)]
 mod tests {
@@ -199,4 +187,20 @@ mod tests {
     #[test] fn grid_village_contract()     { check_contract(&grid_village::GridVillageGenerator); }
     #[test] fn forest_contract()           { check_contract(&forest::ForestGenerator); }
     #[test] fn perlin_contract()           { check_contract(&perlin::PerlinNoiseGenerator); }
+
+    // CLI --algorithm 인수와 select_by_name 이 사용하는 등록 이름 검증
+    #[test]
+    fn generator_names_match_spec() {
+        assert_eq!(bsp::BspGenerator.name(),                                    "bsp");
+        assert_eq!(rooms::SimpleRoomsGenerator.name(),                          "simple_rooms");
+        assert_eq!(drunkard::DrunkardWalkGenerator.name(),                      "drunkard");
+        assert_eq!(cellular_automata::CellularAutomataGenerator.name(),         "cellular_automata");
+        assert_eq!(dla::DlaGenerator.name(),                                    "dla");
+        assert_eq!(bsp_indoor::BspIndoorGenerator.name(),                       "bsp_indoor");
+        assert_eq!(prefab::PrefabGenerator.name(),                              "prefab");
+        assert_eq!(organic_village::OrganicVillageGenerator.name(),             "organic_village");
+        assert_eq!(grid_village::GridVillageGenerator.name(),                   "grid_village");
+        assert_eq!(forest::ForestGenerator.name(),                              "forest");
+        assert_eq!(perlin::PerlinNoiseGenerator.name(),                         "perlin");
+    }
 }

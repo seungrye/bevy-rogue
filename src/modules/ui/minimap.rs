@@ -18,6 +18,9 @@ pub const MINIMAP_DISPLAY_SIZE: f32 = 180.0;
 #[derive(Resource)]
 pub struct MinimapImage(pub Handle<Image>);
 
+#[derive(Component)]
+pub struct MinimapOverlay;
+
 pub struct MinimapPlugin;
 
 impl Plugin for MinimapPlugin {
@@ -26,7 +29,14 @@ impl Plugin for MinimapPlugin {
             setup_minimap,
             spawn_minimap_overlay.after(setup_minimap),
         ))
-        .add_systems(Update, update_minimap);
+        .add_systems(Update, (update_minimap, toggle_minimap));
+    }
+}
+
+fn toggle_visibility(vis: Visibility) -> Visibility {
+    match vis {
+        Visibility::Hidden => Visibility::Inherited,
+        _ => Visibility::Hidden,
     }
 }
 
@@ -51,19 +61,33 @@ pub(crate) fn setup_minimap(mut commands: Commands, mut images: ResMut<Assets<Im
 }
 
 fn spawn_minimap_overlay(mut commands: Commands, minimap_res: Res<MinimapImage>) {
-    commands.spawn(ImageBundle {
-        style: Style {
-            width: Val::Px(MINIMAP_DISPLAY_SIZE),
-            height: Val::Px(MINIMAP_DISPLAY_SIZE),
-            position_type: PositionType::Absolute,
-            right: Val::Px(220.0),
-            bottom: Val::Px(104.0),
+    commands.spawn((
+        ImageBundle {
+            style: Style {
+                width: Val::Px(MINIMAP_DISPLAY_SIZE),
+                height: Val::Px(MINIMAP_DISPLAY_SIZE),
+                position_type: PositionType::Absolute,
+                right: Val::Px(super::STATS_PANEL_WIDTH_PX + 5.0),
+                top: Val::Px(10.0),
+                ..default()
+            },
+            image: minimap_res.0.clone().into(),
+            z_index: ZIndex::Global(50),
             ..default()
         },
-        image: minimap_res.0.clone().into(),
-        z_index: ZIndex::Global(50),
-        ..default()
-    });
+        MinimapOverlay,
+    ));
+}
+
+fn toggle_minimap(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut q: Query<&mut Visibility, With<MinimapOverlay>>,
+) {
+    if keyboard.just_pressed(KeyCode::KeyM) {
+        if let Ok(mut vis) = q.get_single_mut() {
+            *vis = toggle_visibility(*vis);
+        }
+    }
 }
 
 fn is_outside_diamond(tx: u32, ty: u32) -> bool {
@@ -190,5 +214,23 @@ mod tests {
     fn display_size_is_positive() {
         assert!(MINIMAP_DISPLAY_SIZE > 0.0);
         assert!(MINIMAP_SIDE > 0);
+    }
+
+    #[test]
+    fn toggle_visible_to_hidden() {
+        assert_eq!(toggle_visibility(Visibility::Inherited), Visibility::Hidden);
+        assert_eq!(toggle_visibility(Visibility::Visible), Visibility::Hidden);
+    }
+
+    #[test]
+    fn toggle_hidden_to_visible() {
+        assert_eq!(toggle_visibility(Visibility::Hidden), Visibility::Inherited);
+    }
+
+    #[test]
+    fn double_toggle_restores_visible() {
+        let original = Visibility::Inherited;
+        let after_two_toggles = toggle_visibility(toggle_visibility(original));
+        assert_eq!(after_two_toggles, Visibility::Inherited);
     }
 }
