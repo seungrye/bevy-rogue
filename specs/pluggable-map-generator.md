@@ -38,6 +38,15 @@ pub trait MapGenerator: Send + Sync {
 - [x] `map.rooms`가 비어있지 않거나, 최소 하나의 Floor 타일 좌표를 반환하는 수단이 존재한다
   (플레이어 스폰 지점 결정에 사용).
 
+### ensure_connectivity 동작 명세
+
+`ensure_connectivity(map)`는 단일 연결 구역만 남기는 후처리 함수다.
+
+- [x] 맵 중앙(`width/2, height/2`)이 Floor면 거기서 flood fill을 시작한다
+  (중앙 구역이 가장자리 고립 구역보다 우선 보존됨)
+- [x] 중앙이 Wall이면 좌상단부터 스캔해 첫 번째 Floor 타일에서 시작한다 (fallback)
+- [x] 시작 타일에서 연결되지 않은 모든 Floor 타일은 Wall로 변환된다
+
 ### 런타임 전환
 
 - [x] `Tab` 키를 누르면 다음 생성기로 순환하며 맵을 즉시 재생성한다.

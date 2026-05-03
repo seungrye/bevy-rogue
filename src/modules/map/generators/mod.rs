@@ -13,13 +13,19 @@ pub mod perlin;
 use super::{Map, MapTile, Rect};
 
 /// 연결되지 않은 바닥 타일을 벽으로 채워 맵의 접근 가능 영역을 단일 연결 요소로 만든다.
+/// 중앙이 Floor면 거기서 시작해 중앙 구역이 보존되도록 한다.
 pub fn ensure_connectivity(map: &mut Map) {
     let width = map.width;
     let height = map.height;
+    let (cx, cy) = (width / 2, height / 2);
 
-    let start = (1..height - 1)
-        .flat_map(|y| (1..width - 1).map(move |x| (x, y)))
-        .find(|&(x, y)| map.get_tile(x, y) == MapTile::Floor);
+    let start = if map.get_tile(cx, cy) == MapTile::Floor {
+        Some((cx, cy))
+    } else {
+        (1..height - 1)
+            .flat_map(|y| (1..width - 1).map(move |x| (x, y)))
+            .find(|&(x, y)| map.get_tile(x, y) == MapTile::Floor)
+    };
 
     let Some((sx, sy)) = start else { return };
 
@@ -174,6 +180,54 @@ mod tests {
             "[{}] 방 개수 {} < 2",
             name, map.rooms.len()
         );
+    }
+
+    // ensure_connectivity 단위 테스트
+    #[test]
+    fn ensure_connectivity_keeps_center_component_over_corner() {
+        use super::super::Map;
+        use super::ensure_connectivity;
+
+        // 20×20 맵: 코너(1,1)에 고립된 작은 Floor 구역 + 중앙에 큰 Floor 구역
+        let (w, h) = (20, 20);
+        let mut map = Map::new(w, h);
+
+        // 좌상단 고립 구역 (스캔 순서상 먼저 발견됨)
+        map.set_tile(1, 1, MapTile::Floor);
+        map.set_tile(2, 1, MapTile::Floor);
+        map.set_tile(1, 2, MapTile::Floor);
+
+        // 중앙 3×3 구역
+        let (cx, cy) = (w / 2, h / 2);
+        for dy in -1i32..=1 {
+            for dx in -1i32..=1 {
+                map.set_tile((cx as i32 + dx) as usize, (cy as i32 + dy) as usize, MapTile::Floor);
+            }
+        }
+
+        ensure_connectivity(&mut map);
+
+        // 중앙 Floor 보존
+        assert_eq!(map.get_tile(cx, cy), MapTile::Floor, "중앙 타일이 유지돼야 한다");
+        // 코너 고립 구역 제거
+        assert_eq!(map.get_tile(1, 1), MapTile::Wall, "고립된 코너 구역은 제거돼야 한다");
+    }
+
+    #[test]
+    fn ensure_connectivity_falls_back_when_center_is_wall() {
+        use super::super::Map;
+        use super::ensure_connectivity;
+
+        let (w, h) = (10, 10);
+        let mut map = Map::new(w, h);
+        // 중앙은 Wall, 코너에만 Floor
+        map.set_tile(1, 1, MapTile::Floor);
+        map.set_tile(2, 1, MapTile::Floor);
+
+        ensure_connectivity(&mut map);
+
+        // 중앙이 Wall이면 첫 번째 Floor 구역을 유지
+        assert_eq!(map.get_tile(1, 1), MapTile::Floor);
     }
 
     #[test] fn bsp_contract()              { check_contract(&bsp::BspGenerator); }
