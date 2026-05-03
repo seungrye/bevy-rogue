@@ -1,4 +1,5 @@
 pub mod combat;
+pub mod combat_feedback;
 pub mod core;
 pub mod map;
 pub mod monster;

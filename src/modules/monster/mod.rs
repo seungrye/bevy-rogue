@@ -10,6 +10,7 @@ use crate::modules::{
     player::{Player, MovingTo, PlayerSystemSet},
     combat::{CombatStats, Defeated, calc_damage},
     ui::LogMessage,
+    combat_feedback::CombatFeedbackEvent,
 };
 
 const Z_MONSTER: f32 = 0.8;
@@ -109,15 +110,26 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
 fn handle_player_attack(
     mut events: EventReader<AttackMonsterEvent>,
     player_query: Query<&CombatStats, (With<Player>, Without<Monster>)>,
-    mut monster_query: Query<(&Monster, &mut CombatStats), Without<Player>>,
+    mut monster_query: Query<(Entity, &Monster, &mut CombatStats), Without<Player>>,
     mut log_writer: EventWriter<LogMessage>,
+    mut feedback_writer: EventWriter<CombatFeedbackEvent>,
 ) {
     for AttackMonsterEvent(tx, ty) in events.read() {
         let Ok(player_stats) = player_query.get_single() else { continue };
-        for (monster, mut monster_stats) in monster_query.iter_mut() {
+        for (monster_entity, monster, mut monster_stats) in monster_query.iter_mut() {
             if monster.tile_x != *tx || monster.tile_y != *ty { continue; }
             let dmg = calc_damage(player_stats.attack, monster_stats.defense);
             monster_stats.hp -= dmg;
+            let original_color = MONSTER_DATA.iter()
+                .find(|(n, ..)| *n == monster.name.as_str())
+                .map(|(_, _, c, ..)| Color::rgb(c[0], c[1], c[2]))
+                .unwrap_or(Color::WHITE);
+            feedback_writer.send(CombatFeedbackEvent {
+                tile_x: *tx,
+                tile_y: *ty,
+                hit_entity: monster_entity,
+                original_color,
+            });
             if monster_stats.hp <= 0 {
                 log_writer.send(LogMessage(format!(
                     "{}을(를) 처치했다! ({} 데미지)", monster.name, dmg
@@ -140,6 +152,7 @@ fn monster_turn(
     mut monster_query: Query<(&mut Monster, &mut Transform, &CombatStats), Without<Player>>,
     mut player_query: Query<(Entity, &Transform, Option<&MovingTo>, &mut CombatStats), (With<Player>, Without<Monster>)>,
     mut log_writer: EventWriter<LogMessage>,
+    mut feedback_writer: EventWriter<CombatFeedbackEvent>,
 ) {
     if events.read().next().is_none() { return; }
 
@@ -171,6 +184,12 @@ fn monster_turn(
             if !player_dead {
                 let dmg = calc_damage(monster_stats.attack, player_stats.defense);
                 player_stats.hp -= dmg;
+                feedback_writer.send(CombatFeedbackEvent {
+                    tile_x: px,
+                    tile_y: py,
+                    hit_entity: player_entity,
+                    original_color: Color::YELLOW,
+                });
                 if player_stats.hp <= 0 {
                     player_dead = true;
                     log_writer.send(LogMessage(format!(
