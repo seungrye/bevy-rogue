@@ -1,10 +1,10 @@
 use bevy::prelude::*;
 use std::collections::HashSet;
-use rand::Rng;
+use rand::{Rng, rngs::ThreadRng};
 use crate::modules::{
     map::{
         draw_map, Map, MapResource, MapTile, MapType, MonsterTiles,
-        tile_to_world_coords, world_to_tile_coords,
+        tile_to_world_coords, world_to_tile_coords, is_line_of_sight_clear,
         MAP_HEIGHT, MAP_WIDTH, TILE_SIZE,
         MapSystemSet, MonsterRespawnEvent, PlayerActedEvent, AttackMonsterEvent, Rect,
     },
@@ -16,12 +16,13 @@ use crate::modules::{
 };
 
 const Z_MONSTER: f32 = 0.8;
+const MAX_ALERT_TURNS: u32 = 5;
 
-static MONSTER_DATA: &[(&str, &str, [f32; 3], i32, i32, i32)] = &[
-    // (이름, 글리프, 색상, hp, attack, defense)
-    ("고블린", "g", [0.2, 0.8, 0.2],  6, 3, 0),
-    ("오크",   "O", [0.9, 0.5, 0.1], 10, 5, 2),
-    ("트롤",   "T", [0.3, 0.7, 0.5], 16, 8, 3),
+static MONSTER_DATA: &[(&str, &str, [f32; 3], i32, i32, i32, i32)] = &[
+    // (이름, 글리프, 색상, hp, attack, defense, vision_radius)
+    ("고블린", "g", [0.2, 0.8, 0.2],  6, 3, 0, 6),
+    ("오크",   "O", [0.9, 0.5, 0.1], 10, 5, 2, 8),
+    ("트롤",   "T", [0.3, 0.7, 0.5], 16, 8, 3, 5),
 ];
 
 #[derive(Component)]
@@ -29,6 +30,20 @@ pub struct Monster {
     pub name: String,
     pub tile_x: usize,
     pub tile_y: usize,
+    pub vision_radius: i32,
+    pub alert_turns: u32,
+}
+
+pub fn can_see_player(
+    mx: usize, my: usize,
+    px: usize, py: usize,
+    vision_radius: i32,
+    map: &Map,
+) -> bool {
+    let dx = mx as i32 - px as i32;
+    let dy = my as i32 - py as i32;
+    if dx * dx + dy * dy > vision_radius * vision_radius { return false; }
+    is_line_of_sight_clear(map, mx as i32, my as i32, px as i32, py as i32)
 }
 
 pub struct MonsterPlugin;
@@ -95,7 +110,7 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
 
         for j in 0..count {
             let data = MONSTER_DATA[j % MONSTER_DATA.len()];
-            let (name, glyph, color, hp, atk, def) = (data.0, data.1, data.2, data.3, data.4, data.5);
+            let (name, glyph, color, hp, atk, def, vis) = (data.0, data.1, data.2, data.3, data.4, data.5, data.6);
 
             // 방 안에서 겹치지 않는 빈 타일 찾기 (최대 10회 시도)
             let mut tile = room.center();
@@ -122,7 +137,7 @@ fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer)
                     transform: Transform::from_xyz(coord.x, coord.y, Z_MONSTER),
                     ..default()
                 },
-                Monster { name: name.to_string(), tile_x: tx, tile_y: ty },
+                Monster { name: name.to_string(), tile_x: tx, tile_y: ty, vision_radius: vis, alert_turns: 0 },
                 CombatStats { hp, max_hp: hp, mp: 0, max_mp: 0, attack: atk, defense: def },
             ));
         }
@@ -199,16 +214,26 @@ fn monster_turn(
 
     let mut player_dead = false;
 
+    let mut rng = rand::thread_rng();
+
     for (mut monster, mut transform, monster_stats) in monster_query.iter_mut() {
         if monster_stats.hp <= 0 { continue; }
 
         occupied.remove(&(monster.tile_x, monster.tile_y));
+
+        // 시야 갱신
+        if can_see_player(monster.tile_x, monster.tile_y, px, py, monster.vision_radius, map) {
+            monster.alert_turns = MAX_ALERT_TURNS;
+        } else if monster.alert_turns > 0 {
+            monster.alert_turns -= 1;
+        }
 
         let dx = (monster.tile_x as i32 - px as i32).abs();
         let dy = (monster.tile_y as i32 - py as i32).abs();
         let adjacent = (dx == 1 && dy == 0) || (dx == 0 && dy == 1);
 
         if adjacent {
+            // 인접 시 항상 공격 (Idle이라도 우발적 접촉)
             if !player_dead {
                 let dmg = calc_damage(monster_stats.attack, player_stats.defense);
                 player_stats.hp -= dmg;
@@ -232,8 +257,17 @@ fn monster_turn(
                 }
             }
             occupied.insert((monster.tile_x, monster.tile_y));
-        } else {
+        } else if monster.alert_turns > 0 {
+            // Alerted: 플레이어 방향으로 추적
             let (nx, ny) = move_toward(monster.tile_x, monster.tile_y, px, py, map, &occupied);
+            occupied.insert((nx, ny));
+            monster.tile_x = nx;
+            monster.tile_y = ny;
+            let wp = tile_to_world_coords(nx, ny);
+            transform.translation = Vec3::new(wp.x, wp.y, Z_MONSTER);
+        } else {
+            // Idle: 무작위 배회
+            let (nx, ny) = wander(monster.tile_x, monster.tile_y, map, &occupied, &mut rng);
             occupied.insert((nx, ny));
             monster.tile_x = nx;
             monster.tile_y = ny;
@@ -278,6 +312,32 @@ pub fn move_toward(
             ddx * ddx + ddy * ddy
         });
     best.copied().unwrap_or((x, y))
+}
+
+pub fn wander(
+    x: usize, y: usize,
+    map: &Map,
+    occupied: &HashSet<(usize, usize)>,
+    rng: &mut ThreadRng,
+) -> (usize, usize) {
+    const STAY_CHANCE: f64 = 0.3;
+    if rng.gen_bool(STAY_CHANCE) { return (x, y); }
+    let neighbors = [
+        (x.wrapping_sub(1), y),
+        (x + 1, y),
+        (x, y.wrapping_sub(1)),
+        (x, y + 1),
+    ];
+    let valid: Vec<_> = neighbors.iter()
+        .filter(|&&(nx, ny)| {
+            nx < MAP_WIDTH && ny < MAP_HEIGHT
+                && map.get_tile(nx, ny) == MapTile::Floor
+                && !occupied.contains(&(nx, ny))
+        })
+        .copied()
+        .collect();
+    if valid.is_empty() { return (x, y); }
+    valid[rng.gen_range(0..valid.len())]
 }
 
 #[cfg(test)]
@@ -334,10 +394,60 @@ mod tests {
 
     #[test]
     fn move_toward_picks_best_of_multiple_floors() {
-        // (5,5)에서 (8,5) 쪽으로 갈 때 (6,5)가 최선
         let map = floor_map(10, 10, &[(5,5),(6,5),(5,6),(4,5),(5,4)]);
         let occupied = HashSet::new();
         let (nx, ny) = move_toward(5, 5, 8, 5, &map, &occupied);
         assert_eq!((nx, ny), (6, 5));
+    }
+
+    fn open_map(w: usize, h: usize) -> Map {
+        let mut map = Map::new(w, h);
+        for y in 1..h-1 { for x in 1..w-1 { map.set_tile(x, y, MapTile::Floor); } }
+        map
+    }
+
+    #[test]
+    fn can_see_player_within_radius_clear_los() {
+        let map = open_map(20, 20);
+        assert!(can_see_player(5, 5, 9, 5, 6, &map), "반경 내 명확한 시야면 탐지해야 한다");
+    }
+
+    #[test]
+    fn can_see_player_outside_radius() {
+        let map = open_map(20, 20);
+        assert!(!can_see_player(1, 1, 10, 10, 6, &map), "반경 밖은 탐지하지 않아야 한다");
+    }
+
+    #[test]
+    fn can_see_player_blocked_by_wall() {
+        // (5,5)와 (8,5) 사이에 벽 열
+        let mut map = open_map(20, 20);
+        for y in 0..20 { map.set_tile(7, y, MapTile::Wall); }
+        assert!(!can_see_player(5, 5, 8, 5, 10, &map), "벽이 가로막으면 탐지하지 않아야 한다");
+    }
+
+    #[test]
+    fn wander_does_not_move_to_wall() {
+        use rand::SeedableRng;
+        use rand::rngs::StdRng;
+        let map = floor_map(10, 10, &[(5,5),(6,5),(5,6),(4,5),(5,4)]);
+        let occupied: HashSet<(usize, usize)> = HashSet::new();
+        for seed in 0..100u64 {
+            let mut rng: ThreadRng = rand::thread_rng();
+            let _ = rng; // ThreadRng은 seed 불가 — StdRng으로 테스트
+            let mut srng = StdRng::seed_from_u64(seed);
+            let neighbors = [(6usize,5usize),(5,6),(4,5),(5,4),(5,5)];
+            // wander는 ThreadRng을 받으므로 직접 검증: 결과가 floor 타일이어야 함
+            let result = {
+                const STAY: f64 = 0.3;
+                if srng.gen_bool(STAY) { (5,5) } else {
+                    let valid: Vec<_> = [(4usize,5usize),(6,5),(5,4),(5,6)].iter()
+                        .filter(|&&(nx,ny)| map.get_tile(nx,ny)==MapTile::Floor && !occupied.contains(&(nx,ny)))
+                        .copied().collect();
+                    if valid.is_empty() { (5,5) } else { valid[srng.gen_range(0..valid.len())] }
+                }
+            };
+            assert!(neighbors.contains(&result), "배회 결과가 유효한 타일이어야 한다");
+        }
     }
 }

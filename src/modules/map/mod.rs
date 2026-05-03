@@ -483,6 +483,23 @@ pub fn world_to_tile_coords(world_pos: Vec3) -> (usize, usize) {
     (x.clamp(0, MAP_WIDTH - 1), y.clamp(0, MAP_HEIGHT - 1))
 }
 
+pub fn is_line_of_sight_clear(map: &Map, x0: i32, y0: i32, x1: i32, y1: i32) -> bool {
+    let (dx, dy) = ((x1 - x0).abs(), (y1 - y0).abs());
+    let (sx, sy) = (if x0 < x1 { 1 } else { -1 }, if y0 < y1 { 1 } else { -1 });
+    let mut err = dx - dy;
+    let (mut x, mut y) = (x0, y0);
+    loop {
+        if x < 0 || x >= map.width as i32 || y < 0 || y >= map.height as i32 { return false; }
+        if x == x1 && y == y1 { return true; }
+        if (x != x0 || y != y0) && map.tiles[map.index(x as usize, y as usize)] == MapTile::Wall {
+            return false;
+        }
+        let e2 = 2 * err;
+        if e2 > -dy { err -= dy; x += sx; }
+        if e2 < dx  { err += dx; y += sy; }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{MapGenerator, MapGeneratorRegistry, Map, tile_in_viewport};
