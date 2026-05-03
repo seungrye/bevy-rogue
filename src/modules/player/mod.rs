@@ -150,6 +150,14 @@ fn player_movement(
 ) {
     let Ok((entity, transform)) = player_query.get_single() else { return };
 
+    // 스페이스바: 제자리 대기 — hold state 초기화 후 턴 소비
+    if keyboard_input.just_pressed(KeyCode::Space) {
+        hold_state.dir = IVec2::ZERO;
+        hold_state.elapsed = 0.0;
+        acted.send(PlayerActedEvent);
+        return;
+    }
+
     let mut dir = IVec2::ZERO;
     if keyboard_input.pressed(KeyCode::ArrowLeft)  || keyboard_input.pressed(KeyCode::KeyA) { dir.x -= 1; }
     if keyboard_input.pressed(KeyCode::ArrowRight) || keyboard_input.pressed(KeyCode::KeyD) { dir.x += 1; }
@@ -375,6 +383,15 @@ mod tests {
         let result = tick_hold(&mut state, IVec2::new(1, 0), false, 0.016);
         assert!(!result, "초기 지연 중 방향 전환 직후에는 이동하지 않아야 한다");
         assert_eq!(state.elapsed, 0.0, "초기 지연 중 방향 전환 시 타이머가 리셋돼야 한다");
+    }
+
+    #[test]
+    fn tick_hold_zero_direction_never_triggers_move() {
+        // wait(스페이스) 후 ZERO 방향은 elapsed 가 아무리 쌓여도 이동을 유발하지 않는다
+        let mut state = MoveHoldState { dir: IVec2::new(1, 0), elapsed: 1.0 };
+        assert!(!tick_hold(&mut state, IVec2::ZERO, false, 0.0));
+        assert_eq!(state.dir, IVec2::ZERO);
+        assert_eq!(state.elapsed, 0.0);
     }
 
     #[test]
