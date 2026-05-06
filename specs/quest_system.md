@@ -121,84 +121,57 @@ QuestDef(
 | `ancient_scroll` | QuestItem | 던전 1층에서 획득, 연금술사 재료 |
 
 
-## 예시: 조건부 스폰 + 수량 시나리오 (약초 구하기)
+## 예시: 전체 기능 시나리오 (약초 구하기)
 
-```ron
-QuestDef(
-    id: "herb_quest",
-    title: "은방울 뿌리 채집",
-    giver_npc: "엘렌",
-    initial_phase: "not_started",
+`assets/quests/herb_quest.ron` 참조. 사용된 기능 전체 목록:
 
-    phases: {
-        "not_started": QuestPhaseDef(
-            dialog: [
-                "안녕하세요, 모험가님.",
-                "숲속에 은방울 뿌리가 필요한데...",
-                "10개만 구해다 주실 수 있나요?",
-            ],
-            on_interact: [
-                SetFlag(flag: "herb_quest_active", value: "true"),
-                AdvancePhase("gathering"),
-            ],
-            auto_advance: [],
-            objective: Some("엘렌의 부탁을 들어주기로 했다."),
-        ),
-        "gathering": QuestPhaseDef(
-            dialog: ["숲속에서 은방울 뿌리를 찾아주세요. 10개 필요합니다."],
-            on_interact: [],
-            auto_advance: [
-                AutoAdvance(
-                    condition: HasItem("silver_bell_root"),
-                    next_phase: "ready",
-                ),
-            ],
-            objective: Some("숲에서 은방울 뿌리 10개를 채집하라."),
-        ),
-        "ready": QuestPhaseDef(
-            dialog: [
-                "오! 은방울 뿌리를 구해오셨군요!",
-                "감사합니다. 여기 체력 물약을 드릴게요.",
-            ],
-            on_interact: [
-                RemoveItem("silver_bell_root"),
-                ClearFlag("herb_quest_active"),
-                GiveItems(item: "health_potion", count: 3),
-                AdvancePhase("done"),
-            ],
-            auto_advance: [],
-            objective: Some("엘렌에게 은방울 뿌리를 전달하라."),
-        ),
-        "done": QuestPhaseDef(
-            dialog: ["덕분에 좋은 약을 만들 수 있겠어요. 감사합니다!"],
-            on_interact: [],
-            auto_advance: [],
-            objective: Some("퀘스트 완료!"),
-        ),
-    },
+| 분류 | 기능 | 사용 위치 |
+|------|------|----------|
+| **QuestCondition** | `HasItem` | auto_advance에서 은방울 뿌리/독초 소지 확인 |
+| | `InZone` | travel→gathering 전환 (숲속 공터 도착 감지) |
+| | `HasFlag` | spawn condition, 독초술사 처치 분기 |
+| | `FlagIs` | Branch에서 독초 경험 여부로 보상 분기 |
+| | `PhaseIs` | done→done_with_hint (gem_quest 교차 참조) |
+| | `And` | 독초 소지 + 뿌리 미소지 복합 조건 |
+| | `Or` | 뿌리 소지 **또는** (독초술사 처치 + 마을 귀환) |
+| | `Not` | 뿌리 미소지, 독초술사 미처치 확인 |
+| **QuestAction** | `AdvancePhase` | 모든 단계 전환 |
+| | `GiveItem` | 해독제 포션 1개 |
+| | `GiveItems` | 보상 포션 x3/x5 수량 지급 |
+| | `RemoveItem` | 독초/뿌리 인벤토리 회수 |
+| | `Log` | 상황 메시지 출력 |
+| | `SetFlag`/`ClearFlag` | 플래그 설정/해제 |
+| | `OpenPortal` | 숲속 공터 포탈 생성 |
+| | `DespawnWorldItem` | 독초 월드 엔티티 정리 |
+| | `KillNpc` | 퀘스트 완료 시 독초술사 제거 |
+| | `Branch` | 3단계 중첩 보상 분기 (독초술사 처치 > 독초 경험 > 기본) |
+| **QuestSpawn** | `count` | 은방울 뿌리 10개, 독초 3개 분산 배치 |
+| | `condition` | 플래그 기반 조건부 스폰 |
+| **AutoAdvance** | `actions` | 자동 전환 시 RemoveItem/DespawnWorldItem/SetFlag 동시 실행 |
+| **QuestPhaseDef** | `objective` | 각 단계별 퀘스트 목표 표시 |
 
-    spawns: [
-        // herb_quest_active 플래그가 설정된 상태에서 숲 진입 시
-        // 은방울 뿌리 10개가 랜덤 방에 스폰
-        QuestSpawn(
-            phase: "gathering",
-            item: "silver_bell_root",
-            zone: Forest,
-            count: 10,
-            condition: Some(HasFlag("herb_quest_active")),
-        ),
-    ],
-)
+**퀘스트 흐름:**
 ```
-
-**핵심 포인트:**
-- `SetFlag` → 다른 존에서 `condition: HasFlag(...)` 로 스폰 제어
-- `count: 10` → 같은 아이템 10개를 랜덤 방에 분산 배치
-- `GiveItems { item, count }` → 보상으로 소모품 여러 개 한번에 지급
-
-| `silver_bell_root` | QuestItem | 숲속 공터에서 채집, 약초 퀘스트 재료 |
-| `ellen_elixir` | QuestItem | 약초 퀘스트 보너스 보상 (독초 경험 시) |
-| `poisoned_herb` | QuestItem | 은방울 뿌리와 비슷한 독초 (함정) |
+[마을] 엘렌 대화 (not_started → travel)
+    │  SetFlag, OpenPortal
+    ↓
+[숲속 공터] 도착 감지 (travel → gathering)     ← InZone
+    │  은방울 뿌리 10개 + 독초 3개 스폰        ← count, condition
+    ↓
+[숲속 공터] 채집 중
+    ├─ 독초 주움 → poisoned_warning → 해독 후 gathering으로 복귀
+    ├─ 뿌리 주움 → collected                    ← Or 첫 번째 조건
+    └─ 독초술사 처치 + 마을 귀환 → collected    ← Or + And 조합
+    ↓
+[마을] 엘렌 대화 (collected → done)
+    │  Branch: 독초술사 처치 → 최고 보상
+    │  Branch: 독초 경험 → 중간 보상            ← 중첩 Branch
+    │  Branch: 기본 → 기본 보상
+    ↓
+[마을] done
+    ├─ 독초술사 미처치 시 KillNpc 으로 제거
+    └─ gem_quest active면 → done_with_hint      ← PhaseIs 교차 참조
+```
 
 ## 동작 명세
 
