@@ -7,7 +7,7 @@ use bevy::{
     },
 };
 use crate::modules::{
-    map::{Map, MapResource, MapTile, MAP_HEIGHT, MAP_WIDTH, MapGeneratorRegistry},
+    map::{Map, MapResource, TileKind, MAP_HEIGHT, MAP_WIDTH, MapGeneratorRegistry},
     player::Player,
     zone::{WorldState, ZoneId},
 };
@@ -237,15 +237,15 @@ pub(crate) fn tile_color_f32(map: &Map, x: i32, y: i32, player_x: usize, player_
     let idx = map.index(ux, uy);
     let c: [u8; 4] = if ux == player_x && uy == player_y {
         [255, 220, 0, 255]
-    } else if map.visible_tiles[idx] {
-        match map.tiles[idx] {
-            MapTile::Wall  => [220, 200, 155, 255],
-            MapTile::Floor => [130, 110, 80,  255],
+    } else if map.tiles[idx].visible {
+        match map.tiles[idx].kind {
+            TileKind::Wall  => [220, 200, 155, 255],
+            TileKind::Floor => [130, 110, 80,  255],
         }
-    } else if map.revealed_tiles[idx] {
-        match map.tiles[idx] {
-            MapTile::Wall  => [110, 95,  70,  255],
-            MapTile::Floor => [60,  50,  35,  255],
+    } else if map.tiles[idx].revealed {
+        match map.tiles[idx].kind {
+            TileKind::Wall  => [110, 95,  70,  255],
+            TileKind::Floor => [60,  50,  35,  255],
         }
     } else {
         [10, 8, 6, 255]
@@ -265,7 +265,7 @@ pub(crate) fn tile_boost(map: &Map, x: i32, y: i32, player_x: usize, player_y: u
         return PLAYER_BOOST;
     }
     let idx = map.index(ux, uy);
-    if (map.visible_tiles[idx] || map.revealed_tiles[idx]) && map.tiles[idx] == MapTile::Wall {
+    if (map.tiles[idx].visible || map.tiles[idx].revealed) && map.tiles[idx].kind == TileKind::Wall {
         WALL_BOOST
     } else {
         1.0
@@ -487,25 +487,25 @@ mod tests {
     #[test]
     fn tile_boost_revealed_wall_returns_wall_boost() {
         let mut map = Map::new(10, 10);
-        map.set_tile(5, 5, MapTile::Wall);
+        map.set_tile(5, 5, TileKind::Wall);
         let idx = map.index(5, 5);
-        map.revealed_tiles[idx] = true;
+        map.tiles[idx].revealed = true;
         assert_eq!(tile_boost(&map, 5, 5, 0, 0), WALL_BOOST);
     }
 
     #[test]
     fn tile_boost_visible_wall_returns_wall_boost() {
         let mut map = Map::new(10, 10);
-        map.set_tile(5, 5, MapTile::Wall);
+        map.set_tile(5, 5, TileKind::Wall);
         let idx = map.index(5, 5);
-        map.visible_tiles[idx] = true;
+        map.tiles[idx].visible = true;
         assert_eq!(tile_boost(&map, 5, 5, 0, 0), WALL_BOOST);
     }
 
     #[test]
     fn tile_boost_unrevealed_wall_returns_one() {
         let mut map = Map::new(10, 10);
-        map.set_tile(5, 5, MapTile::Wall);
+        map.set_tile(5, 5, TileKind::Wall);
         // visible/revealed 모두 false → 미탐험 벽은 부스트 없음
         assert_eq!(tile_boost(&map, 5, 5, 0, 0), 1.0);
     }
@@ -513,9 +513,9 @@ mod tests {
     #[test]
     fn tile_boost_floor_returns_one() {
         let mut map = Map::new(10, 10);
-        map.set_tile(5, 5, MapTile::Floor);
+        map.set_tile(5, 5, TileKind::Floor);
         let idx = map.index(5, 5);
-        map.revealed_tiles[idx] = true;
+        map.tiles[idx].revealed = true;
         assert_eq!(tile_boost(&map, 5, 5, 0, 0), 1.0);
     }
 

@@ -1,5 +1,5 @@
 use rand::prelude::*;
-use crate::modules::map::{Map, MapTile, MapType, Rect};
+use crate::modules::map::{Map, TileKind, MapType, Rect};
 use super::super::MapGenerator;
 
 pub struct OrganicVillageGenerator;
@@ -13,7 +13,7 @@ impl MapGenerator for OrganicVillageGenerator {
         // 전체를 야외(바닥)로 채운다
         for y in 1..height - 1 {
             for x in 1..width - 1 {
-                map.set_tile(x, y, MapTile::Floor);
+                map.set_tile(x, y, TileKind::Floor);
             }
         }
 
@@ -42,14 +42,14 @@ impl MapGenerator for OrganicVillageGenerator {
                     if by == building.y1 || by == building.y2 - 1
                         || bx == building.x1 || bx == building.x2 - 1
                     {
-                        map.set_tile(bx, by, MapTile::Wall);
+                        map.set_tile(bx, by, TileKind::Wall);
                     }
                 }
             }
 
             // 남쪽 벽 중앙에 문 개통
             let door_x = (building.x1 + building.x2) / 2;
-            map.set_tile(door_x, building.y2 - 1, MapTile::Floor);
+            map.set_tile(door_x, building.y2 - 1, TileKind::Floor);
 
             rooms.push(building);
         }
@@ -63,7 +63,7 @@ impl MapGenerator for OrganicVillageGenerator {
                     && y >= r.y1.saturating_sub(1) && y <= r.y2
             });
             if !in_building {
-                map.set_tile(x, y, MapTile::Wall);
+                map.set_tile(x, y, TileKind::Wall);
             }
         }
 

@@ -1,5 +1,5 @@
 use rand::prelude::*;
-use crate::modules::map::{Map, MapTile, Rect};
+use crate::modules::map::{Map, TileKind, Rect};
 use super::super::MapGenerator;
 
 pub struct DrunkardWalkGenerator;
@@ -10,7 +10,7 @@ impl MapGenerator for DrunkardWalkGenerator {
         let mut rng = StdRng::seed_from_u64(seed);
         map.seed = seed;
         let (mut x, mut y) = (width / 2, height / 2);
-        map.set_tile(x, y, MapTile::Floor);
+        map.set_tile(x, y, TileKind::Floor);
         let target = ((width * height) as f32 * 0.4) as usize;
         let mut count = 1;
         while count < target {
@@ -20,8 +20,8 @@ impl MapGenerator for DrunkardWalkGenerator {
                 2 => { if y > 1 { y -= 1; } }
                 _ => { if y < height - 2 { y += 1; } }
             }
-            if map.get_tile(x, y) == MapTile::Wall {
-                map.set_tile(x, y, MapTile::Floor);
+            if map.get_tile(x, y) == TileKind::Wall {
+                map.set_tile(x, y, TileKind::Floor);
                 count += 1;
             }
         }

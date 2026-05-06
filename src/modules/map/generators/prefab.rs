@@ -1,5 +1,5 @@
 use rand::prelude::*;
-use crate::modules::map::{Map, MapTile, Rect};
+use crate::modules::map::{Map, TileKind, Rect};
 use super::super::MapGenerator;
 use super::carve_corridor;
 
@@ -50,8 +50,8 @@ fn stamp_template(map: &mut Map, ox: usize, oy: usize, w: usize, h: usize, layou
             let idx = row * row_len + col;
             if idx >= layout.len() { break; }
             let tile = match layout[idx] {
-                b'#' => MapTile::Wall,
-                b'.' => MapTile::Floor,
+                b'#' => TileKind::Wall,
+                b'.' => TileKind::Floor,
                 _ => continue,
             };
             let tx = ox + col;

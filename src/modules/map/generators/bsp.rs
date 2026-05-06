@@ -1,5 +1,5 @@
 use rand::prelude::*;
-use crate::modules::map::{Map, MapTile, Rect};
+use crate::modules::map::{Map, TileKind, Rect};
 use super::super::MapGenerator;
 
 pub struct BspGenerator;
@@ -20,7 +20,7 @@ impl MapGenerator for BspGenerator {
             if let Some(room) = carve_room_in_leaf(leaf, &mut rng) {
                 for y in room.y1..room.y2 {
                     for x in room.x1..room.x2 {
-                        map.set_tile(x, y, MapTile::Floor);
+                        map.set_tile(x, y, TileKind::Floor);
                     }
                 }
                 rooms.push(room);

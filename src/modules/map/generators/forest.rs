@@ -1,5 +1,5 @@
 use rand::prelude::*;
-use crate::modules::map::{Map, MapTile};
+use crate::modules::map::{Map, TileKind};
 use super::super::MapGenerator;
 use super::{count_wall_neighbors, ensure_connectivity, add_rooms_from_floor};
 
@@ -15,7 +15,7 @@ impl MapGenerator for ForestGenerator {
         for y in 1..height - 1 {
             for x in 1..width - 1 {
                 if rng.gen_bool(0.35) {
-                    map.set_tile(x, y, MapTile::Floor);
+                    map.set_tile(x, y, TileKind::Floor);
                 }
             }
         }
@@ -27,9 +27,9 @@ impl MapGenerator for ForestGenerator {
                 for x in 1..width - 1 {
                     let walls = count_wall_neighbors(&old, width, height, x, y);
                     if walls >= 4 {
-                        map.set_tile(x, y, MapTile::Wall);
+                        map.set_tile(x, y, TileKind::Wall);
                     } else {
-                        map.set_tile(x, y, MapTile::Floor);
+                        map.set_tile(x, y, TileKind::Floor);
                     }
                 }
             }
@@ -62,7 +62,7 @@ fn carve_clearing(map: &mut Map, cx: usize, cy: usize, radius: i32) {
         for dx in -radius..=radius {
             let nx = (cx as i32 + dx).clamp(1, map.width as i32 - 2) as usize;
             let ny = (cy as i32 + dy).clamp(1, map.height as i32 - 2) as usize;
-            map.set_tile(nx, ny, MapTile::Floor);
+            map.set_tile(nx, ny, TileKind::Floor);
         }
     }
 }
@@ -77,7 +77,7 @@ fn carve_path(map: &mut Map, x1: usize, y1: usize, x2: usize, y2: usize, rng: &m
             for dx in -1i32..=1 {
                 let nx = (x + dx).clamp(1, map.width as i32 - 2) as usize;
                 let ny = (y + dy).clamp(1, map.height as i32 - 2) as usize;
-                map.set_tile(nx, ny, MapTile::Floor);
+                map.set_tile(nx, ny, TileKind::Floor);
             }
         }
         if rng.gen_bool(0.15) {

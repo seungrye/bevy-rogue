@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use rand::{Rng, rngs::ThreadRng};
 use crate::modules::{
     map::{
-        draw_map, Map, MapResource, MapTile, MapType, MonsterTiles,
+        draw_map, Map, MapResource, TileKind, MapType, MonsterTiles,
         tile_to_world_coords, world_to_tile_coords, is_line_of_sight_clear,
         MAP_HEIGHT, MAP_WIDTH, TILE_SIZE,
         MapSystemSet, MonsterRespawnEvent, PlayerActedEvent, AttackMonsterEvent, Rect,
@@ -377,7 +377,7 @@ pub fn move_toward(
     let best = neighbors.iter()
         .filter(|&&(nx, ny)| {
             nx < MAP_WIDTH && ny < MAP_HEIGHT
-                && map.get_tile(nx, ny) == MapTile::Floor
+                && map.get_tile(nx, ny) == TileKind::Floor
                 && !occupied.contains(&(nx, ny))
         })
         .min_by_key(|&&(nx, ny)| {
@@ -405,7 +405,7 @@ pub fn wander(
     let valid: Vec<_> = neighbors.iter()
         .filter(|&&(nx, ny)| {
             nx < MAP_WIDTH && ny < MAP_HEIGHT
-                && map.get_tile(nx, ny) == MapTile::Floor
+                && map.get_tile(nx, ny) == TileKind::Floor
                 && !occupied.contains(&(nx, ny))
         })
         .copied()
@@ -421,7 +421,7 @@ mod tests {
     fn floor_map(w: usize, h: usize, floors: &[(usize, usize)]) -> Map {
         let mut map = Map::new(w, h);
         for &(x, y) in floors {
-            map.set_tile(x, y, MapTile::Floor);
+            map.set_tile(x, y, TileKind::Floor);
         }
         map
     }
@@ -462,7 +462,7 @@ mod tests {
             let (nx, _) = move_toward(5, 5, tx, 5, &map, &occupied);
             assert!(nx < 10, "맵 밖으로 나가면 안 된다");
             let tile = map.get_tile(nx, 5);
-            assert_eq!(tile, MapTile::Floor, "Wall 타일로 이동하면 안 된다");
+            assert_eq!(tile, TileKind::Floor, "Wall 타일로 이동하면 안 된다");
         }
     }
 
@@ -476,7 +476,7 @@ mod tests {
 
     fn open_map(w: usize, h: usize) -> Map {
         let mut map = Map::new(w, h);
-        for y in 1..h-1 { for x in 1..w-1 { map.set_tile(x, y, MapTile::Floor); } }
+        for y in 1..h-1 { for x in 1..w-1 { map.set_tile(x, y, TileKind::Floor); } }
         map
     }
 
@@ -496,7 +496,7 @@ mod tests {
     fn can_see_player_blocked_by_wall() {
         // (5,5)와 (8,5) 사이에 벽 열
         let mut map = open_map(20, 20);
-        for y in 0..20 { map.set_tile(7, y, MapTile::Wall); }
+        for y in 0..20 { map.set_tile(7, y, TileKind::Wall); }
         assert!(!can_see_player(5, 5, 8, 5, 10, &map), "벽이 가로막으면 탐지하지 않아야 한다");
     }
 
@@ -516,7 +516,7 @@ mod tests {
                 const STAY: f64 = 0.3;
                 if srng.gen_bool(STAY) { (5,5) } else {
                     let valid: Vec<_> = [(4usize,5usize),(6,5),(5,4),(5,6)].iter()
-                        .filter(|&&(nx,ny)| map.get_tile(nx,ny)==MapTile::Floor && !occupied.contains(&(nx,ny)))
+                        .filter(|&&(nx,ny)| map.get_tile(nx,ny)==TileKind::Floor && !occupied.contains(&(nx,ny)))
                         .copied().collect();
                     if valid.is_empty() { (5,5) } else { valid[srng.gen_range(0..valid.len())] }
                 }

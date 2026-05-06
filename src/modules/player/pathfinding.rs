@@ -1,9 +1,9 @@
 use std::collections::{HashMap, VecDeque};
-use crate::modules::map::{Map, MapTile};
+use crate::modules::map::{Map, TileKind};
 
 pub fn find_path(map: &Map, from: (usize, usize), to: (usize, usize)) -> Vec<(usize, usize)> {
     if from == to { return vec![]; }
-    if map.get_tile(to.0, to.1) != MapTile::Floor { return vec![]; }
+    if map.get_tile(to.0, to.1) != TileKind::Floor { return vec![]; }
 
     let mut queue: VecDeque<(usize, usize)> = VecDeque::new();
     let mut came_from: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
@@ -23,14 +23,14 @@ pub fn find_path(map: &Map, from: (usize, usize), to: (usize, usize)) -> Vec<(us
             if nx < 0 || ny < 0 { continue; }
             let (nx, ny) = (nx as usize, ny as usize);
             if nx >= map.width || ny >= map.height { continue; }
-            if map.get_tile(nx, ny) != MapTile::Floor { continue; }
+            if map.get_tile(nx, ny) != TileKind::Floor { continue; }
             // 대각선 이동 시 양쪽 인접 카디널 타일 중 하나라도 Wall이면 이동 불가 (코너 끼임 방지)
             if dx != 0 && dy != 0 {
                 let ax = (cx as i32 + dx) as usize;
                 let ay = cy;
                 let bx = cx;
                 let by = (cy as i32 + dy) as usize;
-                if map.get_tile(ax, ay) != MapTile::Floor && map.get_tile(bx, by) != MapTile::Floor {
+                if map.get_tile(ax, ay) != TileKind::Floor && map.get_tile(bx, by) != TileKind::Floor {
                     continue;
                 }
             }
@@ -61,7 +61,7 @@ mod tests {
     fn make_map(w: usize, h: usize, floors: &[(usize, usize)]) -> Map {
         let mut map = Map::new(w, h);
         for &(x, y) in floors {
-            map.set_tile(x, y, MapTile::Floor);
+            map.set_tile(x, y, TileKind::Floor);
         }
         map
     }
@@ -73,7 +73,7 @@ mod tests {
         assert!(!path.is_empty());
         assert_eq!(*path.last().unwrap(), (4,1));
         for step in &path {
-            assert_eq!(map.get_tile(step.0, step.1), MapTile::Floor);
+            assert_eq!(map.get_tile(step.0, step.1), TileKind::Floor);
         }
     }
 
@@ -120,7 +120,7 @@ mod tests {
         assert!(!path.is_empty(), "우회 경로가 존재해야 한다");
         assert_eq!(*path.last().unwrap(), (2,1));
         for step in &path {
-            assert_eq!(map.get_tile(step.0, step.1), MapTile::Floor, "경로는 Floor 위에만 있어야 한다");
+            assert_eq!(map.get_tile(step.0, step.1), TileKind::Floor, "경로는 Floor 위에만 있어야 한다");
         }
     }
 

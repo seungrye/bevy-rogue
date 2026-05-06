@@ -19,11 +19,34 @@ pub struct TileEntity {
 
 // --- Enums / Types ---
 
+/// 타일의 종류를 나타내는 열거형.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
-pub enum MapTile {
+pub enum TileKind {
     #[default]
     Wall,
     Floor,
+}
+
+/// 맵 타일 하나의 전체 상태를 담는 구조체.
+/// 기존에 Map에서 별도 Vec<bool>로 관리하던 revealed/visible 상태를
+/// 타일 자체에 포함시켜 데이터 응집도를 높였다.
+#[derive(Copy, Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub struct MapTile {
+    pub kind: TileKind,
+    pub revealed: bool,
+    pub visible: bool,
+}
+
+impl Default for MapTile {
+    fn default() -> Self {
+        Self { kind: TileKind::Wall, revealed: false, visible: false }
+    }
+}
+
+impl MapTile {
+    pub fn new(kind: TileKind) -> Self {
+        Self { kind, revealed: false, visible: false }
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -60,8 +83,6 @@ pub struct Map {
     pub height: usize,
     pub tiles: Vec<MapTile>,
     pub rooms: Vec<Rect>,
-    pub revealed_tiles: Vec<bool>,
-    pub visible_tiles: Vec<bool>,
     pub map_type: MapType,
     #[serde(default)]
     pub seed: u64,
@@ -74,22 +95,20 @@ impl Map {
         let size = width * height;
         Self {
             width, height,
-            tiles: vec![MapTile::Wall; size],
+            tiles: vec![MapTile::default(); size],
             rooms: Vec::new(),
-            revealed_tiles: vec![false; size],
-            visible_tiles: vec![false; size],
             map_type: MapType::Dungeon,
             seed: 0,
             algorithm: String::new(),
         }
     }
     pub fn index(&self, x: usize, y: usize) -> usize { y * self.width + x }
-    pub fn set_tile(&mut self, x: usize, y: usize, tile: MapTile) {
+    pub fn set_tile(&mut self, x: usize, y: usize, kind: TileKind) {
         let idx = self.index(x, y);
-        self.tiles[idx] = tile;
+        self.tiles[idx].kind = kind;
     }
-    pub fn get_tile(&self, x: usize, y: usize) -> MapTile {
-        self.tiles[self.index(x, y)]
+    pub fn get_tile(&self, x: usize, y: usize) -> TileKind {
+        self.tiles[self.index(x, y)].kind
     }
 }
 
@@ -296,8 +315,8 @@ pub fn draw_map(
     for y in 0..map.height {
         for x in 0..map.width {
             let glyph = match map.get_tile(x, y) {
-                MapTile::Wall => "#",
-                MapTile::Floor => ".",
+                TileKind::Wall => "#",
+                TileKind::Floor => ".",
             };
             let coord = tile_to_world_coords(x, y);
             commands.spawn((
@@ -354,8 +373,8 @@ fn execute_regen(
         for y in 0..map.height {
             for x in 0..map.width {
                 let glyph = match map.get_tile(x, y) {
-                    MapTile::Wall => "#",
-                    MapTile::Floor => ".",
+                    TileKind::Wall => "#",
+                    TileKind::Floor => ".",
                 };
                 let coord = tile_to_world_coords(x, y);
                 commands.spawn((
@@ -408,9 +427,9 @@ pub fn update_tile_visibility(
         let idx = map.index(tile.x, tile.y);
         let in_vp = tile_in_viewport(tile.x as i32, tile.y as i32, cx, cy);
 
-        let target_vis = if in_vp && map.visible_tiles[idx] {
+        let target_vis = if in_vp && map.tiles[idx].visible {
             Visibility::Visible
-        } else if in_vp && map.revealed_tiles[idx] {
+        } else if in_vp && map.tiles[idx].revealed {
             Visibility::Visible
         } else {
             Visibility::Hidden
@@ -419,7 +438,7 @@ pub fn update_tile_visibility(
         if *vis != target_vis { *vis = target_vis; }
 
         if target_vis == Visibility::Visible {
-            let new_color = if map.visible_tiles[idx] { Color::WHITE } else { Color::rgb(0.3, 0.3, 0.3) };
+            let new_color = if map.tiles[idx].visible { Color::WHITE } else { Color::rgb(0.3, 0.3, 0.3) };
             if text.sections[0].style.color != new_color {
                 text.sections[0].style.color = new_color;
             }
@@ -448,8 +467,8 @@ fn execute_apply(
         for y in 0..map.height {
             for x in 0..map.width {
                 let glyph = match map.get_tile(x, y) {
-                    MapTile::Wall  => "#",
-                    MapTile::Floor => ".",
+                    TileKind::Wall  => "#",
+                    TileKind::Floor => ".",
                 };
                 let coord = tile_to_world_coords(x, y);
                 commands.spawn((
@@ -489,7 +508,7 @@ fn find_spawn_point(map: &Map) -> (usize, usize) {
     }
     for y in 1..map.height - 1 {
         for x in 1..map.width - 1 {
-            if map.get_tile(x, y) == MapTile::Floor {
+            if map.get_tile(x, y) == TileKind::Floor {
                 return (x, y);
             }
         }
@@ -545,7 +564,7 @@ pub fn random_floor_tile_in_room(
     use rand::seq::SliceRandom;
     let mut candidates: Vec<(usize, usize)> = (room.x1..=room.x2)
         .flat_map(|x| (room.y1..=room.y2).map(move |y| (x, y)))
-        .filter(|&(x, y)| map.get_tile(x, y) == MapTile::Floor && !used.contains(&(x, y)))
+        .filter(|&(x, y)| map.get_tile(x, y) == TileKind::Floor && !used.contains(&(x, y)))
         .collect();
     candidates.shuffle(rng);
     let &(x, y) = candidates.first()?;
@@ -561,7 +580,7 @@ pub fn is_line_of_sight_clear(map: &Map, x0: i32, y0: i32, x1: i32, y1: i32) -> 
     loop {
         if x < 0 || x >= map.width as i32 || y < 0 || y >= map.height as i32 { return false; }
         if x == x1 && y == y1 { return true; }
-        if (x != x0 || y != y0) && map.tiles[map.index(x as usize, y as usize)] == MapTile::Wall {
+        if (x != x0 || y != y0) && map.tiles[map.index(x as usize, y as usize)].kind == TileKind::Wall {
             return false;
         }
         let e2 = 2 * err;

@@ -10,7 +10,7 @@ pub mod grid_village;
 pub mod forest;
 pub mod perlin;
 
-use super::{Map, MapTile, Rect};
+use super::{Map, TileKind, MapTile, Rect};
 
 /// 연결되지 않은 바닥 타일을 벽으로 채워 맵의 접근 가능 영역을 단일 연결 요소로 만든다.
 /// 중앙이 Floor면 거기서 시작해 중앙 구역이 보존되도록 한다.
@@ -19,12 +19,12 @@ pub fn ensure_connectivity(map: &mut Map) {
     let height = map.height;
     let (cx, cy) = (width / 2, height / 2);
 
-    let start = if map.get_tile(cx, cy) == MapTile::Floor {
+    let start = if map.get_tile(cx, cy) == TileKind::Floor {
         Some((cx, cy))
     } else {
         (1..height - 1)
             .flat_map(|y| (1..width - 1).map(move |x| (x, y)))
-            .find(|&(x, y)| map.get_tile(x, y) == MapTile::Floor)
+            .find(|&(x, y)| map.get_tile(x, y) == TileKind::Floor)
     };
 
     let Some((sx, sy)) = start else { return };
@@ -42,7 +42,7 @@ pub fn ensure_connectivity(map: &mut Map) {
             }
             let (nx, ny) = (nx as usize, ny as usize);
             let idx = map.index(nx, ny);
-            if !visited[idx] && map.tiles[idx] == MapTile::Floor {
+            if !visited[idx] && map.tiles[idx].kind == TileKind::Floor {
                 visited[idx] = true;
                 stack.push((nx, ny));
             }
@@ -52,8 +52,8 @@ pub fn ensure_connectivity(map: &mut Map) {
     for y in 0..height {
         for x in 0..width {
             let idx = map.index(x, y);
-            if map.tiles[idx] == MapTile::Floor && !visited[idx] {
-                map.tiles[idx] = MapTile::Wall;
+            if map.tiles[idx].kind == TileKind::Floor && !visited[idx] {
+                map.tiles[idx].kind = TileKind::Wall;
             }
         }
     }
@@ -67,7 +67,7 @@ pub fn add_rooms_from_floor(map: &mut Map) {
 
     let floor_tiles: Vec<(usize, usize)> = (1..map.height - 1)
         .flat_map(|y| (1..map.width - 1).map(move |x| (x, y)))
-        .filter(|&(x, y)| map.get_tile(x, y) == MapTile::Floor)
+        .filter(|&(x, y)| map.get_tile(x, y) == TileKind::Floor)
         .collect();
 
     if floor_tiles.is_empty() {
@@ -117,7 +117,7 @@ pub fn count_wall_neighbors(tiles: &[MapTile], width: usize, height: usize, x: u
                 count += 1;
             } else {
                 let idx = ny as usize * width + nx as usize;
-                if tiles[idx] == MapTile::Wall { count += 1; }
+                if tiles[idx].kind == TileKind::Wall { count += 1; }
             }
         }
     }
@@ -131,21 +131,21 @@ pub fn carve_corridor(map: &mut Map, x1: usize, y1: usize, x2: usize, y2: usize)
     let tx = x2 as i32;
     let ty = y2 as i32;
     while x != tx {
-        map.set_tile(x as usize, y as usize, MapTile::Floor);
+        map.set_tile(x as usize, y as usize, TileKind::Floor);
         x += if x < tx { 1 } else { -1 };
     }
     while y != ty {
-        map.set_tile(x as usize, y as usize, MapTile::Floor);
+        map.set_tile(x as usize, y as usize, TileKind::Floor);
         y += if y < ty { 1 } else { -1 };
     }
-    map.set_tile(x as usize, y as usize, MapTile::Floor);
+    map.set_tile(x as usize, y as usize, TileKind::Floor);
 }
 
 
 #[cfg(test)]
 mod tests {
     use super::super::MapGenerator;
-    use super::super::MapTile;
+    use super::super::{TileKind, MapTile};
     use super::{bsp, rooms, drunkard, cellular_automata, dla, bsp_indoor, prefab, organic_village, grid_village, forest, perlin};
 
     const W: usize = 40;
@@ -156,7 +156,7 @@ mod tests {
         let map = gen.generate(W, H, 42);
 
         // 바닥 비율 ≥ 10%
-        let floor_count = map.tiles.iter().filter(|&&t| t == MapTile::Floor).count();
+        let floor_count = map.tiles.iter().filter(|t| t.kind == TileKind::Floor).count();
         let floor_ratio = floor_count as f32 / (W * H) as f32;
         assert!(
             floor_ratio >= 0.10,
@@ -166,12 +166,12 @@ mod tests {
 
         // 경계는 모두 벽
         for x in 0..W {
-            assert_eq!(map.get_tile(x, 0), MapTile::Wall, "[{}] 상단 경계 ({},{}) 가 벽이 아님", name, x, 0);
-            assert_eq!(map.get_tile(x, H - 1), MapTile::Wall, "[{}] 하단 경계 ({},{}) 가 벽이 아님", name, x, H - 1);
+            assert_eq!(map.get_tile(x, 0), TileKind::Wall, "[{}] 상단 경계 ({},{}) 가 벽이 아님", name, x, 0);
+            assert_eq!(map.get_tile(x, H - 1), TileKind::Wall, "[{}] 하단 경계 ({},{}) 가 벽이 아님", name, x, H - 1);
         }
         for y in 0..H {
-            assert_eq!(map.get_tile(0, y), MapTile::Wall, "[{}] 좌측 경계 ({},{}) 가 벽이 아님", name, 0, y);
-            assert_eq!(map.get_tile(W - 1, y), MapTile::Wall, "[{}] 우측 경계 ({},{}) 가 벽이 아님", name, W - 1, y);
+            assert_eq!(map.get_tile(0, y), TileKind::Wall, "[{}] 좌측 경계 ({},{}) 가 벽이 아님", name, 0, y);
+            assert_eq!(map.get_tile(W - 1, y), TileKind::Wall, "[{}] 우측 경계 ({},{}) 가 벽이 아님", name, W - 1, y);
         }
 
         // 방 ≥ 2개
@@ -193,24 +193,24 @@ mod tests {
         let mut map = Map::new(w, h);
 
         // 좌상단 고립 구역 (스캔 순서상 먼저 발견됨)
-        map.set_tile(1, 1, MapTile::Floor);
-        map.set_tile(2, 1, MapTile::Floor);
-        map.set_tile(1, 2, MapTile::Floor);
+        map.set_tile(1, 1, TileKind::Floor);
+        map.set_tile(2, 1, TileKind::Floor);
+        map.set_tile(1, 2, TileKind::Floor);
 
         // 중앙 3×3 구역
         let (cx, cy) = (w / 2, h / 2);
         for dy in -1i32..=1 {
             for dx in -1i32..=1 {
-                map.set_tile((cx as i32 + dx) as usize, (cy as i32 + dy) as usize, MapTile::Floor);
+                map.set_tile((cx as i32 + dx) as usize, (cy as i32 + dy) as usize, TileKind::Floor);
             }
         }
 
         ensure_connectivity(&mut map);
 
         // 중앙 Floor 보존
-        assert_eq!(map.get_tile(cx, cy), MapTile::Floor, "중앙 타일이 유지돼야 한다");
+        assert_eq!(map.get_tile(cx, cy), TileKind::Floor, "중앙 타일이 유지돼야 한다");
         // 코너 고립 구역 제거
-        assert_eq!(map.get_tile(1, 1), MapTile::Wall, "고립된 코너 구역은 제거돼야 한다");
+        assert_eq!(map.get_tile(1, 1), TileKind::Wall, "고립된 코너 구역은 제거돼야 한다");
     }
 
     #[test]
@@ -221,13 +221,13 @@ mod tests {
         let (w, h) = (10, 10);
         let mut map = Map::new(w, h);
         // 중앙은 Wall, 코너에만 Floor
-        map.set_tile(1, 1, MapTile::Floor);
-        map.set_tile(2, 1, MapTile::Floor);
+        map.set_tile(1, 1, TileKind::Floor);
+        map.set_tile(2, 1, TileKind::Floor);
 
         ensure_connectivity(&mut map);
 
         // 중앙이 Wall이면 첫 번째 Floor 구역을 유지
-        assert_eq!(map.get_tile(1, 1), MapTile::Floor);
+        assert_eq!(map.get_tile(1, 1), TileKind::Floor);
     }
 
     #[test] fn bsp_contract()              { check_contract(&bsp::BspGenerator); }

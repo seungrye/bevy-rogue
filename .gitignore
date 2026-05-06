@@ -1,3 +1,5 @@
 /target
 .claude/settings.local.json
 /save
+refactor.py
+fix.py

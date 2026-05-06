@@ -1,5 +1,5 @@
 use rand::prelude::*;
-use crate::modules::map::{Map, MapTile, MapType, Rect};
+use crate::modules::map::{Map, TileKind, MapType, Rect};
 use super::super::MapGenerator;
 
 pub struct GridVillageGenerator;
@@ -13,7 +13,7 @@ impl MapGenerator for GridVillageGenerator {
         // 전체를 야외(바닥)로 채운다
         for y in 1..height - 1 {
             for x in 1..width - 1 {
-                map.set_tile(x, y, MapTile::Floor);
+                map.set_tile(x, y, TileKind::Floor);
             }
         }
 
@@ -44,7 +44,7 @@ impl MapGenerator for GridVillageGenerator {
                             if wy == building.y1 || wy == building.y2 - 1
                                 || wx == building.x1 || wx == building.x2 - 1
                             {
-                                map.set_tile(wx, wy, MapTile::Wall);
+                                map.set_tile(wx, wy, TileKind::Wall);
                             }
                         }
                     }
@@ -52,10 +52,10 @@ impl MapGenerator for GridVillageGenerator {
                     // 문: 남쪽 또는 동쪽 선택
                     if rng.gen_bool(0.5) {
                         let dx = (building.x1 + building.x2) / 2;
-                        map.set_tile(dx, building.y2 - 1, MapTile::Floor);
+                        map.set_tile(dx, building.y2 - 1, TileKind::Floor);
                     } else {
                         let dy = (building.y1 + building.y2) / 2;
-                        map.set_tile(building.x2 - 1, dy, MapTile::Floor);
+                        map.set_tile(building.x2 - 1, dy, TileKind::Floor);
                     }
 
                     rooms.push(building);

@@ -1,5 +1,5 @@
 use rand::prelude::*;
-use crate::modules::map::{Map, MapTile, Rect};
+use crate::modules::map::{Map, TileKind, Rect};
 use super::super::MapGenerator;
 
 pub struct BspIndoorGenerator;
@@ -16,9 +16,9 @@ impl MapGenerator for BspIndoorGenerator {
             for y in room.y1..room.y2 {
                 for x in room.x1..room.x2 {
                     if y == room.y1 || y == room.y2 - 1 || x == room.x1 || x == room.x2 - 1 {
-                        map.set_tile(x, y, MapTile::Wall);
+                        map.set_tile(x, y, TileKind::Wall);
                     } else {
-                        map.set_tile(x, y, MapTile::Floor);
+                        map.set_tile(x, y, TileKind::Floor);
                     }
                 }
             }
@@ -71,17 +71,17 @@ fn connect_rooms(map: &mut Map, a: &Rect, b: &Rect, rng: &mut impl Rng) {
                 .clamp(1, map.width as i32 - 2) as usize;
             let ty = (my as i32 + sign * step * (by as i32 - ay as i32).signum())
                 .clamp(1, map.height as i32 - 2) as usize;
-            if map.get_tile(tx, ty) == MapTile::Wall {
+            if map.get_tile(tx, ty) == TileKind::Wall {
                 let neighbors_floor = [(0i32, 1), (0, -1), (1, 0), (-1, 0)]
                     .iter()
                     .filter(|&&(dx, dy)| {
                         let nx = (tx as i32 + dx).clamp(0, map.width as i32 - 1) as usize;
                         let ny = (ty as i32 + dy).clamp(0, map.height as i32 - 1) as usize;
-                        map.get_tile(nx, ny) == MapTile::Floor
+                        map.get_tile(nx, ny) == TileKind::Floor
                     })
                     .count();
                 if neighbors_floor >= 2 {
-                    map.set_tile(tx, ty, MapTile::Floor);
+                    map.set_tile(tx, ty, TileKind::Floor);
                     return;
                 }
             }

@@ -65,6 +65,20 @@ fn unpack_b64(s: &str, tile_count: usize) -> Vec<bool> {
     }).collect()
 }
 
+
+/// MapTile 벡터에서 revealed 필드만 추출하여 비트팩한다.
+fn pack_revealed(tiles: &[crate::modules::map::MapTile]) -> String {
+    let bools: Vec<bool> = tiles.iter().map(|t| t.revealed).collect();
+    pack_b64(&bools)
+}
+
+/// 언팩된 bool 벡터를 MapTile 벡터의 revealed 필드에 적용한다.
+fn apply_revealed(tiles: &mut [crate::modules::map::MapTile], revealed: &[bool]) {
+    for (tile, &r) in tiles.iter_mut().zip(revealed.iter()) {
+        tile.revealed = r;
+    }
+}
+
 // ── SaveData ─────────────────────────────────────────────────────────────────
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -135,11 +149,11 @@ fn auto_save(
 
     // 방문한 모든 존의 revealed_tiles 비트팩 + Base64
     let mut zone_revealed: HashMap<ZoneId, String> = world_state.maps.iter()
-        .map(|(id, m)| (id.clone(), pack_b64(&m.revealed_tiles)))
+        .map(|(id, m)| (id.clone(), pack_revealed(&m.tiles)))
         .collect();
     zone_revealed.insert(
         world_state.current.clone(),
-        pack_b64(&map_res.0.revealed_tiles),
+        pack_revealed(&map_res.0.tiles),
     );
 
     let save = SaveData {
@@ -231,9 +245,9 @@ fn load_if_save_exists(
     map.seed = cur_seed;
     map.algorithm = cur_algo;
     if let Some(s) = save.zone_revealed.get(&save.current_zone) {
-        map.revealed_tiles = unpack_b64(s, map.width * map.height);
+        apply_revealed(&mut map.tiles, &unpack_b64(s, map.width * map.height));
     }
-    map.visible_tiles = vec![false; map.width * map.height];
+    map.tiles.iter_mut().for_each(|t| t.visible = false);
 
     // 리소스 복원
     *inventory    = save.inventory;
@@ -253,8 +267,8 @@ fn load_if_save_exists(
             let mut m = registry.generate_with(&algo, MAP_WIDTH, MAP_HEIGHT, seed);
             m.seed = seed;
             m.algorithm = algo;
-            m.revealed_tiles = unpack_b64(s, m.width * m.height);
-            m.visible_tiles = vec![false; m.width * m.height];
+            apply_revealed(&mut m.tiles, &unpack_b64(s, m.width * m.height));
+            m.tiles.iter_mut().for_each(|t| t.visible = false);
             (id.clone(), m)
         })
         .collect();

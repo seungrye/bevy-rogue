@@ -3,7 +3,7 @@ use rand::prelude::*;
 use std::collections::HashSet;
 use crate::modules::{
     map::{
-        draw_map, Map, MapTile, MapType, OccupiedTiles, Rect,
+        draw_map, Map, TileKind, MapType, OccupiedTiles, Rect,
         tile_to_world_coords, world_to_tile_coords,
         MAP_HEIGHT, MAP_WIDTH, TILE_SIZE,
         MapSystemSet, VillagerRespawnEvent, PlayerActedEvent, BumpTileEvent,
@@ -539,7 +539,7 @@ pub fn pick_next_tile(
     let valid: Vec<(usize, usize)> = neighbors.iter()
         .filter(|&&(nx, ny)| {
             nx < MAP_WIDTH && ny < MAP_HEIGHT
-                && map.get_tile(nx, ny) == MapTile::Floor
+                && map.get_tile(nx, ny) == TileKind::Floor
                 && !occupied.contains(&(nx, ny))
                 && home_rect.map_or(true, |r| nx >= r.x1 && nx <= r.x2 && ny >= r.y1 && ny <= r.y2)
         })
@@ -686,7 +686,7 @@ mod tests {
     #[test]
     fn pick_next_tile_surrounded_by_walls_stays_put() {
         let mut map = Map::new(10, 10);
-        map.set_tile(5, 5, MapTile::Floor);
+        map.set_tile(5, 5, TileKind::Floor);
         let occupied = HashSet::new();
         let mut rng = StdRng::seed_from_u64(0);
         for _ in 0..50 {
@@ -698,8 +698,8 @@ mod tests {
     #[test]
     fn pick_next_tile_returns_floor_neighbor() {
         let mut map = Map::new(10, 10);
-        map.set_tile(5, 5, MapTile::Floor);
-        map.set_tile(6, 5, MapTile::Floor);
+        map.set_tile(5, 5, TileKind::Floor);
+        map.set_tile(6, 5, TileKind::Floor);
         let occupied = HashSet::new();
         let mut moved = false;
         for seed in 0..200u64 {
@@ -715,9 +715,9 @@ mod tests {
     #[test]
     fn pick_next_tile_never_moves_to_wall() {
         let mut map = Map::new(10, 10);
-        map.set_tile(5, 5, MapTile::Floor);
-        map.set_tile(6, 5, MapTile::Floor);
-        map.set_tile(4, 5, MapTile::Floor);
+        map.set_tile(5, 5, TileKind::Floor);
+        map.set_tile(6, 5, TileKind::Floor);
+        map.set_tile(4, 5, TileKind::Floor);
         let occupied = HashSet::new();
         for seed in 0..500u64 {
             let mut rng = StdRng::seed_from_u64(seed);
@@ -729,8 +729,8 @@ mod tests {
     #[test]
     fn pick_next_tile_skips_occupied_neighbor() {
         let mut map = Map::new(10, 10);
-        map.set_tile(5, 5, MapTile::Floor);
-        map.set_tile(6, 5, MapTile::Floor);
+        map.set_tile(5, 5, TileKind::Floor);
+        map.set_tile(6, 5, TileKind::Floor);
         let mut occupied = HashSet::new();
         occupied.insert((6usize, 5usize)); // 유일한 이웃이 점유됨
         for seed in 0..200u64 {
@@ -791,8 +791,8 @@ mod tests {
     #[test]
     fn pick_next_tile_blocked_by_player_tile() {
         let mut map = Map::new(10, 10);
-        map.set_tile(5, 5, MapTile::Floor);
-        map.set_tile(6, 5, MapTile::Floor);
+        map.set_tile(5, 5, TileKind::Floor);
+        map.set_tile(6, 5, TileKind::Floor);
         let mut occupied = HashSet::new();
         occupied.insert((6usize, 5usize)); // 플레이어 현재 위치 또는 MovingTo 목적지
         for seed in 0..200u64 {
@@ -808,11 +808,11 @@ mod tests {
         let mut map = Map::new(10, 10);
         for x in 4..=6usize {
             for y in 4..=6usize {
-                map.set_tile(x, y, MapTile::Floor);
+                map.set_tile(x, y, TileKind::Floor);
             }
         }
         // home_rect 바깥 인접 Floor 추가 — 범위 밖이므로 선택되면 안 됨
-        map.set_tile(7, 5, MapTile::Floor);
+        map.set_tile(7, 5, TileKind::Floor);
         let home = Rect::new(4, 4, 2, 2); // x1=4,y1=4,x2=6,y2=6
         let occupied = HashSet::new();
         for seed in 0..200u64 {

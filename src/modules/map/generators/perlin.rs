@@ -1,6 +1,6 @@
 use rand::prelude::*;
 use noise::{NoiseFn, Perlin};
-use crate::modules::map::{Map, MapTile};
+use crate::modules::map::{Map, TileKind};
 use super::super::MapGenerator;
 use super::{ensure_connectivity, add_rooms_from_floor};
 
@@ -18,9 +18,9 @@ impl MapGenerator for PerlinNoiseGenerator {
             for x in 1..width - 1 {
                 let v = perlin.get([x as f64 * scale, y as f64 * scale]);
                 if v > 0.15 {
-                    map.set_tile(x, y, MapTile::Wall);
+                    map.set_tile(x, y, TileKind::Wall);
                 } else {
-                    map.set_tile(x, y, MapTile::Floor);
+                    map.set_tile(x, y, TileKind::Floor);
                 }
             }
         }
@@ -32,7 +32,7 @@ impl MapGenerator for PerlinNoiseGenerator {
             for dx in -5i32..=5 {
                 let nx = (cx as i32 + dx).clamp(1, width as i32 - 2) as usize;
                 let ny = (cy as i32 + dy).clamp(1, height as i32 - 2) as usize;
-                map.set_tile(nx, ny, MapTile::Floor);
+                map.set_tile(nx, ny, TileKind::Floor);
             }
         }
 

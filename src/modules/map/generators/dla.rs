@@ -1,5 +1,5 @@
 use rand::prelude::*;
-use crate::modules::map::{Map, MapTile};
+use crate::modules::map::{Map, TileKind};
 use super::super::MapGenerator;
 use super::add_rooms_from_floor;
 
@@ -20,7 +20,7 @@ impl MapGenerator for DlaGenerator {
             for dx in -3i32..=3 {
                 let nx = (cx as i32 + dx) as usize;
                 let ny = (cy as i32 + dy) as usize;
-                map.set_tile(nx, ny, MapTile::Floor);
+                map.set_tile(nx, ny, TileKind::Floor);
                 floor_tiles.push((nx, ny));
             }
         }
@@ -46,11 +46,11 @@ impl MapGenerator for DlaGenerator {
                     let nx = wx + dx;
                     let ny = wy + dy;
                     nx >= 0 && ny >= 0 && nx < w && ny < h
-                        && map.get_tile(nx as usize, ny as usize) == MapTile::Floor
+                        && map.get_tile(nx as usize, ny as usize) == TileKind::Floor
                 });
                 if adjacent {
-                    if map.get_tile(wx as usize, wy as usize) == MapTile::Wall {
-                        map.set_tile(wx as usize, wy as usize, MapTile::Floor);
+                    if map.get_tile(wx as usize, wy as usize) == TileKind::Wall {
+                        map.set_tile(wx as usize, wy as usize, TileKind::Floor);
                         floor_tiles.push((wx as usize, wy as usize)); // O(1) 목록 갱신
                     }
                     break;

@@ -1,5 +1,5 @@
 use rand::prelude::*;
-use crate::modules::map::{Map, MapTile, Rect};
+use crate::modules::map::{Map, TileKind, Rect};
 use super::super::MapGenerator;
 
 pub struct SimpleRoomsGenerator;
@@ -21,7 +21,7 @@ impl MapGenerator for SimpleRoomsGenerator {
             if rooms.iter().any(|r| intersect(&new_room, r)) { continue; }
             for ry in new_room.y1..new_room.y2 {
                 for rx in new_room.x1..new_room.x2 {
-                    map.set_tile(rx, ry, MapTile::Floor);
+                    map.set_tile(rx, ry, TileKind::Floor);
                 }
             }
             if let Some(prev) = rooms.last() {
@@ -49,10 +49,10 @@ fn intersect(a: &Rect, b: &Rect) -> bool {
 
 fn h_tunnel(map: &mut Map, x1: usize, x2: usize, y: usize) {
     let (lo, hi) = (x1.min(x2), x1.max(x2));
-    for x in lo..=hi { map.set_tile(x, y, MapTile::Floor); }
+    for x in lo..=hi { map.set_tile(x, y, TileKind::Floor); }
 }
 
 fn v_tunnel(map: &mut Map, y1: usize, y2: usize, x: usize) {
     let (lo, hi) = (y1.min(y2), y1.max(y2));
-    for y in lo..=hi { map.set_tile(x, y, MapTile::Floor); }
+    for y in lo..=hi { map.set_tile(x, y, TileKind::Floor); }
 }

@@ -1,6 +1,6 @@
 use crate::modules::{
     map::{
-        draw_map, MapResource, MapTile, OccupiedTiles, MonsterTiles,
+        draw_map, MapResource, TileKind, OccupiedTiles, MonsterTiles,
         tile_to_world_coords, world_to_tile_coords, is_line_of_sight_clear,
         MAP_HEIGHT, MAP_WIDTH, TILE_SIZE,
         MapSystemSet, PlayerRespawnEvent, PlayerActedEvent, BumpTileEvent, AttackMonsterEvent,
@@ -225,7 +225,7 @@ fn player_movement(
     let tx = (cx as i32 + delta.x) as usize;
     let ty = (cy as i32 + delta.y) as usize;
 
-    if map_res.map().get_tile(tx, ty) != MapTile::Floor { return; }
+    if map_res.map().get_tile(tx, ty) != TileKind::Floor { return; }
 
     if monster_tiles.0.contains(&(tx, ty)) {
         attack.send(AttackMonsterEvent(tx, ty));
@@ -283,7 +283,7 @@ fn on_mouse_click(
     let world_vec3 = Vec3::new(world_pos.x, world_pos.y, 0.0);
     let (tx, ty) = world_to_tile_coords(world_vec3);
     let map = map_res.map();
-    if map.get_tile(tx, ty) != MapTile::Floor { return; }
+    if map.get_tile(tx, ty) != TileKind::Floor { return; }
 
     let (px, py) = world_to_tile_coords(player_transform.translation);
     let path = pathfinding::find_path(map, (px, py), (tx, ty));
@@ -334,7 +334,7 @@ fn update_fov(
 
     let start = std::time::Instant::now();
     let map = map_res.map_mut();
-    map.visible_tiles.iter_mut().for_each(|v| *v = false);
+    map.tiles.iter_mut().for_each(|t| t.visible = false);
 
     let radius = 8i32;
     for y in (cur.y - radius)..=(cur.y + radius) {
@@ -344,8 +344,8 @@ fn update_fov(
             if dx * dx + dy * dy > radius * radius { continue; }
             if is_line_of_sight_clear(map, cur.x, cur.y, x, y) {
                 let idx = map.index(x as usize, y as usize);
-                map.visible_tiles[idx] = true;
-                map.revealed_tiles[idx] = true;
+                map.tiles[idx].visible = true;
+                map.tiles[idx].revealed = true;
             }
         }
     }

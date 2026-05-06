@@ -1,5 +1,5 @@
 use rand::prelude::*;
-use crate::modules::map::{Map, MapTile};
+use crate::modules::map::{Map, TileKind};
 use super::super::MapGenerator;
 use super::{count_wall_neighbors, ensure_connectivity, add_rooms_from_floor};
 
@@ -14,7 +14,7 @@ impl MapGenerator for CellularAutomataGenerator {
         for y in 1..height - 1 {
             for x in 1..width - 1 {
                 if rng.gen_bool(0.55) {
-                    map.set_tile(x, y, MapTile::Floor);
+                    map.set_tile(x, y, TileKind::Floor);
                 }
             }
         }
@@ -25,9 +25,9 @@ impl MapGenerator for CellularAutomataGenerator {
                 for x in 1..width - 1 {
                     let walls = count_wall_neighbors(&old, width, height, x, y);
                     if walls >= 5 {
-                        map.set_tile(x, y, MapTile::Wall);
+                        map.set_tile(x, y, TileKind::Wall);
                     } else if walls <= 3 {
-                        map.set_tile(x, y, MapTile::Floor);
+                        map.set_tile(x, y, TileKind::Floor);
                     }
                 }
             }

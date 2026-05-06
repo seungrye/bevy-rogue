@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::modules::{
     map::{
         Map, MapResource, MapGeneratorRegistry, ApplyMapEvent,
-        MAP_WIDTH, MAP_HEIGHT, MapTile, tile_to_world_coords, TILE_SIZE,
+        MAP_WIDTH, MAP_HEIGHT, TileKind, tile_to_world_coords, TILE_SIZE,
         world_to_tile_coords, GlobalTurn, GlobalSeed, zone_seed_from_idx,
     },
     player::{MovingTo, PlayerSystemSet},
@@ -462,7 +462,7 @@ fn discover_portals_in_fov(
         let (tx, ty) = world_to_tile_coords(transform.translation);
         if tx >= map.width || ty >= map.height { continue; }
         let idx = map.index(tx, ty);
-        if !map.visible_tiles[idx] { continue; }
+        if !map.tiles[idx].visible { continue; }
         let kind = match portal.arrive_from {
             PortalDirection::StairDown => crate::modules::ui::minimap::MarkerKind::StairDown,
             PortalDirection::StairUp   => crate::modules::ui::minimap::MarkerKind::StairUp,
@@ -513,7 +513,7 @@ fn portal_tile(
         PortalDirection::North => {
             let cx = map.width / 2;
             for y in 0..map.height {
-                if map.get_tile(cx, y) == MapTile::Floor {
+                if map.get_tile(cx, y) == TileKind::Floor {
                     return Some((cx, y));
                 }
             }
@@ -522,7 +522,7 @@ fn portal_tile(
         PortalDirection::South => {
             let cx = map.width / 2;
             for y in (0..map.height).rev() {
-                if map.get_tile(cx, y) == MapTile::Floor {
+                if map.get_tile(cx, y) == TileKind::Floor {
                     return Some((cx, y));
                 }
             }
@@ -548,9 +548,9 @@ fn arrival_pos(map: &Map, arrive_from: &PortalDirection) -> (usize, usize) {
             // 남쪽에서 올라옴 → 맵 남쪽 첫 Floor
             let cx = map.width / 2;
             for y in (0..map.height).rev() {
-                if map.get_tile(cx, y) == MapTile::Floor {
+                if map.get_tile(cx, y) == TileKind::Floor {
                     let y2 = (y + 1).min(map.height - 1);
-                    if map.get_tile(cx, y2) == MapTile::Floor { return (cx, y2); }
+                    if map.get_tile(cx, y2) == TileKind::Floor { return (cx, y2); }
                     return (cx, y);
                 }
             }
@@ -560,9 +560,9 @@ fn arrival_pos(map: &Map, arrive_from: &PortalDirection) -> (usize, usize) {
             // 북쪽에서 내려옴 → 맵 북쪽 첫 Floor
             let cx = map.width / 2;
             for y in 0..map.height {
-                if map.get_tile(cx, y) == MapTile::Floor {
+                if map.get_tile(cx, y) == TileKind::Floor {
                     let y2 = y.saturating_sub(1);
-                    if map.get_tile(cx, y2) == MapTile::Floor { return (cx, y2); }
+                    if map.get_tile(cx, y2) == TileKind::Floor { return (cx, y2); }
                     return (cx, y);
                 }
             }
@@ -618,7 +618,7 @@ mod tests {
     fn arrival_pos_north_returns_south_area() {
         let mut map = Map::new(20, 20);
         // 남쪽 행에 Floor 생성
-        for x in 0..20 { map.set_tile(x, 18, crate::modules::map::MapTile::Floor); }
+        for x in 0..20 { map.set_tile(x, 18, crate::modules::map::TileKind::Floor); }
         let (_, y) = arrival_pos(&map, &PortalDirection::North);
         assert!(y >= 10, "남쪽 스폰이어야 함: y={}", y);
     }
