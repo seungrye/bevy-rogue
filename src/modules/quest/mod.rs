@@ -63,6 +63,8 @@ pub enum QuestAction {
     KillNpc(String),
     /// 현재 존에 Named 존으로 이어지는 포탈을 즉시 스폰한다
     OpenPortal { zone: String, generator: String },
+    /// 아이템을 수량 지정하여 지급
+    GiveItems { item: String, count: u32 },
     /// 월드에 놓인 아이템 엔티티를 즉시 제거한다 (인벤토리는 건들지 않음)
     DespawnWorldItem(String),
     Branch {
@@ -77,7 +79,15 @@ pub struct QuestSpawn {
     pub phase: String,
     pub item: String,
     pub zone: ZoneId,
+    /// 스폰할 아이템 수 (기본 1)
+    #[serde(default = "default_spawn_count")]
+    pub count: u32,
+    /// 추가 스폰 조건 — 설정 시 phase 일치 + 이 조건 충족일 때만 스폰
+    #[serde(default)]
+    pub condition: Option<QuestCondition>,
 }
+
+fn default_spawn_count() -> u32 { 1 }
 
 // ── 이벤트 ───────────────────────────────────────────────────────────────────
 
@@ -277,7 +287,7 @@ fn collect_action_errors(
                 ));
             }
         }
-        QuestAction::GiveItem(id) | QuestAction::RemoveItem(id) | QuestAction::DespawnWorldItem(id) => {
+        QuestAction::GiveItem(id) | QuestAction::GiveItems { item: id, .. } | QuestAction::RemoveItem(id) | QuestAction::DespawnWorldItem(id) => {
             if item_id_to_kind(id).is_none() {
                 errors.push(format!(
                     "페이즈 '{}': item_id '{}' 를 인식할 수 없습니다", phase_id, id
@@ -368,6 +378,19 @@ pub fn execute_actions(
                     inventory.items.push(InventoryItem { kind });
                     log.send(crate::modules::ui::LogMessage(
                         format!("{} 획득!", kind.display_name())
+                    ));
+                }
+            }
+            QuestAction::GiveItems { item: item_id, count } => {
+                if let Some(kind) = item_id_to_kind(item_id) {
+                    for _ in 0..*count {
+                        match kind {
+                            ItemKind::Consumable(ck) => inventory.add_consumable(ck),
+                            _ => inventory.items.push(InventoryItem { kind }),
+                        }
+                    }
+                    log.send(crate::modules::ui::LogMessage(
+                        format!("{} x{} 획득!", kind.display_name(), count)
                     ));
                 }
             }
@@ -476,37 +499,43 @@ fn spawn_quest_items(
             if spawn.zone != world.current { continue; }
             if state.is_spawn_done(quest_id, &spawn.item) { continue; }
 
+            // 추가 조건이 있으면 평가
+            if let Some(ref cond) = spawn.condition {
+                // spawn_quest_items 에서는 inventory 접근 불가 — 플래그/존/페이즈 조건만 평가
+                let dummy_inv = crate::modules::item::PlayerInventory::default();
+                if !eval_condition(cond, &dummy_inv, &world, &state) { continue; }
+            }
+
             let Some(kind) = item_id_to_kind(&spawn.item) else { continue };
             let map = &map_res.0;
 
-            // 플레이어 스폰 방(첫 번째)을 제외한 방에서 랜덤 배치.
-            // 가용 방이 없으면 마지막 방으로 폴백.
             let rooms = &map.rooms;
             let candidate_rooms: Vec<_> = if rooms.len() > 1 { rooms[1..].iter().collect() } else { rooms.iter().collect() };
-
-            let (tx, ty) = candidate_rooms.iter()
-                .flat_map(|r| random_floor_tile_in_room(r, map, &mut used_spawn.0, &mut rng))
-                .next()
-                .unwrap_or_else(|| map.rooms.last().map(|r| r.center()).unwrap_or((map.width / 2, map.height / 2)));
-
-            let pos = tile_to_world_coords(tx, ty);
             let font = asset_server.load("fonts/FiraMono-Medium.ttf");
 
-            commands.spawn((
-                Text2dBundle {
-                    text: Text::from_section(kind.glyph(), TextStyle {
-                        font,
-                        font_size: TILE_SIZE,
-                        color: kind.color(),
-                    }),
-                    transform: Transform::from_xyz(pos.x, pos.y, 0.3),
-                    ..default()
-                },
-                Item { kind, tile_x: tx, tile_y: ty },
-            ));
+            for _ in 0..spawn.count {
+                let (tx, ty) = candidate_rooms.iter()
+                    .flat_map(|r| random_floor_tile_in_room(r, map, &mut used_spawn.0, &mut rng))
+                    .next()
+                    .unwrap_or_else(|| map.rooms.last().map(|r| r.center()).unwrap_or((map.width / 2, map.height / 2)));
+
+                let pos = tile_to_world_coords(tx, ty);
+                commands.spawn((
+                    Text2dBundle {
+                        text: Text::from_section(kind.glyph(), TextStyle {
+                            font: font.clone(),
+                            font_size: TILE_SIZE,
+                            color: kind.color(),
+                        }),
+                        transform: Transform::from_xyz(pos.x, pos.y, 0.3),
+                        ..default()
+                    },
+                    Item { kind, tile_x: tx, tile_y: ty },
+                ));
+                info!("퀘스트 아이템 스폰: {} at ({}, {})", spawn.item, tx, ty);
+            }
 
             state.mark_spawned(quest_id, &spawn.item);
-            info!("퀘스트 아이템 스폰: {} at ({}, {})", spawn.item, tx, ty);
         }
     }
 }
@@ -544,6 +573,10 @@ pub fn item_id_to_kind(id: &str) -> Option<ItemKind> {
         "ice_sword"           => Some(ItemKind::QuestItem(QuestItemKind::IceSword)),
         "dragon_egg"          => Some(ItemKind::QuestItem(QuestItemKind::DragonEgg)),
         "ghost_wolf"          => Some(ItemKind::QuestItem(QuestItemKind::GhostWolf)),
+        // herb_quest
+        "silver_bell_root"    => Some(ItemKind::QuestItem(QuestItemKind::SilverBellRoot)),
+        "ellen_elixir"        => Some(ItemKind::QuestItem(QuestItemKind::EllenElixir)),
+        "poisoned_herb"       => Some(ItemKind::QuestItem(QuestItemKind::PoisonedHerb)),
         _ => None,
     }
 }

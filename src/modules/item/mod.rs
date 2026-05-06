@@ -115,6 +115,9 @@ fn glyph_unicode(kind: ItemKind) -> &'static str {
             QuestItemKind::DragonglassArrows  => "\u{25B6}", // ▶ solid arrow
             QuestItemKind::RangersNote        => "\u{2767}", // ❧ floral heart
             QuestItemKind::YgrittesBow        => "\u{2640}", // ♀ (ygritte's symbol)
+            QuestItemKind::SilverBellRoot    => "\u{2698}", // ⚘ flower
+            QuestItemKind::EllenElixir       => "\u{2697}", // ⚗ alembic
+            QuestItemKind::PoisonedHerb      => "\u{2620}", // ☠ skull
         },
     }
 }
@@ -153,6 +156,9 @@ fn glyph_game_icon(kind: ItemKind) -> &'static str {
             QuestItemKind::DragonglassArrows  => "\u{25B6}", // fallback: ▶
             QuestItemKind::RangersNote        => "\u{2767}", // fallback: ❧
             QuestItemKind::YgrittesBow        => "\u{2640}", // fallback: ♀
+            QuestItemKind::SilverBellRoot    => "\u{2698}", // fallback: ⚘
+            QuestItemKind::EllenElixir       => "\u{2697}", // fallback: ⚗
+            QuestItemKind::PoisonedHerb      => "\u{2620}", // fallback: ☠
         },
     }
 }
@@ -186,6 +192,10 @@ pub enum QuestItemKind {
     DragonglassArrows,
     RangersNote,
     YgrittesBow,
+    // herb_quest — 은방울 뿌리 채집
+    SilverBellRoot,
+    EllenElixir,
+    PoisonedHerb,
 }
 
 impl QuestItemKind {
@@ -211,6 +221,9 @@ impl QuestItemKind {
             QuestItemKind::DragonglassArrows  => "드래곤스톤 화살촉",
             QuestItemKind::RangersNote        => "죽은 레인저의 메모",
             QuestItemKind::YgrittesBow        => "이그리트의 활",
+            QuestItemKind::SilverBellRoot    => "은방울 뿌리",
+            QuestItemKind::EllenElixir       => "엘렌의 특제 영약",
+            QuestItemKind::PoisonedHerb      => "독초",
         }
     }
 }
@@ -307,6 +320,9 @@ impl ItemKind {
                 QuestItemKind::DragonglassArrows  => ">",
                 QuestItemKind::RangersNote        => "n",
                 QuestItemKind::YgrittesBow        => "q",
+                QuestItemKind::SilverBellRoot    => ";",
+                QuestItemKind::EllenElixir       => "&",
+                QuestItemKind::PoisonedHerb      => "?",
             },
         }
     }
@@ -363,6 +379,9 @@ impl ItemKind {
                 QuestItemKind::DragonglassArrows  => "드래곤스톤 화살촉 다발. 와이트를 멈추는 유일한 방법.",
                 QuestItemKind::RangersNote        => "죽은 레인저의 메모. 떨리는 손으로 쓴 마지막 경고.",
                 QuestItemKind::YgrittesBow        => "이그리트의 활. 그녀는 항상 당신보다 빨리 쏜다.",
+                QuestItemKind::SilverBellRoot    => "은방울 뿌리를 채집했다. 맑은 향기가 퍼진다.",
+                QuestItemKind::EllenElixir       => "엘렌의 특제 영약. 온 몸에 활력이 흐른다.",
+                QuestItemKind::PoisonedHerb      => "독초를 발견했다. 조심해야 할 것 같다.",
             },
         }
     }
@@ -653,6 +672,9 @@ fn quest_item_image_path(kind: QuestItemKind) -> &'static str {
         QuestItemKind::DragonglassArrows  => "scene/open-chest.png",
         QuestItemKind::RangersNote        => "scene/open-chest.png",
         QuestItemKind::YgrittesBow        => "scene/open-chest.png",
+        QuestItemKind::SilverBellRoot    => "scene/open-chest.png",
+        QuestItemKind::EllenElixir       => "scene/open-chest.png",
+        QuestItemKind::PoisonedHerb      => "scene/open-chest.png",
     }
 }
 

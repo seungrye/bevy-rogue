@@ -1,0 +1,171 @@
+// ─────────────────────────────────────────────────────────────────
+// herb_quest — 은방울 뿌리 채집
+//
+// 사용하는 퀘스트 기능:
+//   QuestCondition: HasItem, InZone, HasFlag, FlagIs, PhaseIs, And, Or, Not
+//   QuestAction:    AdvancePhase, GiveItem, GiveItems, RemoveItem, Log,
+//                   SetFlag, ClearFlag, OpenPortal, DespawnWorldItem,
+//                   KillNpc, Branch
+//   QuestSpawn:     count, condition
+//   AutoAdvance:    condition, next_phase, actions
+//   QuestPhaseDef:  dialog, on_interact, auto_advance, objective
+// ─────────────────────────────────────────────────────────────────
+QuestDef(
+    id: "herb_quest",
+    title: "은방울 뿌리 채집",
+    giver_npc: "엘렌",
+    initial_phase: "not_started",
+
+    phases: {
+        // ── 1단계: 퀘스트 수주 ──────────────────────────────────
+        "not_started": QuestPhaseDef(
+            dialog: [
+                "안녕하세요, 모험가님. 저는 힐러 엘렌이에요.",
+                "요즘 마을에 이상한 병이 돌고 있어요...",
+                "숲속에 자라는 '은방울 뿌리'로 약을 만들 수 있는데,",
+                "10개만 구해다 주실 수 있을까요?",
+                "단, 비슷하게 생긴 독초가 섞여 있으니 조심하세요!",
+            ],
+            on_interact: [
+                SetFlag(flag: "herb_quest_active", value: "true"),
+                OpenPortal(zone: "herb_glade", generator: "forest"),
+                Log("엘렌: 마을 근처에 포탈이 열렸어요. 조심히 다녀오세요!"),
+                AdvancePhase("gathering"),
+            ],
+            auto_advance: [],
+            objective: Some("엘렌의 부탁을 들어보자."),
+        ),
+
+        // ── 2단계: 채집 중 ──────────────────────────────────────
+        "gathering": QuestPhaseDef(
+            dialog: [
+                "아직 은방울 뿌리를 구하지 못하셨나요?",
+                "숲속 공터 포탈로 들어가 보세요.",
+                "뿌리는 ';' 모양, 독초는 '?' 모양이에요.",
+            ],
+            on_interact: [],
+            auto_advance: [
+                // 독초를 먼저 주웠을 때 → 경고 분기
+                AutoAdvance(
+                    condition: And([
+                        HasItem("poisoned_herb"),
+                        Not(HasItem("silver_bell_root")),
+                    ]),
+                    next_phase: "poisoned_warning",
+                    actions: [
+                        RemoveItem("poisoned_herb"),
+                        DespawnWorldItem("poisoned_herb"),
+                        SetFlag(flag: "got_poisoned", value: "true"),
+                    ],
+                ),
+                // 은방울 뿌리를 가지고 있으면 → 수집 완료
+                AutoAdvance(
+                    condition: HasItem("silver_bell_root"),
+                    next_phase: "collected",
+                    actions: [
+                        DespawnWorldItem("poisoned_herb"),
+                    ],
+                ),
+            ],
+            objective: Some("숲속 공터에서 은방울 뿌리 10개를 채집하라. 독초를 조심!"),
+        ),
+
+        // ── 2-B: 독초 경고 (플래그 분기 시연) ───────────────────
+        "poisoned_warning": QuestPhaseDef(
+            dialog: [
+                "이런! 독초를 주워오셨네요!",
+                "괜찮으세요? 해독제를 드릴 테니 다시 가보세요.",
+                "은방울 뿌리는 ';' 모양이에요. 헷갈리지 마세요!",
+            ],
+            on_interact: [
+                GiveItem("health_potion"),
+                Log("엘렌이 해독제를 건넸다. 체력 물약도 하나 덤."),
+                SetFlag(flag: "herb_knowledge", value: "learned_poison"),
+                AdvancePhase("gathering"),
+            ],
+            auto_advance: [],
+            objective: Some("엘렌에게 해독제를 받고 다시 숲으로 가자."),
+        ),
+
+        // ── 3단계: 수집 완료, 엘렌에게 전달 ────────────────────
+        "collected": QuestPhaseDef(
+            dialog: [
+                "오! 은방울 뿌리를 구해오셨군요!",
+                "이걸로 약을 만들 수 있겠어요.",
+                "정말 감사합니다, 모험가님!",
+            ],
+            on_interact: [
+                RemoveItem("silver_bell_root"),
+                Branch(
+                    condition: FlagIs(flag: "herb_knowledge", value: "learned_poison"),
+                    if_true: [
+                        Log("엘렌: 독초를 구별할 줄 알게 되셨으니... 특별한 걸 드릴게요!"),
+                        GiveItems(item: "health_potion", count: 3),
+                        GiveItem("ellen_elixir"),
+                    ],
+                    if_false: [
+                        Log("엘렌: 감사합니다! 물약을 드릴게요."),
+                        GiveItems(item: "health_potion", count: 3),
+                    ],
+                ),
+                ClearFlag("herb_quest_active"),
+                ClearFlag("got_poisoned"),
+                ClearFlag("herb_knowledge"),
+                AdvancePhase("done"),
+            ],
+            auto_advance: [],
+            objective: Some("은방울 뿌리를 엘렌에게 전달하라."),
+        ),
+
+        // ── 4단계: 완료 ─────────────────────────────────────────
+        "done": QuestPhaseDef(
+            dialog: [
+                "덕분에 마을 사람들이 건강을 되찾았어요.",
+                "언제든 다시 찾아오세요. 약초 판매도 하고 있답니다!",
+            ],
+            on_interact: [],
+            auto_advance: [
+                // 보석 퀘스트가 진행 중이면 힌트 대화로 전환 (PhaseIs 교차 참조)
+                AutoAdvance(
+                    condition: PhaseIs(quest: "gem_quest", phase: "active"),
+                    next_phase: "done_with_hint",
+                    actions: [
+                        SetFlag(flag: "ellen_gave_hint", value: "true"),
+                    ],
+                ),
+            ],
+            objective: Some("퀘스트 완료!"),
+        ),
+
+        // ── 4-B: 완료 + 보석 퀘스트 힌트 (PhaseIs 교차 참조) ──
+        "done_with_hint": QuestPhaseDef(
+            dialog: [
+                "참, 장로님이 보석을 찾고 계시죠?",
+                "던전 2층 남쪽 방에서 빛나는 걸 본 적이 있어요.",
+                "도움이 되셨으면 좋겠네요!",
+            ],
+            on_interact: [],
+            auto_advance: [],
+            objective: Some("퀘스트 완료! (장로의 보석 퀘스트 힌트를 얻었다)"),
+        ),
+    },
+
+    spawns: [
+        // 은방울 뿌리 10개 — herb_quest_active 플래그일 때만 스폰
+        QuestSpawn(
+            phase: "gathering",
+            item: "silver_bell_root",
+            zone: Named("herb_glade"),
+            count: 10,
+            condition: Some(HasFlag("herb_quest_active")),
+        ),
+        // 독초 3개 — 함정으로 섞어놓기
+        QuestSpawn(
+            phase: "gathering",
+            item: "poisoned_herb",
+            zone: Named("herb_glade"),
+            count: 3,
+            condition: Some(HasFlag("herb_quest_active")),
+        ),
+    ],
+)

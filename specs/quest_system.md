@@ -59,6 +59,8 @@ QuestDef(
             phase: "active",
             item: "eternal_gem",
             zone: Dungeon(2),
+            // count: 1,          ← 기본값 1, 생략 가능
+            // condition: None,   ← 기본값 None, 생략 가능
         ),
     ],
 )
@@ -74,13 +76,16 @@ QuestDef(
 | `PhaseIs { quest: "id", phase: "id" }` | 다른 퀘스트의 현재 단계 확인 |
 | `And([cond, ...])` | 모든 조건 충족 |
 | `Or([cond, ...])` | 하나 이상 조건 충족 |
+| `FlagIs { flag, value }` | 퀘스트 플래그가 특정 값인지 확인 |
+| `HasFlag("flag")` | 퀘스트 플래그가 존재하는지 확인 |
 | `Not(cond)` | 조건 부정 |
 
 ### QuestAction
 | 값 | 설명 |
 |----|------|
 | `AdvancePhase("phase_id")` | 이 퀘스트의 현재 단계를 지정 단계로 이동 |
-| `GiveItem("item_id")` | 플레이어에게 아이템 지급 |
+| `GiveItem("item_id")` | 플레이어에게 아이템 1개 지급 |
+| `GiveItems { item, count }` | 아이템을 수량 지정하여 지급 (소모품은 자동 스택) |
 | `RemoveItem("item_id")` | 플레이어 인벤토리에서 아이템 제거 |
 | `Log("message")` | 로그 창에 메시지 출력 |
 | `SetFlag { flag, value }` | 퀘스트 플래그 설정 |
@@ -97,6 +102,15 @@ QuestDef(
   - `DespawnWorldItem`, `RemoveItem`, `SetFlag` 지원
   - `OpenPortal`, `KillNpc` 등 NPC 상호작용 전용 액션은 미지원
 
+
+### QuestSpawn
+| 필드 | 타입 | 기본값 | 설명 |
+|------|------|--------|------|
+| `phase` | `String` | (필수) | 이 단계일 때 스폰 |
+| `item` | `String` | (필수) | 스폰할 아이템 ID |
+| `zone` | `ZoneId` | (필수) | 스폰 대상 존 |
+| `count` | `u32` | `1` | 스폰할 아이템 수량 |
+| `condition` | `Option<QuestCondition>` | `None` | 추가 스폰 조건 (플래그/존/페이즈 조건 지원) |
 ## 퀘스트 아이템 ID 목록
 
 | item_id | 종류 | 설명 |
@@ -105,6 +119,86 @@ QuestDef(
 | `philosophers_stone` | QuestItem | 보석 퀘스트 완료 보상 |
 | `dragon_scale` | QuestItem | 던전 2층에서 획득, 연금술사 재료 |
 | `ancient_scroll` | QuestItem | 던전 1층에서 획득, 연금술사 재료 |
+
+
+## 예시: 조건부 스폰 + 수량 시나리오 (약초 구하기)
+
+```ron
+QuestDef(
+    id: "herb_quest",
+    title: "은방울 뿌리 채집",
+    giver_npc: "엘렌",
+    initial_phase: "not_started",
+
+    phases: {
+        "not_started": QuestPhaseDef(
+            dialog: [
+                "안녕하세요, 모험가님.",
+                "숲속에 은방울 뿌리가 필요한데...",
+                "10개만 구해다 주실 수 있나요?",
+            ],
+            on_interact: [
+                SetFlag(flag: "herb_quest_active", value: "true"),
+                AdvancePhase("gathering"),
+            ],
+            auto_advance: [],
+            objective: Some("엘렌의 부탁을 들어주기로 했다."),
+        ),
+        "gathering": QuestPhaseDef(
+            dialog: ["숲속에서 은방울 뿌리를 찾아주세요. 10개 필요합니다."],
+            on_interact: [],
+            auto_advance: [
+                AutoAdvance(
+                    condition: HasItem("silver_bell_root"),
+                    next_phase: "ready",
+                ),
+            ],
+            objective: Some("숲에서 은방울 뿌리 10개를 채집하라."),
+        ),
+        "ready": QuestPhaseDef(
+            dialog: [
+                "오! 은방울 뿌리를 구해오셨군요!",
+                "감사합니다. 여기 체력 물약을 드릴게요.",
+            ],
+            on_interact: [
+                RemoveItem("silver_bell_root"),
+                ClearFlag("herb_quest_active"),
+                GiveItems(item: "health_potion", count: 3),
+                AdvancePhase("done"),
+            ],
+            auto_advance: [],
+            objective: Some("엘렌에게 은방울 뿌리를 전달하라."),
+        ),
+        "done": QuestPhaseDef(
+            dialog: ["덕분에 좋은 약을 만들 수 있겠어요. 감사합니다!"],
+            on_interact: [],
+            auto_advance: [],
+            objective: Some("퀘스트 완료!"),
+        ),
+    },
+
+    spawns: [
+        // herb_quest_active 플래그가 설정된 상태에서 숲 진입 시
+        // 은방울 뿌리 10개가 랜덤 방에 스폰
+        QuestSpawn(
+            phase: "gathering",
+            item: "silver_bell_root",
+            zone: Forest,
+            count: 10,
+            condition: Some(HasFlag("herb_quest_active")),
+        ),
+    ],
+)
+```
+
+**핵심 포인트:**
+- `SetFlag` → 다른 존에서 `condition: HasFlag(...)` 로 스폰 제어
+- `count: 10` → 같은 아이템 10개를 랜덤 방에 분산 배치
+- `GiveItems { item, count }` → 보상으로 소모품 여러 개 한번에 지급
+
+| `silver_bell_root` | QuestItem | 숲속 공터에서 채집, 약초 퀘스트 재료 |
+| `ellen_elixir` | QuestItem | 약초 퀘스트 보너스 보상 (독초 경험 시) |
+| `poisoned_herb` | QuestItem | 은방울 뿌리와 비슷한 독초 (함정) |
 
 ## 동작 명세
 
@@ -119,6 +213,8 @@ QuestDef(
 - [x] `PhaseIs` 조건은 `QuestState` 를 참조해 다른 퀘스트의 단계를 비교한다
 - [x] `Branch` 액션은 중첩 가능하며 런타임 조건에 따라 액션 목록을 선택한다
 - [x] `QuestSpawn` 은 해당 `phase` 활성 + 해당 `zone` 진입 시 아이템 스폰
+- [x] `QuestSpawn.count` — 동일 아이템을 지정 수량만큼 랜덤 방에 분산 스폰 (기본 1)
+- [x] `QuestSpawn.condition` — 추가 조건(플래그/존/페이즈) 충족 시에만 스폰
 - [x] 이미 수집한 퀘스트 아이템은 재스폰 안 됨 (`QuestState.spawned` HashSet)
 - [x] 퀘스트 아이템은 플레이어 스폰 방(첫 번째)을 제외한 랜덤 방의 랜덤 Floor 타일에 배치 — 계단·다른 아이템과 중복 없음 (`UsedSpawnTiles` 공유)
 - [x] 퀘스트 진행상황은 `save/progress.ron` 에 저장·복원 (`QuestState` 포함 전체 게임 상태 자동 저장)
