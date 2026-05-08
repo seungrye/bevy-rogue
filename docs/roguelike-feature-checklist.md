@@ -20,6 +20,8 @@
 
 ### 1. 게임 오버와 새 게임 흐름
 
+상세 스펙: [`specs/game-over-new-run.md`](../specs/game-over-new-run.md)
+
 현재 상태: 구현됨.
 
 구현된 UX:
@@ -40,6 +42,8 @@
 
 ### 2. 인게임 도움말 / 키 바인딩 오버레이
 
+상세 스펙: [`specs/help-overlay.md`](../specs/help-overlay.md)
+
 현재 상태: 구현됨.
 
 구현된 UX:
@@ -57,6 +61,8 @@
 우선도: 완료. 신규 플레이어가 외부 문서 없이 기본 조작을 확인할 수 있다.
 
 ### 3. 상단 HUD / 상태 요약
+
+상세 스펙: [`specs/status-hud.md`](../specs/status-hud.md)
 
 현재 상태: 구현됨.
 
@@ -78,6 +84,8 @@
 우선도: 완료. 플레이어가 매 턴 판단할 핵심 정보를 한눈에 볼 수 있다.
 
 ### 4. 목표 안내와 퀘스트 추적
+
+상세 스펙: [`specs/quest-guidance.md`](../specs/quest-guidance.md)
 
 현재 상태: 일부 구현됨.
 
@@ -101,6 +109,8 @@
 ## 로그라이크 기본기로 추가하면 좋은 항목
 
 ### 성장 루프
+
+상세 스펙: [`specs/player-xp-progression.md`](../specs/player-xp-progression.md)
 
 현재 상태: 일부 구현됨.
 
