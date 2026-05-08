@@ -1,5 +1,8 @@
 use bevy::prelude::*;
 pub mod equipment;
+pub mod game_over;
+pub mod help;
+pub mod hud;
 pub mod minimap;
 pub mod quest_panel;
 pub mod shop;
@@ -16,6 +19,9 @@ impl Plugin for GameUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(minimap::MinimapPlugin)
             .add_plugins(equipment::EquipmentPlugin)
+            .add_plugins(game_over::GameOverPlugin)
+            .add_plugins(help::HelpPlugin)
+            .add_plugins(hud::StatusHudPlugin)
             .add_plugins(quest_panel::QuestPanelPlugin)
             .add_plugins(shop::ShopPlugin)
             .add_systems(Startup, setup_ui)

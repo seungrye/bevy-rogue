@@ -7,7 +7,7 @@ use crate::modules::{
     },
     combat::{CombatStats, Defeated, Speed},
     item::EquipmentPanelOpen,
-    ui::{LogMessage, shop::ShopPanelOpen},
+    ui::{help::HelpPanelOpen, shop::ShopPanelOpen, LogMessage},
 };
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
@@ -158,6 +158,10 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, map_res:
     });
 }
 
+/// Reads keyboard movement and wait input, then turns it into one player action.
+///
+/// Modal UI panels deliberately pause movement handling so a command meant for a
+/// panel never leaks into the dungeon as an accidental step or wait turn.
 fn player_movement(
     mut commands: Commands,
     keyboard_input: Res<ButtonInput<KeyCode>>,
@@ -174,8 +178,9 @@ fn player_movement(
     _log_writer: EventWriter<LogMessage>,
     equipment_open: Res<EquipmentPanelOpen>,
     shop_open: Res<ShopPanelOpen>,
+    help_open: Res<HelpPanelOpen>,
 ) {
-    if equipment_open.0 || shop_open.0 { return; }
+    if equipment_open.0 || shop_open.0 || help_open.0 { return; }
     let Ok((entity, transform)) = player_query.get_single() else { return };
 
     // 스페이스바: 제자리 대기 — hold state 초기화 후 턴 소비
@@ -269,6 +274,10 @@ fn smooth_player_lerp(
     }
 }
 
+/// Builds an auto-move path from the player to the clicked floor tile.
+///
+/// Mouse pathing is ignored while modal panels are open, matching keyboard
+/// movement so overlays remain interaction boundaries instead of translucent UI.
 fn on_mouse_click(
     mouse_input: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
@@ -278,9 +287,10 @@ fn on_mouse_click(
     mut player_path: ResMut<PlayerPath>,
     equipment_open: Res<EquipmentPanelOpen>,
     shop_open: Res<ShopPanelOpen>,
+    help_open: Res<HelpPanelOpen>,
 ) {
     if !mouse_input.just_pressed(MouseButton::Left) { return; }
-    if equipment_open.0 || shop_open.0 { return; }
+    if equipment_open.0 || shop_open.0 || help_open.0 { return; }
 
     let Ok(window) = windows.get_single() else { return };
     let Ok((camera, cam_transform)) = camera_q.get_single() else { return };
