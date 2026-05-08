@@ -195,7 +195,11 @@ fn restore_map_for_zone(
 ) -> Map {
     let seed = zone_seed(global_seed, zone_id);
     let algorithm = get_algo(zone_id, named_config);
-    let mut map = registry.generate_with(&algorithm, MAP_WIDTH, MAP_HEIGHT, seed);
+    let mut map = registry.generate_with(&algorithm, MAP_WIDTH, MAP_HEIGHT, seed)
+        .unwrap_or_else(|| {
+            warn!("알 수 없는 맵 생성기 {} - 빈 맵으로 복원합니다", algorithm);
+            Map::new(MAP_WIDTH, MAP_HEIGHT)
+        });
     map.seed = seed;
     map.algorithm = algorithm;
 

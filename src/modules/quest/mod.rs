@@ -245,13 +245,22 @@ pub fn validate_quest_def(def: &QuestDef) -> Vec<String> {
         for action in &phase.on_interact {
             collect_action_errors(action, &def.phases, phase_id, &mut errors);
         }
-        // auto_advance next_phase 참조 확인
+        // auto_advance next_phase 및 런타임에서 실제 실행되는 액션만 허용
         for auto in &phase.auto_advance {
             if !def.phases.contains_key(&auto.next_phase) {
                 errors.push(format!(
                     "페이즈 '{}': auto_advance next_phase '{}' 이 없습니다",
                     phase_id, auto.next_phase
                 ));
+            }
+            for action in &auto.actions {
+                if !is_auto_advance_action_supported(action) {
+                    errors.push(format!(
+                        "페이즈 '{}': auto_advance actions 에서 지원하지 않는 액션 {:?}",
+                        phase_id, action
+                    ));
+                }
+                collect_action_errors(action, &def.phases, phase_id, &mut errors);
             }
         }
     }
@@ -267,6 +276,14 @@ pub fn validate_quest_def(def: &QuestDef) -> Vec<String> {
             errors.push(format!(
                 "spawns: phase '{}' 이 phases 에 없습니다", spawn.phase
             ));
+        }
+        if let Some(condition) = &spawn.condition {
+            if condition_uses_inventory(condition) {
+                errors.push(format!(
+                    "spawns: item '{}' condition 에 HasItem 을 사용할 수 없습니다 (스폰 조건은 플래그/존/페이즈만 지원)",
+                    spawn.item
+                ));
+            }
         }
     }
 
@@ -300,6 +317,26 @@ fn collect_action_errors(
             }
         }
         _ => {}
+    }
+}
+
+fn is_auto_advance_action_supported(action: &QuestAction) -> bool {
+    matches!(
+        action,
+        QuestAction::DespawnWorldItem(_)
+            | QuestAction::RemoveItem(_)
+            | QuestAction::SetFlag { .. }
+    )
+}
+
+fn condition_uses_inventory(condition: &QuestCondition) -> bool {
+    match condition {
+        QuestCondition::HasItem(_) => true,
+        QuestCondition::And(conditions) | QuestCondition::Or(conditions) => {
+            conditions.iter().any(condition_uses_inventory)
+        }
+        QuestCondition::Not(inner) => condition_uses_inventory(inner),
+        _ => false,
     }
 }
 
@@ -904,6 +941,66 @@ mod tests {
         assert_eq!(actions.len(), 2);
         assert!(matches!(&actions[0], QuestAction::DespawnWorldItem(id) if id == "prologue_daggers"));
         assert!(matches!(&actions[1], QuestAction::DespawnWorldItem(id) if id == "prologue_bowtorch"));
+    }
+
+    #[test]
+    fn validate_rejects_unsupported_auto_advance_action() {
+        let def: QuestDef = ron::de::from_str(r#"
+            QuestDef(
+                id: "test",
+                title: "test",
+                giver_npc: "npc",
+                initial_phase: "start",
+                phases: {
+                    "start": QuestPhaseDef(
+                        dialog: [],
+                        auto_advance: [
+                            AutoAdvance(
+                                condition: HasFlag("ready"),
+                                next_phase: "done",
+                                actions: [OpenPortal(zone: "rift", generator: "bsp")],
+                            ),
+                        ],
+                    ),
+                    "done": QuestPhaseDef(dialog: []),
+                },
+            )
+        "#).expect("RON 파싱 성공해야 한다");
+        let errors = validate_quest_def(&def);
+        assert!(
+            errors.iter().any(|e| e.contains("지원하지 않는 액션")),
+            "unsupported auto action 오류가 있어야 한다: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn validate_rejects_has_item_in_spawn_condition() {
+        let def: QuestDef = ron::de::from_str(r#"
+            QuestDef(
+                id: "test",
+                title: "test",
+                giver_npc: "npc",
+                initial_phase: "start",
+                phases: {
+                    "start": QuestPhaseDef(dialog: []),
+                },
+                spawns: [
+                    QuestSpawn(
+                        phase: "start",
+                        item: "eternal_gem",
+                        zone: Town,
+                        condition: Some(HasItem("prologue_greatsword")),
+                    ),
+                ],
+            )
+        "#).expect("RON 파싱 성공해야 한다");
+        let errors = validate_quest_def(&def);
+        assert!(
+            errors.iter().any(|e| e.contains("HasItem")),
+            "spawn HasItem 조건 오류가 있어야 한다: {:?}",
+            errors
+        );
     }
 
     // ── assets/quests/*.ron 파일 통합 검증 ──────────────────────────────────

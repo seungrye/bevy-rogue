@@ -241,7 +241,7 @@ fn handle_zone_transition(
     mut world: ResMut<WorldState>,
     map_res: Res<MapResource>,
     mut apply_ev: EventWriter<ApplyMapEvent>,
-    mut registry: ResMut<MapGeneratorRegistry>,
+    registry: Res<MapGeneratorRegistry>,
     portals: Query<Entity, With<ZonePortal>>,
     mut commands: Commands,
     mut log: EventWriter<crate::modules::ui::LogMessage>,
@@ -281,11 +281,13 @@ fn handle_zone_transition(
             } else {
                 target.algorithm().to_string()
             };
-            registry.select_by_name(&algo);
             let seed = zone_seed(global_seed.0, &target);
-            let mut new_map = registry.current()
-                .map(|g| g.generate(MAP_WIDTH, MAP_HEIGHT, seed))
-                .unwrap_or_else(|| Map::new(MAP_WIDTH, MAP_HEIGHT));
+            let mut new_map = registry.generate_with(&algo, MAP_WIDTH, MAP_HEIGHT, seed)
+                .unwrap_or_else(|| {
+                    warn!("알 수 없는 맵 생성기 {} - 빈 맵을 생성합니다", algo);
+                    Map::new(MAP_WIDTH, MAP_HEIGHT)
+                });
+            new_map.seed = seed;
             new_map.algorithm = algo;
             new_map
         };

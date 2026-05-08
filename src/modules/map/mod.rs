@@ -143,19 +143,21 @@ impl MapGeneratorRegistry {
             self.current = (self.current + 1) % self.generators.len();
         }
     }
-    pub fn select_by_name(&mut self, name: &str) {
+    pub fn select_by_name(&mut self, name: &str) -> bool {
         if let Some(idx) = self.generators.iter().position(|g| g.name() == name) {
             self.current = idx;
+            true
+        } else {
+            false
         }
     }
     pub fn current_name(&self) -> &str {
         self.current().map(|g| g.name()).unwrap_or("없음")
     }
-    pub fn generate_with(&self, algo: &str, width: usize, height: usize, seed: u64) -> Map {
+    pub fn generate_with(&self, algo: &str, width: usize, height: usize, seed: u64) -> Option<Map> {
         self.generators.iter()
             .find(|g| g.name() == algo)
             .map(|g| g.generate(width, height, seed))
-            .unwrap_or_else(|| Map::new(width, height))
     }
 }
 
@@ -648,14 +650,20 @@ mod tests {
     #[test]
     fn select_by_name_picks_correct() {
         let mut r = registry_with(&["A", "B", "C"]);
-        r.select_by_name("C");
+        assert!(r.select_by_name("C"));
         assert_eq!(r.current_name(), "C");
     }
 
     #[test]
     fn select_by_name_unknown_is_noop() {
         let mut r = registry_with(&["A", "B"]);
-        r.select_by_name("Z");
+        assert!(!r.select_by_name("Z"));
         assert_eq!(r.current_name(), "A");
+    }
+
+    #[test]
+    fn generate_with_unknown_returns_none() {
+        let r = registry_with(&["A"]);
+        assert!(r.generate_with("missing", 10, 10, 1).is_none());
     }
 }

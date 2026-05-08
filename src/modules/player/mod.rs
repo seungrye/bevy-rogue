@@ -1,6 +1,6 @@
 use crate::modules::{
     map::{
-        draw_map, MapResource, TileKind, OccupiedTiles, MonsterTiles,
+        draw_map, Map, MapResource, TileKind, OccupiedTiles, MonsterTiles,
         tile_to_world_coords, world_to_tile_coords, is_line_of_sight_clear,
         MAP_HEIGHT, MAP_WIDTH, TILE_SIZE,
         MapSystemSet, PlayerRespawnEvent, PlayerActedEvent, BumpTileEvent, AttackMonsterEvent,
@@ -79,6 +79,15 @@ pub fn tick_hold(state: &mut MoveHoldState, dir: IVec2, just_pressed: bool, dt: 
     }
     state.elapsed += dt;
     state.elapsed >= INITIAL_HOLD_DELAY
+}
+
+pub fn offset_tile_in_bounds(map: &Map, x: usize, y: usize, delta: IVec2) -> Option<(usize, usize)> {
+    let tx = x as i32 + delta.x;
+    let ty = y as i32 + delta.y;
+    if tx < 0 || ty < 0 || tx >= map.width as i32 || ty >= map.height as i32 {
+        return None;
+    }
+    Some((tx as usize, ty as usize))
 }
 
 #[derive(Component)]
@@ -221,11 +230,11 @@ fn player_movement(
     let delta = hold_state.dir;
     if delta == IVec2::ZERO { return; }
 
+    let map = map_res.map();
     let (cx, cy) = world_to_tile_coords(transform.translation);
-    let tx = (cx as i32 + delta.x) as usize;
-    let ty = (cy as i32 + delta.y) as usize;
+    let Some((tx, ty)) = offset_tile_in_bounds(map, cx, cy, delta) else { return; };
 
-    if map_res.map().get_tile(tx, ty) != TileKind::Floor { return; }
+    if map.get_tile(tx, ty) != TileKind::Floor { return; }
 
     if monster_tiles.0.contains(&(tx, ty)) {
         attack.send(AttackMonsterEvent(tx, ty));
@@ -350,7 +359,7 @@ fn update_fov(
         }
     }
     let elapsed = start.elapsed();
-    if elapsed.as_micros() > 0 { info!("FOV: {:?}", elapsed); }
+    if elapsed.as_millis() >= 5 { debug!("FOV: {:?}", elapsed); }
 }
 
 fn update_player_bars(
@@ -402,6 +411,18 @@ mod tests {
         for ratio in [0.0, 0.25, 0.26, 0.5, 0.51, 1.0] {
             assert_eq!(hp_color(ratio).a(), BAR_ALPHA, "ratio={ratio} 의 alpha 가 BAR_ALPHA 여야 한다");
         }
+    }
+
+    #[test]
+    fn offset_tile_in_bounds_rejects_negative_target() {
+        let map = Map::new(10, 10);
+        assert_eq!(offset_tile_in_bounds(&map, 0, 0, IVec2::new(-1, 0)), None);
+    }
+
+    #[test]
+    fn offset_tile_in_bounds_accepts_valid_target() {
+        let map = Map::new(10, 10);
+        assert_eq!(offset_tile_in_bounds(&map, 3, 4, IVec2::new(1, -1)), Some((4, 3)));
     }
 
     #[test]
