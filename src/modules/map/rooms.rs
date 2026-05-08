@@ -1,6 +1,6 @@
 use rand::prelude::*;
 use rand::thread_rng;
-use super::{Map, MapTile, Rect};
+use super::{Map, TileKind, Rect};
 
 /// 무작위 방 배치 알고리즘을 사용하여 맵을 생성합니다.
 ///
@@ -34,7 +34,7 @@ pub fn generate_rooms_map(width: usize, height: usize) -> Map {
             // 바닥 타일로 변환
             for ry in new_room.y1..new_room.y2 {
                 for rx in new_room.x1..new_room.x2 {
-                    map.set_tile(rx, ry, MapTile::Floor);
+                    map.set_tile(rx, ry, TileKind::Floor);
                 }
             }
 
@@ -77,7 +77,7 @@ fn intersect(r1: &Rect, r2: &Rect) -> bool {
 /// * `y` - 고정된 y 좌표
 fn apply_horizontal_tunnel(map: &mut Map, x1: usize, x2: usize, y: usize) {
     use std::cmp::{min, max};
-    for x in min(x1, x2)..=max(x1, x2) { map.set_tile(x, y, MapTile::Floor); }
+    for x in min(x1, x2)..=max(x1, x2) { map.set_tile(x, y, TileKind::Floor); }
 }
 
 /// 특정 x 좌표에서 두 y 좌표 사이를 잇는 수직 복도를 생성합니다.
@@ -88,5 +88,5 @@ fn apply_horizontal_tunnel(map: &mut Map, x1: usize, x2: usize, y: usize) {
 /// * `x` - 고정된 x 좌표
 fn apply_vertical_tunnel(map: &mut Map, y1: usize, y2: usize, x: usize) {
     use std::cmp::{min, max};
-    for y in min(y1, y2)..=max(y1, y2) { map.set_tile(x, y, MapTile::Floor); }
+    for y in min(y1, y2)..=max(y1, y2) { map.set_tile(x, y, TileKind::Floor); }
 }

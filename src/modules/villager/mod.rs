@@ -554,14 +554,6 @@ pub fn next_dialogue_idx(current: usize, total: usize) -> usize {
     (current + 1) % total
 }
 
-/// 퀘스트가 더 이상 진행할 수 없는 최종 단계인지 확인한다
-pub fn is_quest_terminal(registry: &QuestRegistry, state: &QuestState, quest_id: &str) -> bool {
-    let Some(phase_id) = state.phases.get(quest_id) else { return false };
-    let Some(def) = registry.get(quest_id) else { return false };
-    let Some(phase) = def.phases.get(phase_id) else { return false };
-    phase.on_interact.is_empty() && phase.auto_advance.is_empty()
-}
-
 /// QuestState 또는 PlayerInventory가 바뀌거나 주민이 새로 스폰될 때마다 퀘스트 수여자의 글리프와 색을 갱신한다
 fn update_villager_glyph(
     registry: Res<QuestRegistry>,

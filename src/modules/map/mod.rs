@@ -95,7 +95,7 @@ impl Map {
         let size = width * height;
         Self {
             width, height,
-            tiles: vec![MapTile::default(); size],
+            tiles: vec![MapTile::new(TileKind::Wall); size],
             rooms: Vec::new(),
             map_type: MapType::Dungeon,
             seed: 0,

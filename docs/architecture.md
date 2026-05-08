@@ -34,7 +34,7 @@ MapPlugin → PlayerPlugin → MonsterPlugin → CombatFeedbackPlugin
 
 - 게임 시작 시 `GlobalSeed(rand::random())` 리소스 생성
 - 각 존의 맵 시드는 `zone_seed(global_seed, zone_id)` 로 결정론적 파생 (splitmix64)
-- 저장 시 전체 타일 배열 대신 `global_seed` + `revealed_tiles`(비트팩 Base64)만 보존
+- 저장 시 전체 타일 배열 대신 `global_seed` + `MapTile.revealed` 비트팩(Base64)만 보존
 - 로드 시 동일 시드로 맵 재생성 → 항상 동일한 던전 레이아웃 보장
 
 ## 이벤트 흐름 예시

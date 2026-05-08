@@ -507,11 +507,9 @@ mod tests {
         let map = floor_map(10, 10, &[(5,5),(6,5),(5,6),(4,5),(5,4)]);
         let occupied: HashSet<(usize, usize)> = HashSet::new();
         for seed in 0..100u64 {
-            let mut rng: ThreadRng = rand::thread_rng();
-            let _ = rng; // ThreadRng은 seed 불가 — StdRng으로 테스트
             let mut srng = StdRng::seed_from_u64(seed);
             let neighbors = [(6usize,5usize),(5,6),(4,5),(5,4),(5,5)];
-            // wander는 ThreadRng을 받으므로 직접 검증: 결과가 floor 타일이어야 함
+            // 결정론적 RNG로 배회 후보 선택 규칙만 검증한다.
             let result = {
                 const STAY: f64 = 0.3;
                 if srng.gen_bool(STAY) { (5,5) } else {

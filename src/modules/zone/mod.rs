@@ -64,13 +64,13 @@ pub fn zone_seed(global_seed: u64, zone_id: &ZoneId) -> u64 {
 // ── NamedZoneConfig ───────────────────────────────────────────────────────────
 
 /// 퀘스트 포탈이 동적으로 등록하는 Named 존 설정
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NamedZoneEntry {
     pub generator: String,
     pub origin: ZoneId,
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NamedZoneConfig {
     pub zones: HashMap<String, NamedZoneEntry>,
 }

@@ -14,7 +14,7 @@ use crate::modules::{
 
 const SAVE_PATH: &str = "save/progress.ron";
 const SAVE_TMP:  &str = "save/progress.ron.tmp";
-const SAVE_VERSION: u32 = 4;
+const SAVE_VERSION: u32 = 5;
 
 // ── 비트팩 + Base64 ──────────────────────────────────────────────────────────
 //
@@ -101,6 +101,7 @@ pub struct SaveData {
     pub zone_revealed: HashMap<ZoneId, String>,
     pub zone_persistence: HashMap<ZoneId, ZoneSnapshot>,
     pub discovered_markers: DiscoveredMarkers,
+    pub named_zones: NamedZoneConfig,
 }
 
 // ── Plugin ────────────────────────────────────────────────────────────────────
@@ -124,6 +125,7 @@ fn auto_save(
     world_state: Res<WorldState>,
     persistence: Res<ZonePersistence>,
     markers: Res<DiscoveredMarkers>,
+    named_config: Res<NamedZoneConfig>,
     global_turn: Res<GlobalTurn>,
     global_seed: Res<GlobalSeed>,
     map_res: Res<MapResource>,
@@ -147,14 +149,7 @@ fn auto_save(
         }
     }).collect();
 
-    // 방문한 모든 존의 revealed_tiles 비트팩 + Base64
-    let mut zone_revealed: HashMap<ZoneId, String> = world_state.maps.iter()
-        .map(|(id, m)| (id.clone(), pack_revealed(&m.tiles)))
-        .collect();
-    zone_revealed.insert(
-        world_state.current.clone(),
-        pack_revealed(&map_res.0.tiles),
-    );
+    let zone_revealed = collect_revealed_by_zone(&world_state, &map_res.0);
 
     let save = SaveData {
         version: SAVE_VERSION,
@@ -174,9 +169,50 @@ fn auto_save(
         zone_revealed,
         zone_persistence,
         discovered_markers: markers.clone(),
+        named_zones: named_config.clone(),
     };
 
     write_save(&save);
+}
+
+fn collect_revealed_by_zone(world_state: &WorldState, current_map: &Map) -> HashMap<ZoneId, String> {
+    let mut zone_revealed: HashMap<ZoneId, String> = world_state.maps.iter()
+        .map(|(id, map)| (id.clone(), pack_revealed(&map.tiles)))
+        .collect();
+    zone_revealed.insert(
+        world_state.current.clone(),
+        pack_revealed(&current_map.tiles),
+    );
+    zone_revealed
+}
+
+fn restore_map_for_zone(
+    registry: &MapGeneratorRegistry,
+    named_config: &NamedZoneConfig,
+    global_seed: u64,
+    zone_id: &ZoneId,
+    revealed_b64: Option<&str>,
+) -> Map {
+    let seed = zone_seed(global_seed, zone_id);
+    let algorithm = get_algo(zone_id, named_config);
+    let mut map = registry.generate_with(&algorithm, MAP_WIDTH, MAP_HEIGHT, seed);
+    map.seed = seed;
+    map.algorithm = algorithm;
+
+    if let Some(encoded) = revealed_b64 {
+        apply_revealed(&mut map.tiles, &unpack_b64(encoded, map.width * map.height));
+    }
+    map.tiles.iter_mut().for_each(|tile| tile.visible = false);
+    map
+}
+
+fn restore_player_stats(stats: &mut CombatStats, save: &SaveData) {
+    stats.hp       = save.player_hp;
+    stats.max_hp   = save.player_max_hp;
+    stats.mp       = save.player_mp;
+    stats.max_mp   = save.player_max_mp;
+    stats.attack   = save.player_attack;
+    stats.defense  = save.player_defense;
 }
 
 fn write_save(save: &SaveData) {
@@ -216,7 +252,7 @@ fn load_if_save_exists(
     mut global_turn: ResMut<GlobalTurn>,
     mut global_seed: ResMut<GlobalSeed>,
     registry: Res<MapGeneratorRegistry>,
-    named_config: Res<NamedZoneConfig>,
+    mut named_config: ResMut<NamedZoneConfig>,
     mut player_q: Query<&mut CombatStats, With<Player>>,
     mut apply_ev: EventWriter<ApplyMapEvent>,
 ) {
@@ -238,16 +274,21 @@ fn load_if_save_exists(
         return;
     }
 
+    *named_config = save.named_zones.clone();
+
     // 현재 존 맵 재생성 — global_seed + zone_id로 결정론적 복원
-    let cur_seed = zone_seed(save.global_seed, &save.current_zone);
-    let cur_algo = get_algo(&save.current_zone, &named_config);
-    let mut map = registry.generate_with(&cur_algo, MAP_WIDTH, MAP_HEIGHT, cur_seed);
-    map.seed = cur_seed;
-    map.algorithm = cur_algo;
-    if let Some(s) = save.zone_revealed.get(&save.current_zone) {
-        apply_revealed(&mut map.tiles, &unpack_b64(s, map.width * map.height));
+    let map = restore_map_for_zone(
+        &registry,
+        &named_config,
+        save.global_seed,
+        &save.current_zone,
+        save.zone_revealed.get(&save.current_zone).map(String::as_str),
+    );
+
+    // 플레이어 스탯은 SaveData 리소스 필드를 이동하기 전에 복원한다.
+    if let Ok(mut stats) = player_q.get_single_mut() {
+        restore_player_stats(&mut stats, &save);
     }
-    map.tiles.iter_mut().for_each(|t| t.visible = false);
 
     // 리소스 복원
     *inventory    = save.inventory;
@@ -261,28 +302,18 @@ fn load_if_save_exists(
     // 이전 방문 존 맵 재생성 후 캐시
     let zone_maps: HashMap<ZoneId, Map> = save.zone_revealed.iter()
         .filter(|(id, _)| **id != save.current_zone)
-        .map(|(id, s)| {
-            let seed = zone_seed(save.global_seed, id);
-            let algo = get_algo(id, &named_config);
-            let mut m = registry.generate_with(&algo, MAP_WIDTH, MAP_HEIGHT, seed);
-            m.seed = seed;
-            m.algorithm = algo;
-            apply_revealed(&mut m.tiles, &unpack_b64(s, m.width * m.height));
-            m.tiles.iter_mut().for_each(|t| t.visible = false);
-            (id.clone(), m)
+        .map(|(id, revealed)| {
+            let map = restore_map_for_zone(
+                &registry,
+                &named_config,
+                save.global_seed,
+                id,
+                Some(revealed.as_str()),
+            );
+            (id.clone(), map)
         })
         .collect();
     *world_state = WorldState { current: save.current_zone.clone(), maps: zone_maps };
-
-    // 플레이어 스탯 복원
-    if let Ok(mut stats) = player_q.get_single_mut() {
-        stats.hp       = save.player_hp;
-        stats.max_hp   = save.player_max_hp;
-        stats.mp       = save.player_mp;
-        stats.max_mp   = save.player_max_mp;
-        stats.attack   = save.player_attack;
-        stats.defense  = save.player_defense;
-    }
 
     let [tx, ty] = save.player_tile;
     apply_ev.send(ApplyMapEvent { map, spawn_pos: Some((tx, ty)) });
@@ -337,6 +368,7 @@ mod tests {
             },
             zone_persistence: HashMap::new(),
             discovered_markers: DiscoveredMarkers::default(),
+            named_zones: NamedZoneConfig::default(),
         }
     }
 
@@ -422,5 +454,25 @@ mod tests {
 
         assert_eq!(restored.quest_state.phases.get("gem_quest").map(|s| s.as_str()), Some("active"));
         assert!(restored.quest_state.spawned.contains("gem_quest:eternal_gem"));
+    }
+
+
+    #[test]
+    fn named_zone_config_preserved() {
+        let mut save = make_minimal_save();
+        save.named_zones.zones.insert(
+            "desert".to_string(),
+            crate::modules::zone::NamedZoneEntry {
+                generator: "forest".to_string(),
+                origin: ZoneId::Town,
+            },
+        );
+
+        let ron_str = ron::ser::to_string_pretty(&save, ron::ser::PrettyConfig::default()).unwrap();
+        let restored: SaveData = ron::from_str(&ron_str).unwrap();
+        let entry = restored.named_zones.zones.get("desert").expect("Named zone config should survive save/load");
+
+        assert_eq!(entry.generator, "forest");
+        assert_eq!(entry.origin, ZoneId::Town);
     }
 }

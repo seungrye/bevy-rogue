@@ -111,7 +111,7 @@ QuestDef(
 | `zone` | `ZoneId` | (필수) | 스폰 대상 존 |
 | `count` | `u32` | `1` | 스폰할 아이템 수량 |
 | `condition` | `Option<QuestCondition>` | `None` | 추가 스폰 조건 (플래그/존/페이즈 조건 지원) |
-## 퀘스트 아이템 ID 목록
+## 대표 퀘스트 아이템 ID
 
 | item_id | 종류 | 설명 |
 |---------|------|------|
@@ -119,6 +119,8 @@ QuestDef(
 | `philosophers_stone` | QuestItem | 보석 퀘스트 완료 보상 |
 | `dragon_scale` | QuestItem | 던전 2층에서 획득, 연금술사 재료 |
 | `ancient_scroll` | QuestItem | 던전 1층에서 획득, 연금술사 재료 |
+
+전체 아이템 ID는 `src/modules/quest/mod.rs`의 `item_id_to_kind()`와 `src/modules/item/mod.rs`의 `QuestItemKind`를 기준으로 관리한다.
 
 
 ## 예시: 전체 기능 시나리오 (약초 구하기)

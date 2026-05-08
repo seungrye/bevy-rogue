@@ -24,7 +24,7 @@ const HELP_TEXT: &str = "\
   forest            숲   - 나무 군집 사이 좁은 길
   perlin            숲   - 펄린 노이즈 기반 자연 지형
 
-실행 중 Tab 키로 생성기를 순환, G 키로 글리프 스타일을 순환할 수 있습니다.";
+실행 중 F1 키로 생성기를 순환, G 키로 글리프 스타일을 순환할 수 있습니다.";
 
 enum ParseResult {
     Run { algorithm: Option<String>, glyph_style: GlyphStyle },

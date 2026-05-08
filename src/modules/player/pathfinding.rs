@@ -56,7 +56,6 @@ pub fn find_path(map: &Map, from: (usize, usize), to: (usize, usize)) -> Vec<(us
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modules::map::MapTile;
 
     fn make_map(w: usize, h: usize, floors: &[(usize, usize)]) -> Map {
         let mut map = Map::new(w, h);

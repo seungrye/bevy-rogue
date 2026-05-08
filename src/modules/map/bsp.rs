@@ -1,6 +1,6 @@
 use rand::prelude::*;
 use rand::thread_rng;
-use super::{Map, MapTile, Rect};
+use super::{Map, TileKind, Rect};
 
 /// Binary Space Partitioning (BSP) 알고리즘을 사용하여 맵을 생성합니다.
 ///
@@ -24,7 +24,7 @@ pub fn generate_bsp_map(width: usize, height: usize) -> Map {
     for room in rooms.iter() {
         for y in room.y1..room.y2 {
             for x in room.x1..room.x2 {
-                map.set_tile(x, y, MapTile::Floor);
+                map.set_tile(x, y, TileKind::Floor);
             }
         }
     }
@@ -84,12 +84,12 @@ fn draw_corridor(map: &mut Map, x1: usize, y1: usize, x2: usize, y2: usize) {
     let mut x = x1; let mut y = y1;
     // 수평 이동
     while x != x2 { 
-        map.set_tile(x, y, MapTile::Floor); 
+        map.set_tile(x, y, TileKind::Floor); 
         if x < x2 { x += 1; } else { x -= 1; } 
     }
     // 수직 이동
     while y != y2 { 
-        map.set_tile(x, y, MapTile::Floor); 
+        map.set_tile(x, y, TileKind::Floor); 
         if y < y2 { y += 1; } else { y -= 1; } 
     }
 }

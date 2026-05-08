@@ -1,6 +1,6 @@
 use rand::prelude::*;
 use rand::thread_rng;
-use super::{Map, MapTile};
+use super::{Map, TileKind};
 
 /// Drunkard's Walk (취한 보행자) 알고리즘을 사용하여 맵을 생성합니다.
 ///
@@ -20,7 +20,7 @@ pub fn generate_drunkard_map(width: usize, height: usize) -> Map {
     // 중앙에서 시작
     let mut x = width / 2; 
     let mut y = height / 2;
-    map.set_tile(x, y, MapTile::Floor);
+    map.set_tile(x, y, TileKind::Floor);
 
     // 전체의 40% 정도가 바닥이 될 때까지 파냄
     let target_floor_count = (width * height) as f32 * 0.4;
@@ -37,8 +37,8 @@ pub fn generate_drunkard_map(width: usize, height: usize) -> Map {
         }
         
         // 새로 파낸 곳이 벽인 경우에만 바닥으로 바꾸고 카운트 증가
-        if map.get_tile(x, y) == MapTile::Wall {
-            map.set_tile(x, y, MapTile::Floor);
+        if map.get_tile(x, y) == TileKind::Wall {
+            map.set_tile(x, y, TileKind::Floor);
             floor_count += 1;
         }
     }

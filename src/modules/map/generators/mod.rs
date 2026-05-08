@@ -145,7 +145,7 @@ pub fn carve_corridor(map: &mut Map, x1: usize, y1: usize, x2: usize, y2: usize)
 #[cfg(test)]
 mod tests {
     use super::super::MapGenerator;
-    use super::super::{TileKind, MapTile};
+    use super::super::TileKind;
     use super::{bsp, rooms, drunkard, cellular_automata, dla, bsp_indoor, prefab, organic_village, grid_village, forest, perlin};
 
     const W: usize = 40;

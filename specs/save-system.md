@@ -25,7 +25,7 @@
 
 | 필드 | 타입 | 설명 |
 |------|------|------|
-| `version` | `u32` | 형식 버전 (현재 3) |
+| `version` | `u32` | 형식 버전 (현재 5) |
 | `global_seed` | `u64` | 전역 시드 — 모든 존 맵을 결정론적으로 재생성 |
 | `global_turn` | `u64` | 누적 턴 수 |
 | `player_tile` | `[usize; 2]` | 플레이어 타일 좌표 |
@@ -39,6 +39,7 @@
 | `zone_revealed` | `HashMap<ZoneId, String>` | 존별 탐험 기록 (비트팩 → Base64) |
 | `zone_persistence` | `HashMap<ZoneId, ZoneSnapshot>` | 혈흔·몬스터 슬롯 |
 | `discovered_markers` | `DiscoveredMarkers` | 미니맵 마커 |
+| `named_zones` | `NamedZoneConfig` | 동적 Named 존의 생성기·원점 존 설정 |
 
 ### 존 시드 파생 방식
 
@@ -54,10 +55,10 @@ zone_seed(global_seed, zone_id) = splitmix64(global_seed + zone_idx)
 | `Named(s)` | FNV-1a hash of s |
 
 - 맵 타일 배열은 저장하지 않고, 로드 시 `zone_seed` 로 결정론적 재생성
-- `zone_revealed` 인코딩 파이프라인: `Vec<bool>` → 비트팩(1bit/tile) → Base64 → `String`
+- `zone_revealed` 인코딩 파이프라인: `MapTile.revealed` → `Vec<bool>` 추출 → 비트팩(1bit/tile) → Base64 → `String`
   - 80×50=4000 tiles: 4000 bytes(bool) → 500 bytes(bitpack) → **668 chars(base64)**
   - RON 배열(`[0, 255, ...]`) 대비 약 3× 압축 — 존 10개 방문 시 ~7KB
-- `visible_tiles` 는 로드 시 `vec![false; w*h]` 로 초기화 (FOV가 첫 프레임에 재계산)
+- `MapTile.visible` 은 로드 시 모두 `false` 로 초기화 (FOV가 첫 프레임에 재계산)
 
 ## 맵 생성기 규약
 

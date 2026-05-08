@@ -6,10 +6,8 @@
 
 | 필드 | 타입 | 설명 |
 |------|------|------|
-| `tiles` | `Vec<MapTile>` | Wall 또는 Floor |
-| `revealed_tiles` | `Vec<bool>` | 플레이어가 탐험한 타일 (영구 기억) |
-| `visible_tiles` | `Vec<bool>` | 현재 FOV 범위 내 타일 |
-| `rooms` | `Vec<Rect>` | 플레이어·트리거 배치에 사용되는 방 목록 |
+| `tiles` | `Vec<MapTile>` | 타일 종류(`kind`)와 탐험/시야 상태(`revealed`, `visible`)를 함께 보관 |
+| `rooms` | `Vec<Rect>` | 플레이어·포털·아이템 배치에 사용되는 방 목록 |
 | `map_type` | `MapType` | `Dungeon` 또는 `Village` |
 | `seed` | `u64` | 이 맵을 생성한 시드 |
 | `algorithm` | `String` | 사용된 생성기 이름 (예: `"bsp"`, `"organic_village"`) |
@@ -55,5 +53,8 @@ pub trait MapGenerator: Send + Sync {
 게임은 `assets/` 디렉터리 아래의 파일들을 필요로 한다:
 - `fonts/FiraMono-Medium.ttf` — 타일·스탯 렌더링용 고정폭 폰트
 - `fonts/NanumSquareNeo-bRg.ttf` — 다이얼로그·UI 텍스트용 한국어 폰트
-- `scene/open-chest.png` — 상자 팝업 이미지
+- `fonts/NotoSansSymbols2-Regular.ttf` — 유니코드 아이템 글리프용 폰트
+- `fonts/rpg-awesome.ttf` — RPG 아이콘 글리프용 폰트
+- `fonts/kenney-icon-font.ttf` — 아이콘 UI 보조 폰트
+- `scene/open-chest.png` — 퀘스트 아이템 팝업 이미지
 - `quests/*.ron` — 퀘스트 정의 파일

@@ -37,8 +37,8 @@ Town ←→ Forest ←→ Dungeon(1) ←→ Dungeon(2)
 - `WorldState.maps: HashMap<ZoneId, Map>` 에 방문한 맵을 캐시
 - 첫 방문: `zone_seed(global_seed, zone_id)` 로 시드 파생 → 알고리즘으로 생성 → 캐시
 - 재방문: 캐시에서 복원 (동일 시드이므로 타일 배치 항상 동일)
-- 저장 시: `GlobalSeed` + `revealed_tiles`(비트팩 Base64)만 보존 — 전체 타일 배열 저장 안 함
-- 로드 시: `zone_seed` 로 맵 재생성 후 `revealed_tiles` 복원
+- 저장 시: `GlobalSeed` + `MapTile.revealed` 비트팩(Base64)만 보존 — 전체 타일 배열 저장 안 함
+- 로드 시: `zone_seed` 로 맵 재생성 후 각 타일의 `revealed` 상태 복원
 - 엔티티(몬스터·낙하 아이템)는 재방문 시 재스폰 (몬스터 리젠은 로그라이크 표준)
 - 퀘스트 아이템(보석 등)은 퀘스트 상태로 추적 — 수집 후엔 재스폰되지 않음
 
