@@ -58,18 +58,18 @@ impl Default for PlayerProgress {
     }
 }
 
-/// Returns the XP threshold for the level currently being advanced from.
+/// 현재 레벨에서 다음 레벨로 오르는 데 필요한 XP를 반환한다.
 ///
-/// The curve is intentionally small and readable while the game is still tuning its monster density:
-/// early kills produce quick feedback, then each level asks for a little more commitment.
+/// 몬스터 밀도를 조정하는 단계라 곡선은 작고 읽기 쉽게 유지한다.
+/// 초반 처치는 빠른 피드백을 주고, 레벨이 오를수록 조금 더 많은 전투를 요구한다.
 pub fn xp_to_next_level(level: u32) -> u32 {
     20 + level.saturating_sub(1) * 15
 }
 
-/// Returns the XP granted for defeating a monster by display name.
+/// 몬스터 표시 이름에 따라 처치 보상 XP를 반환한다.
 ///
-/// Keeping rewards in one function makes the first balance pass explicit and gives tests a stable
-/// contract without exposing the internal monster spawn table.
+/// 보상 값을 한 함수에 모아 첫 밸런스 기준을 명확히 하고, 테스트가 의존할 안정적인
+/// 계약을 제공한다. 내부 몬스터 스폰 테이블은 노출하지 않는다.
 pub fn xp_reward_for_monster(name: &str) -> u32 {
     match name {
         "고블린" => 8,
@@ -79,11 +79,11 @@ pub fn xp_reward_for_monster(name: &str) -> u32 {
     }
 }
 
-/// Adds XP, counts the kill, and applies any level-up stat gains to the player.
+/// XP를 더하고 처치 수를 기록한 뒤, 레벨업 보너스를 플레이어 스탯에 적용한다.
 ///
-/// Level-up currently increases survivability only: max HP and max MP rise, and both resources are
-/// refilled. Attack/defense are left to the equipment pipeline so the two systems do not overwrite
-/// each other until a dedicated base-stat model exists.
+/// 현재 레벨업은 생존력만 올린다. 최대 HP/MP가 증가하고 두 자원이 모두
+/// 회복된다. 공격/방어는 장비 갱신 흐름에 맡겨 두 시스템이 서로 값을 덮어쓰지
+/// 않게 한다. 별도의 기본 스탯 모델이 생기기 전까지 이 경계를 유지한다.
 pub fn grant_xp(
     progress: &mut PlayerProgress,
     stats: &mut CombatStats,
@@ -223,10 +223,10 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, map_res:
     });
 }
 
-/// Reads keyboard movement and wait input, then turns it into one player action.
+/// 키보드 이동과 대기 입력을 읽어 플레이어 행동 하나로 변환한다.
 ///
-/// Modal UI panels deliberately pause movement handling so a command meant for a
-/// panel never leaks into the dungeon as an accidental step or wait turn.
+/// 모달 UI 패널이 열려 있으면 이동 처리를 의도적으로 멈춘다. 패널 조작 명령이
+/// 던전에서 실수 이동이나 대기 턴으로 새어 나가지 않게 하기 위해서다.
 fn player_movement(
     mut commands: Commands,
     keyboard_input: Res<ButtonInput<KeyCode>>,
@@ -339,10 +339,10 @@ fn smooth_player_lerp(
     }
 }
 
-/// Builds an auto-move path from the player to the clicked floor tile.
+/// 플레이어 위치에서 클릭한 바닥 타일까지 자동 이동 경로를 만든다.
 ///
-/// Mouse pathing is ignored while modal panels are open, matching keyboard
-/// movement so overlays remain interaction boundaries instead of translucent UI.
+/// 모달 패널이 열려 있을 때는 마우스 경로 이동도 무시한다. 키보드 이동과 같은
+/// 기준을 적용해 오버레이가 단순한 투명 UI가 아니라 상호작용 경계로 동작하게 한다.
 fn on_mouse_click(
     mouse_input: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
@@ -575,7 +575,7 @@ mod tests {
         let mut state = MoveHoldState::default();
         let dir = IVec2::new(-1, 0);
         tick_hold(&mut state, dir, true, 0.0);
-        // 2 frames (0.032s) — still in initial delay (< 0.12s)
+        // 2프레임(0.032초) — 아직 초기 지연 시간 안쪽이다(< 0.12초)
         tick_hold(&mut state, dir, false, 0.016);
         tick_hold(&mut state, dir, false, 0.016);
         let result = tick_hold(&mut state, IVec2::new(1, 0), false, 0.016);
@@ -597,7 +597,7 @@ mod tests {
         let mut state = MoveHoldState::default();
         let dir = IVec2::new(-1, 0);
         tick_hold(&mut state, dir, true, 0.0);
-        // 10 frames (0.16s) — past INITIAL_HOLD_DELAY (0.12s) → continuous mode
+        // 10프레임(0.16초) — INITIAL_HOLD_DELAY(0.12초)를 지나 연속 이동 상태가 된다
         for _ in 0..10 { tick_hold(&mut state, dir, false, 0.016); }
         let result = tick_hold(&mut state, IVec2::new(1, 0), false, 0.016);
         assert!(result, "연속 이동 중 방향 전환 시 즉시 이동해야 한다");

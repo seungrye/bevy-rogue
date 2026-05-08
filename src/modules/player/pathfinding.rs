@@ -110,9 +110,9 @@ mod tests {
 
     #[test]
     fn find_path_goes_around_obstacle() {
-        // FFF  row 0: (0,0)(1,0)(2,0)
-        // F.F  row 1: (0,1) wall(1,1) (2,1)
-        // FFF  row 2: (0,2)(1,2)(2,2)
+        // FFF  0행: (0,0)(1,0)(2,0)
+        // F.F  1행: (0,1) 벽(1,1) (2,1)
+        // FFF  2행: (0,2)(1,2)(2,2)
         let floors = &[(0,0),(1,0),(2,0),(0,1),(2,1),(0,2),(1,2),(2,2)];
         let map = make_map(3, 3, floors);
         let path = find_path(&map, (0,1), (2,1));

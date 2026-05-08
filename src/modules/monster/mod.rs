@@ -21,7 +21,7 @@ const Z_MONSTER: f32 = 0.8;
 const MAX_ALERT_TURNS: u32 = 5;
 
 static MONSTER_DATA: &[(&str, &str, [f32; 3], i32, i32, i32, i32, f32)] = &[
-    // (이름, 글리프, 색상, hp, attack, defense, vision_radius, speed)
+    // (이름, 글리프, 색상, HP, 공격력, 방어력, 시야 반경, 속도)
     ("고블린", "g", [0.2, 0.8, 0.2],  6, 3, 0, 6, 1.5),
     ("오크",   "O", [0.9, 0.5, 0.1], 10, 5, 2, 8, 1.0),
     ("트롤",   "T", [0.3, 0.7, 0.5], 16, 8, 3, 5, 0.5),
@@ -114,7 +114,7 @@ fn respawn_on_regen(
                 init_zone_monster_slots(&event.rooms);
         }
 
-        // 만료된 리스폰 타이머 처리 (경과 턴 catch-up)
+        // 만료된 리스폰 타이머 처리(지나간 턴 따라잡기)
         if let Some(snapshot) = persistence.0.get_mut(&zone_id) {
             for slot in &mut snapshot.monster_slots {
                 if let Some(t) = slot.respawn_at_turn {

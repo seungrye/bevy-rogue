@@ -2,16 +2,16 @@ use rand::prelude::*;
 use rand::thread_rng;
 use super::{Map, TileKind};
 
-/// Drunkard's Walk (취한 보행자) 알고리즘을 사용하여 맵을 생성합니다.
+/// 취한 보행자 알고리즘을 사용하여 맵을 생성합니다.
 ///
 /// 맵의 중앙에서 시작하여 무작위 방향으로 이동하며 바닥을 파내려가는 유기적인 알고리즘입니다.
 /// 동굴이나 자연스러운 지형을 생성할 때 주로 사용됩니다.
 ///
-/// # Arguments
+/// # 인수
 /// * `width` - 생성할 맵의 너비
 /// * `height` - 생성할 맵의 높이
 ///
-/// # Returns
+/// # 반환값
 /// 유기적인 구조를 가진 Map 인스턴스
 pub fn generate_drunkard_map(width: usize, height: usize) -> Map {
     let mut map = Map::new(width, height);

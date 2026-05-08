@@ -63,7 +63,7 @@ fn stamp_template(map: &mut Map, ox: usize, oy: usize, w: usize, h: usize, layou
     }
 }
 
-// (width, height, ascii_layout)
+// (너비, 높이, ASCII 레이아웃)
 const TEMPLATES: &[(usize, usize, &[u8])] = &[
     (8, 5, b"########\n\
              #......#\n\

@@ -6,11 +6,11 @@ use super::{Map, TileKind, Rect};
 ///
 /// 맵의 빈 공간에 사각형 모양의 방을 겹치지 않게 배치한 뒤, 각 방을 복도로 연결합니다.
 ///
-/// # Arguments
+/// # 인수
 /// * `width` - 생성할 맵의 너비
 /// * `height` - 생성할 맵의 높이
 ///
-/// # Returns
+/// # 반환값
 /// 무작위 방 배치 알고리즘으로 생성된 Map 인스턴스
 pub fn generate_rooms_map(width: usize, height: usize) -> Map {
     let mut map = Map::new(width, height);
@@ -60,10 +60,10 @@ pub fn generate_rooms_map(width: usize, height: usize) -> Map {
 
 /// 두 사각형 영역이 겹치는지 확인합니다.
 ///
-/// # Arguments
+/// # 인수
 /// * `r1`, `r2` - 비교할 두 Rect
 ///
-/// # Returns
+/// # 반환값
 /// 겹치면 true, 아니면 false
 fn intersect(r1: &Rect, r2: &Rect) -> bool {
     r1.x1 <= r2.x2 && r1.x2 >= r2.x1 && r1.y1 <= r2.y2 && r1.y2 >= r2.y1
@@ -71,7 +71,7 @@ fn intersect(r1: &Rect, r2: &Rect) -> bool {
 
 /// 특정 y 좌표에서 두 x 좌표 사이를 잇는 수평 복도를 생성합니다.
 ///
-/// # Arguments
+/// # 인수
 /// * `map` - 타일을 수정할 맵 참조
 /// * `x1`, `x2` - 시작 및 끝 x 좌표
 /// * `y` - 고정된 y 좌표
@@ -82,7 +82,7 @@ fn apply_horizontal_tunnel(map: &mut Map, x1: usize, x2: usize, y: usize) {
 
 /// 특정 x 좌표에서 두 y 좌표 사이를 잇는 수직 복도를 생성합니다.
 ///
-/// # Arguments
+/// # 인수
 /// * `map` - 타일을 수정할 맵 참조
 /// * `y1`, `y2` - 시작 및 끝 y 좌표
 /// * `x` - 고정된 x 좌표

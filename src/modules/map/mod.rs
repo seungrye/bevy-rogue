@@ -2,14 +2,14 @@ use bevy::prelude::*;
 
 pub mod generators;
 
-// --- Trait ---
+// --- 트레이트 ---
 
 pub trait MapGenerator: Send + Sync {
     fn generate(&self, width: usize, height: usize, seed: u64) -> Map;
     fn name(&self) -> &str;
 }
 
-// --- Components ---
+// --- 컴포넌트 ---
 
 #[derive(Component)]
 pub struct TileEntity {
@@ -17,7 +17,7 @@ pub struct TileEntity {
     pub y: usize,
 }
 
-// --- Enums / Types ---
+// --- 열거형 / 타입 ---
 
 /// 타일의 종류를 나타내는 열거형.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -75,7 +75,7 @@ impl Rect {
     }
 }
 
-// --- Map ---
+// --- 맵 ---
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Map {
@@ -112,7 +112,7 @@ impl Map {
     }
 }
 
-// --- Resources ---
+// --- 리소스 ---
 
 #[derive(Resource)]
 pub struct MapResource(pub Map);
@@ -161,7 +161,7 @@ impl MapGeneratorRegistry {
     }
 }
 
-// --- Events ---
+// --- 이벤트 ---
 
 #[derive(Event)]
 pub struct RegenerateMapEvent;
@@ -213,14 +213,14 @@ pub struct MonsterTiles(pub std::collections::HashSet<(usize, usize)>);
 #[derive(Resource, Default)]
 pub struct UsedSpawnTiles(pub std::collections::HashSet<(usize, usize)>);
 
-// --- System Set ---
+// --- 시스템 세트 ---
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MapSystemSet {
     ExecuteRegen,
 }
 
-// --- Plugin ---
+// --- 플러그인 ---
 
 pub struct MapPlugin {
     pub initial_algorithm: Option<String>,
@@ -284,7 +284,7 @@ impl Plugin for MapPlugin {
     }
 }
 
-// --- Systems ---
+// --- 시스템 ---
 
 fn increment_global_turn(
     mut events: EventReader<PlayerActedEvent>,
@@ -298,7 +298,7 @@ fn create_and_store_map(
     registry: Res<MapGeneratorRegistry>,
     global_seed: Res<GlobalSeed>,
 ) {
-    let seed = zone_seed_from_idx(global_seed.0, 0); // Town = index 0
+    let seed = zone_seed_from_idx(global_seed.0, 0); // 마을 = 인덱스 0
     let algo = registry.current_name().to_string();
     let mut map = registry.current()
         .map(|g| g.generate(MAP_WIDTH, MAP_HEIGHT, seed))
@@ -518,7 +518,7 @@ fn find_spawn_point(map: &Map) -> (usize, usize) {
     (map.width / 2, map.height / 2)
 }
 
-// --- Constants ---
+// --- 상수 ---
 
 pub const MAP_WIDTH: usize = 80;
 pub const MAP_HEIGHT: usize = 50;
@@ -539,7 +539,7 @@ pub fn zone_seed_from_idx(global_seed: u64, zone_idx: u64) -> u64 {
     x ^ (x >> 31)
 }
 
-// --- Coords ---
+// --- 좌표 ---
 
 pub fn tile_to_world_coords(x: usize, y: usize) -> Vec2 {
     let ow = (MAP_WIDTH as f32 * TILE_SIZE) / 2.0 - TILE_SIZE / 2.0;
@@ -644,7 +644,7 @@ mod tests {
         assert_eq!(r.current_name(), "A");
         r.next(); assert_eq!(r.current_name(), "B");
         r.next(); assert_eq!(r.current_name(), "C");
-        r.next(); assert_eq!(r.current_name(), "A"); // wrap
+        r.next(); assert_eq!(r.current_name(), "A"); // 처음으로 순환
     }
 
     #[test]

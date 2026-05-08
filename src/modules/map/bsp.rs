@@ -2,15 +2,15 @@ use rand::prelude::*;
 use rand::thread_rng;
 use super::{Map, TileKind, Rect};
 
-/// Binary Space Partitioning (BSP) 알고리즘을 사용하여 맵을 생성합니다.
+/// 이진 공간 분할(BSP) 알고리즘을 사용하여 맵을 생성합니다.
 ///
 /// 맵을 반복적으로 분할하여 방을 만들고, 생성된 방들을 복도로 연결합니다.
 ///
-/// # Arguments
+/// # 인수
 /// * `width` - 생성할 맵의 너비
 /// * `height` - 생성할 맵의 높이
 ///
-/// # Returns
+/// # 반환값
 /// BSP 알고리즘으로 생성된 Map 인스턴스
 pub fn generate_bsp_map(width: usize, height: usize) -> Map {
     let mut map = Map::new(width, height);
@@ -41,7 +41,7 @@ pub fn generate_bsp_map(width: usize, height: usize) -> Map {
 
 /// 사각형 영역을 재귀적으로 분할합니다.
 ///
-/// # Arguments
+/// # 인수
 /// * `rect` - 분할할 대상 영역
 /// * `rooms` - 최종 분할된 영역들을 저장할 벡터
 /// * `depth` - 재귀 분할 깊이
@@ -76,7 +76,7 @@ fn split_rect(rect: Rect, rooms: &mut Vec<Rect>, depth: usize) {
 
 /// 두 점 사이를 잇는 'L'자 모양의 복도를 생성합니다.
 ///
-/// # Arguments
+/// # 인수
 /// * `map` - 타일을 수정할 맵 참조
 /// * `x1`, `y1` - 시작 좌표
 /// * `x2`, `y2` - 끝 좌표

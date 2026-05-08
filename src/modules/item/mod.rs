@@ -84,40 +84,40 @@ pub fn glyph_for_style(kind: ItemKind, style: GlyphStyle) -> &'static str {
 fn glyph_unicode(kind: ItemKind) -> &'static str {
     match kind {
         ItemKind::Weapon(w) => match w {
-            WeaponKind::Sword => "\u{1F5E1}", // 🗡 dagger
-            WeaponKind::Spear => "\u{2B06}",  // ⬆ upward arrow
-            WeaponKind::Bow   => "\u{27A4}",  // ➤ arrowhead right
+            WeaponKind::Sword => "\u{1F5E1}", // 🗡 단검 모양
+            WeaponKind::Spear => "\u{2B06}",  // ⬆ 위쪽 화살표
+            WeaponKind::Bow   => "\u{27A4}",  // ➤ 오른쪽 화살촉
         },
         ItemKind::Armor(a) => match a {
-            ArmorKind::LeatherArmor => "\u{1F6E1}", // 🛡 shield
+            ArmorKind::LeatherArmor => "\u{1F6E1}", // 🛡 방패
         },
         ItemKind::Consumable(c) => match c {
-            ConsumableKind::HealthPotion => "\u{2764}", // ❤ heavy heart
+            ConsumableKind::HealthPotion => "\u{2764}", // ❤ 굵은 하트
         },
         ItemKind::QuestItem(q) => match q {
-            QuestItemKind::EternalGem        => "\u{25C6}", // ◆ black diamond
-            QuestItemKind::PhilosophersStone => "\u{2295}", // ⊕ circled plus
-            QuestItemKind::DragonScale       => "\u{25B2}", // ▲ triangle
-            QuestItemKind::AncientScroll     => "\u{2393}", // ⎓ scroll-like
-            QuestItemKind::PrologueGreatsword => "\u{2694}", // ⚔ crossed swords
-            QuestItemKind::PrologueDaggers    => "\u{25B8}", // ▸ small right triangle
-            QuestItemKind::PrologueBowTorch   => "\u{2600}", // ☀ fire/sun
-            QuestItemKind::FamilyCrest        => "\u{269C}", // ⚜ fleur-de-lis
-            QuestItemKind::IceSword           => "\u{2746}", // ❆ snowflake
-            QuestItemKind::DragonEgg          => "\u{25CE}", // ◎ bullseye
-            QuestItemKind::GhostWolf          => "\u{25D4}", // ◔ circle arc
-            QuestItemKind::LordsOath          => "\u{2709}", // ✉ envelope
-            QuestItemKind::JaimeSword         => "\u{2020}", // † dagger
-            QuestItemKind::KingsNorthCrown    => "\u{265A}", // ♚ king chess piece
-            QuestItemKind::WarlockKey         => "\u{2318}", // ⌘ command/key
-            QuestItemKind::DragonChain        => "\u{26D3}", // ⛓ chains
-            QuestItemKind::EssosSailMap       => "\u{2742}", // ❂ compass-like
-            QuestItemKind::DragonglassArrows  => "\u{25B6}", // ▶ solid arrow
-            QuestItemKind::RangersNote        => "\u{2767}", // ❧ floral heart
-            QuestItemKind::YgrittesBow        => "\u{2640}", // ♀ (ygritte's symbol)
-            QuestItemKind::SilverBellRoot    => "\u{2698}", // ⚘ flower
-            QuestItemKind::EllenElixir       => "\u{2697}", // ⚗ alembic
-            QuestItemKind::PoisonedHerb      => "\u{2620}", // ☠ skull
+            QuestItemKind::EternalGem        => "\u{25C6}", // ◆ 검은 마름모
+            QuestItemKind::PhilosophersStone => "\u{2295}", // ⊕ 원 안의 더하기
+            QuestItemKind::DragonScale       => "\u{25B2}", // ▲ 삼각형
+            QuestItemKind::AncientScroll     => "\u{2393}", // ⎓ 두루마리 느낌
+            QuestItemKind::PrologueGreatsword => "\u{2694}", // ⚔ 교차한 검
+            QuestItemKind::PrologueDaggers    => "\u{25B8}", // ▸ 작은 오른쪽 삼각형
+            QuestItemKind::PrologueBowTorch   => "\u{2600}", // ☀ 불/태양
+            QuestItemKind::FamilyCrest        => "\u{269C}", // ⚜ 백합 문장
+            QuestItemKind::IceSword           => "\u{2746}", // ❆ 눈송이
+            QuestItemKind::DragonEgg          => "\u{25CE}", // ◎ 과녁 모양
+            QuestItemKind::GhostWolf          => "\u{25D4}", // ◔ 원호 모양
+            QuestItemKind::LordsOath          => "\u{2709}", // ✉ 봉투
+            QuestItemKind::JaimeSword         => "\u{2020}", // † 단검 기호
+            QuestItemKind::KingsNorthCrown    => "\u{265A}", // ♚ 체스 왕 말
+            QuestItemKind::WarlockKey         => "\u{2318}", // ⌘ 명령/열쇠 느낌
+            QuestItemKind::DragonChain        => "\u{26D3}", // ⛓ 사슬
+            QuestItemKind::EssosSailMap       => "\u{2742}", // ❂ 나침반 느낌
+            QuestItemKind::DragonglassArrows  => "\u{25B6}", // ▶ 채워진 화살표
+            QuestItemKind::RangersNote        => "\u{2767}", // ❧ 장식 하트
+            QuestItemKind::YgrittesBow        => "\u{2640}", // ♀ 이그리트 상징
+            QuestItemKind::SilverBellRoot    => "\u{2698}", // ⚘ 꽃
+            QuestItemKind::EllenElixir       => "\u{2697}", // ⚗ 증류기
+            QuestItemKind::PoisonedHerb      => "\u{2620}", // ☠ 해골
         },
     }
 }
@@ -125,74 +125,74 @@ fn glyph_unicode(kind: ItemKind) -> &'static str {
 fn glyph_game_icon(kind: ItemKind) -> &'static str {
     match kind {
         ItemKind::Weapon(w) => match w {
-            WeaponKind::Sword => "\u{E946}", // ra-broadsword
-            WeaponKind::Spear => "\u{EAAC}", // ra-spear-head
-            WeaponKind::Bow   => "\u{E978}", // ra-crossbow
+            WeaponKind::Sword => "\u{E946}", // RPG Awesome 넓은 검 아이콘
+            WeaponKind::Spear => "\u{EAAC}", // RPG Awesome 창끝 아이콘
+            WeaponKind::Bow   => "\u{E978}", // RPG Awesome 석궁 아이콘
         },
         ItemKind::Armor(a) => match a {
-            ArmorKind::LeatherArmor => "\u{EA96}", // ra-shield
+            ArmorKind::LeatherArmor => "\u{EA96}", // RPG Awesome 방패 아이콘
         },
         ItemKind::Consumable(c) => match c {
-            ConsumableKind::HealthPotion => "\u{EA72}", // ra-potion
+            ConsumableKind::HealthPotion => "\u{EA72}", // RPG Awesome 물약 아이콘
         },
         ItemKind::QuestItem(q) => match q {
-            QuestItemKind::EternalGem        => "\u{25C6}", // fallback: ◆
-            QuestItemKind::PhilosophersStone => "\u{2295}", // fallback: ⊕
-            QuestItemKind::DragonScale       => "\u{25B2}", // fallback: ▲
-            QuestItemKind::AncientScroll     => "\u{2393}", // fallback: ⎓
-            QuestItemKind::PrologueGreatsword => "\u{2694}", // fallback: ⚔
-            QuestItemKind::PrologueDaggers    => "\u{25B8}", // fallback: ▸
-            QuestItemKind::PrologueBowTorch   => "\u{2600}", // fallback: ☀
-            QuestItemKind::FamilyCrest        => "\u{269C}", // fallback: ⚜
-            QuestItemKind::IceSword           => "\u{2746}", // fallback: ❆
-            QuestItemKind::DragonEgg          => "\u{25CE}", // fallback: ◎
-            QuestItemKind::GhostWolf          => "\u{25D4}", // fallback: ◔
-            QuestItemKind::LordsOath          => "\u{2709}", // fallback: ✉
-            QuestItemKind::JaimeSword         => "\u{2020}", // fallback: †
-            QuestItemKind::KingsNorthCrown    => "\u{265A}", // fallback: ♚
-            QuestItemKind::WarlockKey         => "\u{2318}", // fallback: ⌘
-            QuestItemKind::DragonChain        => "\u{26D3}", // fallback: ⛓
-            QuestItemKind::EssosSailMap       => "\u{2742}", // fallback: ❂
-            QuestItemKind::DragonglassArrows  => "\u{25B6}", // fallback: ▶
-            QuestItemKind::RangersNote        => "\u{2767}", // fallback: ❧
-            QuestItemKind::YgrittesBow        => "\u{2640}", // fallback: ♀
-            QuestItemKind::SilverBellRoot    => "\u{2698}", // fallback: ⚘
-            QuestItemKind::EllenElixir       => "\u{2697}", // fallback: ⚗
-            QuestItemKind::PoisonedHerb      => "\u{2620}", // fallback: ☠
+            QuestItemKind::EternalGem        => "\u{25C6}", // 대체 글리프: ◆
+            QuestItemKind::PhilosophersStone => "\u{2295}", // 대체 글리프: ⊕
+            QuestItemKind::DragonScale       => "\u{25B2}", // 대체 글리프: ▲
+            QuestItemKind::AncientScroll     => "\u{2393}", // 대체 글리프: ⎓
+            QuestItemKind::PrologueGreatsword => "\u{2694}", // 대체 글리프: ⚔
+            QuestItemKind::PrologueDaggers    => "\u{25B8}", // 대체 글리프: ▸
+            QuestItemKind::PrologueBowTorch   => "\u{2600}", // 대체 글리프: ☀
+            QuestItemKind::FamilyCrest        => "\u{269C}", // 대체 글리프: ⚜
+            QuestItemKind::IceSword           => "\u{2746}", // 대체 글리프: ❆
+            QuestItemKind::DragonEgg          => "\u{25CE}", // 대체 글리프: ◎
+            QuestItemKind::GhostWolf          => "\u{25D4}", // 대체 글리프: ◔
+            QuestItemKind::LordsOath          => "\u{2709}", // 대체 글리프: ✉
+            QuestItemKind::JaimeSword         => "\u{2020}", // 대체 글리프: †
+            QuestItemKind::KingsNorthCrown    => "\u{265A}", // 대체 글리프: ♚
+            QuestItemKind::WarlockKey         => "\u{2318}", // 대체 글리프: ⌘
+            QuestItemKind::DragonChain        => "\u{26D3}", // 대체 글리프: ⛓
+            QuestItemKind::EssosSailMap       => "\u{2742}", // 대체 글리프: ❂
+            QuestItemKind::DragonglassArrows  => "\u{25B6}", // 대체 글리프: ▶
+            QuestItemKind::RangersNote        => "\u{2767}", // 대체 글리프: ❧
+            QuestItemKind::YgrittesBow        => "\u{2640}", // 대체 글리프: ♀
+            QuestItemKind::SilverBellRoot    => "\u{2698}", // 대체 글리프: ⚘
+            QuestItemKind::EllenElixir       => "\u{2697}", // 대체 글리프: ⚗
+            QuestItemKind::PoisonedHerb      => "\u{2620}", // 대체 글리프: ☠
         },
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum QuestItemKind {
-    // world_fracture 퀘스트
+    // 세계 균열 퀘스트
     EternalGem,
     PhilosophersStone,
     DragonScale,
     AncientScroll,
-    // prologue_fog 퀘스트 — 무기 선택
+    // 안개 프롤로그 퀘스트 — 무기 선택
     PrologueGreatsword,
     PrologueDaggers,
     PrologueBowTorch,
-    // prologue_fog 퀘스트 — 스토리 아이템
+    // 안개 프롤로그 퀘스트 — 스토리 아이템
     FamilyCrest,
-    // prologue_fog 퀘스트 — 각성 보상
+    // 안개 프롤로그 퀘스트 — 각성 보상
     IceSword,
     DragonEgg,
     GhostWolf,
-    // stark_quest — 전쟁의 서막
+    // 스타크 퀘스트 — 전쟁의 서막
     LordsOath,
     JaimeSword,
     KingsNorthCrown,
-    // targaryen_quest — 재생의 불꽃
+    // 타르가르옌 퀘스트 — 재생의 불꽃
     WarlockKey,
     DragonChain,
     EssosSailMap,
-    // jon_snow_quest — 장벽 너머의 그림자
+    // 존 스노우 퀘스트 — 장벽 너머의 그림자
     DragonglassArrows,
     RangersNote,
     YgrittesBow,
-    // herb_quest — 은방울 뿌리 채집
+    // 약초 퀘스트 — 은방울 뿌리 채집
     SilverBellRoot,
     EllenElixir,
     PoisonedHerb,
@@ -685,8 +685,8 @@ fn spawn_quest_item_popup(
     popup_q: Query<(), With<QuestItemPopup>>,
     player_q: Query<(Option<&MovingTo>, &Transform), With<Player>>,
 ) {
-    // Drain all events first to avoid processing stale events on future frames.
-    // Only the first event is used; others are intentionally discarded.
+    // 오래된 이벤트가 다음 프레임에 처리되지 않도록 먼저 모두 비운다.
+    // 첫 번째 이벤트만 사용하고 나머지는 의도적으로 버린다.
     let all_events: Vec<_> = events.read().collect();
     if all_events.is_empty() || !popup_q.is_empty() { return; }
 

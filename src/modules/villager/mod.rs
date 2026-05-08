@@ -19,7 +19,7 @@ use crate::modules::{
 const VILLAGER_STAY_CHANCE: f64 = 0.3;
 const Z_VILLAGER: f32 = 0.9;
 
-// (name, [r,g,b], dialogues, quest_id, speed)
+// (이름, [r,g,b], 대화 목록, 퀘스트 ID, 속도)
 static VILLAGER_DATA: &[(&str, [f32; 3], &[&str], Option<&str>, f32)] = &[
     ("장로",   [0.9, 0.8, 0.5], &[], Some("gem_quest"),        0.5),
     ("연금술사",[0.4, 0.9, 0.8], &[], Some("alchemist_quest"), 0.75),
@@ -258,7 +258,7 @@ fn handle_kill_npc(
     }
 }
 
-// PreUpdate: 주민 위치를 OccupiedTiles에 동기화 (player_movement 이전 실행)
+// PreUpdate: 주민 위치를 OccupiedTiles에 동기화(player_movement 이전 실행)
 fn sync_occupied_tiles(
     villager_query: Query<&Villager>,
     mut occupied: ResMut<OccupiedTiles>,
