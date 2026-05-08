@@ -4,7 +4,7 @@ use crate::modules::{
     combat::CombatStats,
     item::{PlayerEquipment, PlayerInventory},
     map::{GlobalTurn, MapResource, MAP_WIDTH, TILE_SIZE},
-    player::Player,
+    player::{Player, PlayerProgress},
     zone::WorldState,
 };
 
@@ -78,6 +78,7 @@ fn update_status_hud(
     map_res: Res<MapResource>,
     inventory: Res<PlayerInventory>,
     equipment: Res<PlayerEquipment>,
+    progress: Res<PlayerProgress>,
     player_q: Query<Ref<CombatStats>, With<Player>>,
     mut text_q: Query<&mut Text, With<StatusHudText>>,
 ) {
@@ -87,13 +88,14 @@ fn update_status_hud(
         && !map_res.is_changed()
         && !inventory.is_changed()
         && !equipment.is_changed()
+        && !progress.is_changed()
         && !stats.is_changed()
     {
         return;
     }
 
     let Ok(mut text) = text_q.get_single_mut() else { return; };
-    text.sections[0].value = status_hud_text(&world, &turn, map_res.map(), &inventory, &equipment, &stats);
+    text.sections[0].value = status_hud_text(&world, &turn, map_res.map(), &inventory, &equipment, &progress, &stats);
 }
 
 /// 상단 HUD에 표시할 한 줄 상태 문자열을 만든다.
@@ -106,15 +108,19 @@ fn status_hud_text(
     map: &crate::modules::map::Map,
     inventory: &PlayerInventory,
     equipment: &PlayerEquipment,
+    progress: &PlayerProgress,
     stats: &CombatStats,
 ) -> String {
     let weapon = equipment.weapon.map(|w| w.display_name()).unwrap_or("맨손");
     let armor = equipment.armor.map(|a| a.display_name()).unwrap_or("방어구 없음");
     let algorithm = if map.algorithm.is_empty() { "unknown" } else { &map.algorithm };
     format!(
-        "{} | Turn {} | HP {}/{} MP {}/{} | ATK {} DEF {} | {}G | {} / {} | {}",
+        "{} | Turn {} | Lv.{} XP {}/{} | HP {}/{} MP {}/{} | ATK {} DEF {} | {}G | {} / {} | {}",
         world.current.display_name(),
         turn.0,
+        progress.level,
+        progress.xp,
+        progress.next_level_xp,
         stats.hp,
         stats.max_hp,
         stats.mp,
@@ -150,10 +156,13 @@ mod tests {
         };
         let stats = CombatStats { hp: 12, max_hp: 30, mp: 4, max_mp: 20, attack: 7, defense: 3 };
 
-        let text = status_hud_text(&world, &GlobalTurn(42), &map, &inventory, &equipment, &stats);
+        let progress = PlayerProgress { level: 2, xp: 9, next_level_xp: 35, kills: 3 };
+
+        let text = status_hud_text(&world, &GlobalTurn(42), &map, &inventory, &equipment, &progress, &stats);
 
         assert!(text.contains("던전 2층"));
         assert!(text.contains("Turn 42"));
+        assert!(text.contains("Lv.2 XP 9/35"));
         assert!(text.contains("HP 12/30"));
         assert!(text.contains("75G"));
         assert!(text.contains("검"));

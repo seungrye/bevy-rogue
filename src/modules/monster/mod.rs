@@ -8,7 +8,7 @@ use crate::modules::{
         MAP_HEIGHT, MAP_WIDTH, TILE_SIZE,
         MapSystemSet, MonsterRespawnEvent, PlayerActedEvent, AttackMonsterEvent, Rect,
     },
-    player::{Player, MovingTo, MoveQueue, PlayerSystemSet, LERP_SPEED},
+    player::{grant_xp, xp_reward_for_monster, MovingTo, MoveQueue, Player, PlayerProgress, PlayerSystemSet, LERP_SPEED},
     combat::{CombatStats, Defeated, Speed, calc_damage},
     ui::LogMessage,
     combat_feedback::CombatFeedbackEvent,
@@ -183,16 +183,18 @@ fn spawn_from_slots(
 
 fn handle_player_attack(
     mut events: EventReader<AttackMonsterEvent>,
-    player_query: Query<&CombatStats, (With<Player>, Without<Monster>)>,
+    mut player_query: Query<&mut CombatStats, (With<Player>, Without<Monster>)>,
+    mut progress: ResMut<PlayerProgress>,
     mut monster_query: Query<(Entity, &Monster, &mut CombatStats), Without<Player>>,
     mut log_writer: EventWriter<LogMessage>,
     mut feedback_writer: EventWriter<CombatFeedbackEvent>,
     mut drop_writer: EventWriter<ItemDropEvent>,
 ) {
     for AttackMonsterEvent(tx, ty) in events.read() {
-        let Ok(player_stats) = player_query.get_single() else { continue };
+        let Ok(mut player_stats) = player_query.get_single_mut() else { continue };
         for (monster_entity, monster, mut monster_stats) in monster_query.iter_mut() {
             if monster.tile_x != *tx || monster.tile_y != *ty { continue; }
+            if monster_stats.hp <= 0 { continue; }
             let dmg = calc_damage(player_stats.attack, monster_stats.defense);
             monster_stats.hp -= dmg;
             let original_color = MONSTER_DATA.iter()
@@ -206,9 +208,21 @@ fn handle_player_attack(
                 original_color,
             });
             if monster_stats.hp <= 0 {
+                let xp = xp_reward_for_monster(&monster.name);
+                let levels = grant_xp(&mut progress, &mut player_stats, xp);
                 log_writer.send(LogMessage(format!(
-                    "{}을(를) 처치했다! ({} 데미지)", monster.name, dmg
+                    "{}을(를) 처치했다! ({} 데미지, XP +{})", monster.name, dmg, xp
                 )));
+                if levels > 0 {
+                    log_writer.send(LogMessage(format!(
+                        "레벨 업! Lv.{} (HP {}/{}, MP {}/{})",
+                        progress.level,
+                        player_stats.hp,
+                        player_stats.max_hp,
+                        player_stats.mp,
+                        player_stats.max_mp,
+                    )));
+                }
                 drop_writer.send(ItemDropEvent {
                     tile_x: *tx,
                     tile_y: *ty,

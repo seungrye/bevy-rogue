@@ -43,6 +43,71 @@ pub fn hp_color(ratio: f32) -> Color {
     else { Color::rgba(0.9, 0.1, 0.1, BAR_ALPHA) }
 }
 
+
+#[derive(Resource, Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct PlayerProgress {
+    pub level: u32,
+    pub xp: u32,
+    pub next_level_xp: u32,
+    pub kills: u32,
+}
+
+impl Default for PlayerProgress {
+    fn default() -> Self {
+        Self { level: 1, xp: 0, next_level_xp: xp_to_next_level(1), kills: 0 }
+    }
+}
+
+/// Returns the XP threshold for the level currently being advanced from.
+///
+/// The curve is intentionally small and readable while the game is still tuning its monster density:
+/// early kills produce quick feedback, then each level asks for a little more commitment.
+pub fn xp_to_next_level(level: u32) -> u32 {
+    20 + level.saturating_sub(1) * 15
+}
+
+/// Returns the XP granted for defeating a monster by display name.
+///
+/// Keeping rewards in one function makes the first balance pass explicit and gives tests a stable
+/// contract without exposing the internal monster spawn table.
+pub fn xp_reward_for_monster(name: &str) -> u32 {
+    match name {
+        "고블린" => 8,
+        "오크" => 14,
+        "트롤" => 24,
+        _ => 10,
+    }
+}
+
+/// Adds XP, counts the kill, and applies any level-up stat gains to the player.
+///
+/// Level-up currently increases survivability only: max HP and max MP rise, and both resources are
+/// refilled. Attack/defense are left to the equipment pipeline so the two systems do not overwrite
+/// each other until a dedicated base-stat model exists.
+pub fn grant_xp(
+    progress: &mut PlayerProgress,
+    stats: &mut CombatStats,
+    amount: u32,
+) -> u32 {
+    progress.kills += 1;
+    progress.xp += amount;
+
+    let mut gained_levels = 0;
+    while progress.xp >= progress.next_level_xp {
+        progress.xp -= progress.next_level_xp;
+        progress.level += 1;
+        gained_levels += 1;
+        progress.next_level_xp = xp_to_next_level(progress.level);
+
+        stats.max_hp += 5;
+        stats.max_mp += 2;
+        stats.hp = stats.max_hp;
+        stats.mp = stats.max_mp;
+    }
+
+    gained_levels
+}
+
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PlayerSystemSet {
     Movement,
@@ -399,6 +464,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn xp_curve_increases_after_first_level() {
+        assert_eq!(xp_to_next_level(1), 20);
+        assert_eq!(xp_to_next_level(3), 50);
+    }
+
+    #[test]
+    fn monster_xp_rewards_match_first_balance_pass() {
+        assert_eq!(xp_reward_for_monster("고블린"), 8);
+        assert_eq!(xp_reward_for_monster("오크"), 14);
+        assert_eq!(xp_reward_for_monster("트롤"), 24);
+        assert_eq!(xp_reward_for_monster("알 수 없음"), 10);
+    }
+
+    #[test]
+    fn grant_xp_levels_up_and_refills_resources() {
+        let mut progress = PlayerProgress::default();
+        let mut stats = CombatStats {
+            hp: 3,
+            max_hp: PLAYER_HP,
+            mp: 1,
+            max_mp: PLAYER_MP,
+            attack: PLAYER_ATK,
+            defense: PLAYER_DEF,
+        };
+
+        let levels = grant_xp(&mut progress, &mut stats, 20);
+
+        assert_eq!(levels, 1);
+        assert_eq!(progress.level, 2);
+        assert_eq!(progress.kills, 1);
+        assert_eq!(stats.max_hp, PLAYER_HP + 5);
+        assert_eq!(stats.hp, stats.max_hp);
+        assert_eq!(stats.max_mp, PLAYER_MP + 2);
+        assert_eq!(stats.mp, stats.max_mp);
+    }
+
+    #[test]
     fn hp_color_green_above_half() {
         assert_eq!(hp_color(1.0),  Color::rgba(0.0, 0.8, 0.0, BAR_ALPHA));
         assert_eq!(hp_color(0.51), Color::rgba(0.0, 0.8, 0.0, BAR_ALPHA));
@@ -507,6 +609,7 @@ impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MoveHoldState>()
             .init_resource::<PlayerPath>()
+            .init_resource::<PlayerProgress>()
             .configure_sets(Update, PlayerSystemSet::MovementComplete.after(PlayerSystemSet::Movement))
             .add_systems(Startup, spawn_player.after(draw_map))
             .add_systems(Update, (

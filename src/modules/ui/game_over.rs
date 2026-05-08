@@ -7,7 +7,7 @@ use crate::modules::{
     map::{ApplyMapEvent, GlobalSeed, GlobalTurn, Map, MapGeneratorRegistry, MAP_HEIGHT, MAP_WIDTH},
     monster::Monster,
     player::{
-        MoveHoldState, MovingTo, Player, PlayerPath, PLAYER_ATK, PLAYER_DEF, PLAYER_HP, PLAYER_MP,
+        MoveHoldState, MovingTo, Player, PlayerPath, PlayerProgress, PLAYER_ATK, PLAYER_DEF, PLAYER_HP, PLAYER_MP,
     },
     quest::QuestState,
     save::delete_save,
@@ -139,6 +139,7 @@ struct NewGameParams<'w, 's> {
     quest_state: ResMut<'w, QuestState>,
     inventory: ResMut<'w, PlayerInventory>,
     equipment: ResMut<'w, PlayerEquipment>,
+    progress: ResMut<'w, PlayerProgress>,
     message_log: ResMut<'w, MessageLog>,
     equipment_open: ResMut<'w, EquipmentPanelOpen>,
     equipment_ui: ResMut<'w, EquipmentUiState>,
@@ -215,6 +216,7 @@ fn start_new_run(params: &mut NewGameParams) {
     *params.quest_state = QuestState::default();
     *params.inventory = PlayerInventory::default();
     *params.equipment = PlayerEquipment::default();
+    *params.progress = PlayerProgress::default();
     params.message_log.0.clear();
     params.equipment_open.0 = false;
     params.equipment_ui.cursor = 0;

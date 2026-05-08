@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 use crate::modules::{
     map::{Map, MapResource, MapGeneratorRegistry, MAP_WIDTH, MAP_HEIGHT, ApplyMapEvent, GlobalTurn, GlobalSeed},
-    player::Player,
+    player::{Player, PlayerProgress},
     item::{PlayerInventory, PlayerEquipment},
     quest::QuestState,
     zone::{WorldState, ZoneId, ZonePersistence, ZoneSnapshot, NamedZoneConfig, zone_seed},
@@ -93,6 +93,8 @@ pub struct SaveData {
     pub player_max_mp: i32,
     pub player_attack: i32,
     pub player_defense: i32,
+    #[serde(default)]
+    pub player_progress: PlayerProgress,
     pub inventory: PlayerInventory,
     pub equipment: PlayerEquipment,
     pub quest_state: QuestState,
@@ -121,6 +123,7 @@ fn auto_save(
     mut events: EventReader<crate::modules::map::PlayerActedEvent>,
     inventory: Res<PlayerInventory>,
     equipment: Res<PlayerEquipment>,
+    progress: Res<PlayerProgress>,
     quest_state: Res<QuestState>,
     world_state: Res<WorldState>,
     persistence: Res<ZonePersistence>,
@@ -162,6 +165,7 @@ fn auto_save(
         player_max_mp: stats.max_mp,
         player_attack: stats.attack,
         player_defense: stats.defense,
+        player_progress: progress.clone(),
         inventory: inventory.clone(),
         equipment: equipment.clone(),
         quest_state: quest_state.clone(),
@@ -249,6 +253,7 @@ fn get_algo(zone_id: &ZoneId, named_config: &NamedZoneConfig) -> String {
 fn load_if_save_exists(
     mut inventory: ResMut<PlayerInventory>,
     mut equipment: ResMut<PlayerEquipment>,
+    mut progress: ResMut<PlayerProgress>,
     mut quest_state: ResMut<QuestState>,
     mut world_state: ResMut<WorldState>,
     mut persistence: ResMut<ZonePersistence>,
@@ -297,6 +302,7 @@ fn load_if_save_exists(
     // 리소스 복원
     *inventory    = save.inventory;
     *equipment    = save.equipment;
+    *progress     = save.player_progress;
     *quest_state  = save.quest_state;
     *persistence  = ZonePersistence(save.zone_persistence);
     *markers      = save.discovered_markers;
@@ -339,8 +345,13 @@ mod tests {
     use super::*;
     use crate::modules::{
         item::{InventoryItem, ItemKind, WeaponKind, ConsumableKind},
+        player::xp_to_next_level,
         zone::ZoneId,
     };
+
+    fn xp_to_next_level_for_test(level: u32) -> u32 {
+        xp_to_next_level(level)
+    }
 
     fn make_minimal_save() -> SaveData {
         let mut revealed = vec![false; 10 * 10];
@@ -357,6 +368,7 @@ mod tests {
             player_max_mp: 5,
             player_attack: 8,
             player_defense: 3,
+            player_progress: PlayerProgress { level: 3, xp: 7, next_level_xp: xp_to_next_level_for_test(3), kills: 12 },
             inventory: PlayerInventory {
                 items: vec![InventoryItem { kind: ItemKind::Weapon(WeaponKind::Sword) }],
                 consumables: vec![(ConsumableKind::HealthPotion, 2)],
@@ -408,6 +420,9 @@ mod tests {
         assert_eq!(restored.global_turn, 42);
         assert_eq!(restored.player_tile, [2, 2]);
         assert_eq!(restored.player_hp, 18);
+        assert_eq!(restored.player_progress.level, 3);
+        assert_eq!(restored.player_progress.xp, 7);
+        assert_eq!(restored.player_progress.kills, 12);
         assert_eq!(restored.inventory.gold, 75);
         assert!(matches!(restored.inventory.items[0].kind, ItemKind::Weapon(WeaponKind::Sword)));
         assert!(matches!(restored.equipment.weapon, Some(WeaponKind::Sword)));
