@@ -1,15 +1,15 @@
+use crate::modules::{
+    map::{Map, MapGeneratorRegistry, MapResource, TileKind},
+    player::Player,
+    zone::{WorldState, ZoneId},
+};
 use bevy::{
     prelude::*,
     render::{
-        render_resource::{Extent3d, TextureDimension, TextureFormat},
         render_asset::RenderAssetUsages,
+        render_resource::{Extent3d, TextureDimension, TextureFormat},
         texture::ImageSampler,
     },
-};
-use crate::modules::{
-    map::{Map, MapResource, TileKind, MAP_HEIGHT, MAP_WIDTH, MapGeneratorRegistry},
-    player::Player,
-    zone::{WorldState, ZoneId},
 };
 
 #[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -24,11 +24,11 @@ pub enum MarkerKind {
 impl MarkerKind {
     pub fn color(&self) -> [u8; 4] {
         match self {
-            MarkerKind::QuestGiver  => [255, 255,   0, 255],
-            MarkerKind::QuestTarget => [255,   0, 255, 255],
-            MarkerKind::Portal      => [  0, 255, 255, 255],
-            MarkerKind::StairDown  => [255, 153,   0, 255],
-            MarkerKind::StairUp    => [128, 255, 128, 255],
+            MarkerKind::QuestGiver => [255, 255, 0, 255],
+            MarkerKind::QuestTarget => [255, 0, 255, 255],
+            MarkerKind::Portal => [0, 255, 255, 255],
+            MarkerKind::StairDown => [255, 153, 0, 255],
+            MarkerKind::StairUp => [128, 255, 128, 255],
         }
     }
 }
@@ -46,18 +46,22 @@ pub struct DiscoveredMarkers(pub Vec<MapMarker>);
 
 impl DiscoveredMarkers {
     pub fn add(&mut self, tile_x: usize, tile_y: usize, kind: MarkerKind, zone: ZoneId) {
-        let already = self.0.iter().any(|m| {
-            m.tile_x == tile_x && m.tile_y == tile_y && m.kind == kind && m.zone == zone
-        });
+        let already = self
+            .0
+            .iter()
+            .any(|m| m.tile_x == tile_x && m.tile_y == tile_y && m.kind == kind && m.zone == zone);
         if !already {
-            self.0.push(MapMarker { tile_x, tile_y, kind, zone });
+            self.0.push(MapMarker {
+                tile_x,
+                tile_y,
+                kind,
+                zone,
+            });
         }
     }
 }
 
 pub const MINIMAP_RADIUS: i32 = 20;
-const WALL_BOOST: f32 = 5.0;
-const PLAYER_BOOST: f32 = 20.0;
 pub const MINIMAP_SIDE: u32 = (MINIMAP_RADIUS * 2 + 1) as u32;
 pub const MINIMAP_DISPLAY_SIZE: f32 = 180.0;
 const MINIMAP_VIEW_RADIUS_MIN: i32 = MINIMAP_RADIUS;
@@ -73,7 +77,11 @@ pub struct MinimapConfig {
 }
 
 impl Default for MinimapConfig {
-    fn default() -> Self { Self { view_radius: MINIMAP_RADIUS } }
+    fn default() -> Self {
+        Self {
+            view_radius: MINIMAP_RADIUS,
+        }
+    }
 }
 
 #[derive(Component)]
@@ -88,11 +96,19 @@ impl Plugin for MinimapPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MinimapConfig>()
             .init_resource::<DiscoveredMarkers>()
-            .add_systems(Startup, (
-                setup_minimap,
-                spawn_minimap_overlay.after(setup_minimap),
-            ))
-            .add_systems(Update, (update_minimap, toggle_minimap, update_generator_name, zoom_minimap));
+            .add_systems(
+                Startup,
+                (setup_minimap, spawn_minimap_overlay.after(setup_minimap)),
+            )
+            .add_systems(
+                Update,
+                (
+                    update_minimap,
+                    toggle_minimap,
+                    update_generator_name,
+                    zoom_minimap,
+                ),
+            );
     }
 }
 
@@ -130,43 +146,53 @@ fn spawn_minimap_overlay(
     registry: Res<MapGeneratorRegistry>,
 ) {
     let font = asset_server.load("fonts/NanumSquareNeo-bRg.ttf");
-    commands.spawn((
-        NodeBundle {
-            style: Style {
-                position_type: PositionType::Absolute,
-                right: Val::Px(5.0),
-                top: Val::Px(10.0),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::FlexEnd,
-                row_gap: Val::Px(4.0),
+    commands
+        .spawn((
+            NodeBundle {
+                style: Style {
+                    position_type: PositionType::Absolute,
+                    right: Val::Px(5.0),
+                    top: Val::Px(10.0),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::FlexEnd,
+                    row_gap: Val::Px(4.0),
+                    ..default()
+                },
+                z_index: ZIndex::Global(50),
                 ..default()
             },
-            z_index: ZIndex::Global(50),
-            ..default()
-        },
-        MinimapOverlay,
-    )).with_children(|parent| {
-        parent.spawn(ImageBundle {
-            style: Style {
-                width: Val::Px(MINIMAP_DISPLAY_SIZE),
-                height: Val::Px(MINIMAP_DISPLAY_SIZE),
+            MinimapOverlay,
+        ))
+        .with_children(|parent| {
+            parent.spawn(ImageBundle {
+                style: Style {
+                    width: Val::Px(MINIMAP_DISPLAY_SIZE),
+                    height: Val::Px(MINIMAP_DISPLAY_SIZE),
+                    ..default()
+                },
+                image: minimap_res.0.clone().into(),
                 ..default()
-            },
-            image: minimap_res.0.clone().into(),
-            ..default()
+            });
+            parent.spawn((
+                TextBundle::from_section(
+                    registry.current_name(),
+                    TextStyle {
+                        font: font.clone(),
+                        font_size: 13.0,
+                        color: Color::CYAN,
+                    },
+                ),
+                GeneratorNameText,
+            ));
+            parent.spawn(TextBundle::from_section(
+                "[F1] 맵 전환",
+                TextStyle {
+                    font,
+                    font_size: 11.0,
+                    color: Color::GRAY,
+                },
+            ));
         });
-        parent.spawn((
-            TextBundle::from_section(
-                registry.current_name(),
-                TextStyle { font: font.clone(), font_size: 13.0, color: Color::CYAN },
-            ),
-            GeneratorNameText,
-        ));
-        parent.spawn(TextBundle::from_section(
-            "[F1] 맵 전환",
-            TextStyle { font, font_size: 11.0, color: Color::GRAY },
-        ));
-    });
 }
 
 /// view_radius 를 clamp하여 반환한다 (순수 함수, 테스트 가능)
@@ -174,18 +200,25 @@ pub fn apply_zoom(current: i32, delta: i32) -> i32 {
     (current + delta).clamp(MINIMAP_VIEW_RADIUS_MIN, MINIMAP_VIEW_RADIUS_MAX)
 }
 
-fn zoom_minimap(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    mut config: ResMut<MinimapConfig>,
-) {
+fn zoom_minimap(keyboard: Res<ButtonInput<KeyCode>>, mut config: ResMut<MinimapConfig>) {
     let ctrl = keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
-    if !ctrl { return; }
+    if !ctrl {
+        return;
+    }
 
-    let zoom_in  = keyboard.just_pressed(KeyCode::Equal) || keyboard.just_pressed(KeyCode::NumpadAdd);
-    let zoom_out = keyboard.just_pressed(KeyCode::Minus) || keyboard.just_pressed(KeyCode::NumpadSubtract);
+    let zoom_in =
+        keyboard.just_pressed(KeyCode::Equal) || keyboard.just_pressed(KeyCode::NumpadAdd);
+    let zoom_out =
+        keyboard.just_pressed(KeyCode::Minus) || keyboard.just_pressed(KeyCode::NumpadSubtract);
 
     // 줌인 = 반경 감소 (타일 더 크게), 줌아웃 = 반경 증가 (더 넓게)
-    let delta = if zoom_in { -MINIMAP_ZOOM_STEP } else if zoom_out { MINIMAP_ZOOM_STEP } else { return };
+    let delta = if zoom_in {
+        -MINIMAP_ZOOM_STEP
+    } else if zoom_out {
+        MINIMAP_ZOOM_STEP
+    } else {
+        return;
+    };
     config.view_radius = apply_zoom(config.view_radius, delta);
 }
 
@@ -223,55 +256,109 @@ fn is_diamond_border(tx: u32, ty: u32) -> bool {
     dx + dy == MINIMAP_RADIUS
 }
 
-/// 1D box filter 가중치: 타일 [tile, tile+1) 구간이 [lo, hi) 와 겹치는 비율
-pub(crate) fn box_weight(tile: i32, lo: f32, hi: f32, scale: f32) -> f32 {
-    (((tile as f32 + 1.0).min(hi) - (tile as f32).max(lo)) / scale).max(0.0)
+const C_TRANSPARENT: [u8; 4] = [0, 0, 0, 0];
+const C_BORDER: [u8; 4] = [168, 132, 72, 255];
+const C_UNEXPLORED: [u8; 4] = [7, 8, 10, 255];
+const C_VISIBLE_WALL: [u8; 4] = [210, 176, 116, 255];
+const C_VISIBLE_FLOOR: [u8; 4] = [92, 128, 92, 255];
+const C_REVEALED_WALL: [u8; 4] = [84, 68, 48, 255];
+const C_REVEALED_FLOOR: [u8; 4] = [34, 48, 42, 255];
+const C_PLAYER: [u8; 4] = [255, 228, 64, 255];
+
+/// 미니맵 픽셀 하나가 대표할 월드 타일 좌표를 반환한다.
+/// 보간 없이 가장 가까운 타일 하나만 선택해 픽셀 아트처럼 또렷하게 그린다.
+pub(crate) fn minimap_pixel_to_world_tile(
+    player_x: usize,
+    player_y: usize,
+    tx: u32,
+    ty: u32,
+    scale: f32,
+) -> (i32, i32) {
+    let wx = player_x as f32 + (tx as f32 - MINIMAP_RADIUS as f32) * scale;
+    let wy = player_y as f32 + (MINIMAP_RADIUS as f32 - ty as f32) * scale;
+    (wx.round() as i32, wy.round() as i32)
 }
 
-/// 타일 (x, y) 의 미니맵 색상을 [f32; 4] (0–255 범위) 로 반환한다.
-/// 맵 경계 밖이거나 미탐험 타일은 어두운 배경색을 반환한다.
-pub(crate) fn tile_color_f32(map: &Map, x: i32, y: i32, player_x: usize, player_y: usize) -> [f32; 4] {
-    if x < 0 || x >= MAP_WIDTH as i32 || y < 0 || y >= MAP_HEIGHT as i32 {
-        return [10.0, 8.0, 6.0, 255.0];
+/// 타일 하나의 상태를 미니맵 팔레트 색상으로 변환한다.
+/// 경계 밖과 미탐험 타일은 같은 어두운 색으로 처리해 지도를 읽기 쉽게 유지한다.
+pub(crate) fn tile_color(map: &Map, x: i32, y: i32, player_x: usize, player_y: usize) -> [u8; 4] {
+    if x < 0 || y < 0 || x >= map.width as i32 || y >= map.height as i32 {
+        return C_UNEXPLORED;
     }
-    let ux = x as usize;
-    let uy = y as usize;
-    let idx = map.index(ux, uy);
-    let c: [u8; 4] = if ux == player_x && uy == player_y {
-        [255, 220, 0, 255]
-    } else if map.tiles[idx].visible {
-        match map.tiles[idx].kind {
-            TileKind::Wall  => [220, 200, 155, 255],
-            TileKind::Floor => [130, 110, 80,  255],
-        }
-    } else if map.tiles[idx].revealed {
-        match map.tiles[idx].kind {
-            TileKind::Wall  => [110, 95,  70,  255],
-            TileKind::Floor => [60,  50,  35,  255],
-        }
-    } else {
-        [10, 8, 6, 255]
-    };
-    [c[0] as f32, c[1] as f32, c[2] as f32, c[3] as f32]
-}
 
-/// 타일의 가중치 부스트 배수를 반환한다.
-/// 벽·건물은 zoom out 시에도 바닥색에 묻히지 않도록 가중치를 높인다.
-pub(crate) fn tile_boost(map: &Map, x: i32, y: i32, player_x: usize, player_y: usize) -> f32 {
-    if x < 0 || x >= MAP_WIDTH as i32 || y < 0 || y >= MAP_HEIGHT as i32 {
-        return 1.0;
-    }
     let ux = x as usize;
     let uy = y as usize;
     if ux == player_x && uy == player_y {
-        return PLAYER_BOOST;
+        return C_PLAYER;
     }
+
     let idx = map.index(ux, uy);
-    if (map.tiles[idx].visible || map.tiles[idx].revealed) && map.tiles[idx].kind == TileKind::Wall {
-        WALL_BOOST
+    if map.tiles[idx].visible {
+        match map.tiles[idx].kind {
+            TileKind::Wall => C_VISIBLE_WALL,
+            TileKind::Floor => C_VISIBLE_FLOOR,
+        }
+    } else if map.tiles[idx].revealed {
+        match map.tiles[idx].kind {
+            TileKind::Wall => C_REVEALED_WALL,
+            TileKind::Floor => C_REVEALED_FLOOR,
+        }
     } else {
-        1.0
+        C_UNEXPLORED
     }
+}
+
+/// 월드 타일 좌표를 미니맵 픽셀 좌표로 변환한다.
+/// 화면 밖·다이아몬드 바깥·테두리 위 마커는 렌더링하지 않도록 None을 반환한다.
+pub(crate) fn marker_pixel_coords(
+    player_x: usize,
+    player_y: usize,
+    marker_x: usize,
+    marker_y: usize,
+    scale: f32,
+) -> Option<(u32, u32)> {
+    let mtx = MINIMAP_RADIUS + ((marker_x as f32 - player_x as f32) / scale).round() as i32;
+    let mty = MINIMAP_RADIUS - ((marker_y as f32 - player_y as f32) / scale).round() as i32;
+    if mtx < 0 || mty < 0 {
+        return None;
+    }
+
+    let (mtx, mty) = (mtx as u32, mty as u32);
+    if mtx >= MINIMAP_SIDE || mty >= MINIMAP_SIDE {
+        return None;
+    }
+    if is_outside_diamond(mtx, mty) || is_diamond_border(mtx, mty) {
+        return None;
+    }
+
+    Some((mtx, mty))
+}
+
+/// 마커 중심 픽셀과 상하좌우 픽셀을 반환한다.
+/// 한 점보다 또렷한 작은 십자 형태를 만들어 고해상도 UI에서도 흐려 보이지 않게 한다.
+pub(crate) fn marker_stamp_pixels(center_x: u32, center_y: u32) -> [(i32, i32); 5] {
+    let x = center_x as i32;
+    let y = center_y as i32;
+    [(x, y), (x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]
+}
+
+/// 미니맵 이미지의 단일 픽셀에 색상을 기록한다.
+/// 스탬프 일부가 경계에 걸릴 때는 다이아몬드 내부 픽셀만 남긴다.
+fn write_minimap_pixel(image: &mut Image, x: i32, y: i32, color: [u8; 4]) {
+    if x < 0 || y < 0 {
+        return;
+    }
+
+    let (x, y) = (x as u32, y as u32);
+    if x >= MINIMAP_SIDE || y >= MINIMAP_SIDE {
+        return;
+    }
+    if is_outside_diamond(x, y) || is_diamond_border(x, y) {
+        return;
+    }
+
+    let pixel_idx = (y * MINIMAP_SIDE + x) as usize * 4;
+    image.data[pixel_idx..pixel_idx + 4].copy_from_slice(&color);
 }
 
 fn update_minimap(
@@ -285,24 +372,33 @@ fn update_minimap(
     world_state: Res<WorldState>,
     markers: Res<DiscoveredMarkers>,
 ) {
-    // 미니맵이 숨겨져 있으면 텍스처 업데이트 불필요
+    // 미니맵이 숨겨져 있으면 텍스처 업데이트를 건너뛴다.
     if let Ok(vis) = overlay_q.get_single() {
-        if *vis == Visibility::Hidden { return; }
+        if *vis == Visibility::Hidden {
+            return;
+        }
     }
 
     if map_res.is_changed() || config.is_changed() {
         *last_pos = None;
     }
 
-    let Ok(player_transform) = player_query.get_single() else { return };
-    let (player_x, player_y) = crate::modules::map::world_to_tile_coords(player_transform.translation);
+    let Ok(player_transform) = player_query.get_single() else {
+        return;
+    };
+    let (player_x, player_y) =
+        crate::modules::map::world_to_tile_coords(player_transform.translation);
     let current_pos = IVec2::new(player_x as i32, player_y as i32);
 
-    if Some(current_pos) == *last_pos && !markers.is_changed() { return; }
+    if Some(current_pos) == *last_pos && !markers.is_changed() {
+        return;
+    }
     *last_pos = Some(current_pos);
 
     let map = map_res.map();
-    let Some(image) = images.get_mut(&minimap_res.0) else { return };
+    let Some(image) = images.get_mut(&minimap_res.0) else {
+        return;
+    };
 
     let scale = config.view_radius as f32 / MINIMAP_RADIUS as f32;
 
@@ -311,61 +407,34 @@ fn update_minimap(
             let pixel_idx = (ty * MINIMAP_SIDE + tx) as usize * 4;
 
             if is_outside_diamond(tx, ty) {
-                image.data[pixel_idx..pixel_idx + 4].copy_from_slice(&[0, 0, 0, 0]);
+                image.data[pixel_idx..pixel_idx + 4].copy_from_slice(&C_TRANSPARENT);
                 continue;
             }
             if is_diamond_border(tx, ty) {
-                image.data[pixel_idx..pixel_idx + 4].copy_from_slice(&[160, 140, 100, 255]);
+                image.data[pixel_idx..pixel_idx + 4].copy_from_slice(&C_BORDER);
                 continue;
             }
 
-            // box filter: 픽셀이 덮는 footprint 내 모든 타일을 면적 비율로 가중 평균
-            // bilinear(2×2)와 달리 scale>1일 때 모든 기여 타일을 포함해 flicker 제거
-            let fx = player_x as f32 + (tx as f32 - MINIMAP_RADIUS as f32) * scale;
-            let fy = player_y as f32 + (MINIMAP_RADIUS as f32 - ty as f32) * scale; // y축 반전
-            let half = scale * 0.5;
-            let fx_lo = fx - half;  let fx_hi = fx + half;
-            let fy_lo = fy - half;  let fy_hi = fy + half;
-            let ix0 = fx_lo.floor() as i32;  let ix1 = fx_hi.floor() as i32;
-            let iy0 = fy_lo.floor() as i32;  let iy1 = fy_hi.floor() as i32;
-
-            let mut blended = [0.0f32; 4];
-            let mut total_w = 0.0f32;
-            for iy in iy0..=iy1 {
-                let wy = box_weight(iy, fy_lo, fy_hi, scale);
-                for ix in ix0..=ix1 {
-                    let wx = box_weight(ix, fx_lo, fx_hi, scale);
-                    let w = wx * wy * tile_boost(map, ix, iy, player_x, player_y);
-                    let c = tile_color_f32(map, ix, iy, player_x, player_y);
-                    for i in 0..4 { blended[i] += c[i] * w; }
-                    total_w += w;
-                }
-            }
-            if total_w > 0.0 {
-                let inv = 1.0 / total_w;
-                for i in 0..4 { blended[i] *= inv; }
-            }
-            let color: [u8; 4] = std::array::from_fn(|i| blended[i].round() as u8);
-
+            // 보간 없이 대표 타일 하나만 샘플링해 미니맵을 또렷한 픽셀 스타일로 유지한다.
+            let (wx, wy) = minimap_pixel_to_world_tile(player_x, player_y, tx, ty, scale);
+            let color = tile_color(map, wx, wy, player_x, player_y);
             image.data[pixel_idx..pixel_idx + 4].copy_from_slice(&color);
         }
     }
 
-    // 마커 오버레이 패스: 현재 존의 발견된 마커를 픽셀로 표시
+    // 마커는 작은 십자 스탬프로 올려 한 픽셀 점보다 눈에 잘 띄게 한다.
     for marker in markers.0.iter().filter(|m| m.zone == world_state.current) {
-        let mx = marker.tile_x as f32;
-        let my = marker.tile_y as f32;
-        let mtx = MINIMAP_RADIUS + ((mx - player_x as f32) / scale).round() as i32;
-        let mty = MINIMAP_RADIUS - ((my - player_y as f32) / scale).round() as i32;
-        if mtx < 0 || mty < 0 { continue; }
-        let (mtx, mty) = (mtx as u32, mty as u32);
-        if mtx >= MINIMAP_SIDE || mty >= MINIMAP_SIDE { continue; }
-        if is_outside_diamond(mtx, mty) || is_diamond_border(mtx, mty) { continue; }
-        let pixel_idx = (mty * MINIMAP_SIDE + mtx) as usize * 4;
-        image.data[pixel_idx..pixel_idx + 4].copy_from_slice(&marker.kind.color());
+        let Some((mtx, mty)) =
+            marker_pixel_coords(player_x, player_y, marker.tile_x, marker.tile_y, scale)
+        else {
+            continue;
+        };
+
+        for (x, y) in marker_stamp_pixels(mtx, mty) {
+            write_minimap_pixel(image, x, y, marker.kind.color());
+        }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -373,7 +442,10 @@ mod tests {
 
     #[test]
     fn center_is_inside_diamond() {
-        assert!(!is_outside_diamond(MINIMAP_RADIUS as u32, MINIMAP_RADIUS as u32));
+        assert!(!is_outside_diamond(
+            MINIMAP_RADIUS as u32,
+            MINIMAP_RADIUS as u32
+        ));
     }
 
     #[test]
@@ -405,7 +477,10 @@ mod tests {
 
     #[test]
     fn center_is_not_border() {
-        assert!(!is_diamond_border(MINIMAP_RADIUS as u32, MINIMAP_RADIUS as u32));
+        assert!(!is_diamond_border(
+            MINIMAP_RADIUS as u32,
+            MINIMAP_RADIUS as u32
+        ));
     }
 
     #[test]
@@ -421,13 +496,19 @@ mod tests {
 
     #[test]
     fn zoom_clamps_at_max_radius() {
-        assert_eq!(apply_zoom(MINIMAP_VIEW_RADIUS_MAX, MINIMAP_ZOOM_STEP), MINIMAP_VIEW_RADIUS_MAX);
+        assert_eq!(
+            apply_zoom(MINIMAP_VIEW_RADIUS_MAX, MINIMAP_ZOOM_STEP),
+            MINIMAP_VIEW_RADIUS_MAX
+        );
     }
 
     #[test]
     fn zoom_clamps_at_min_is_default_radius() {
         // 최솟값이 기본값과 같으므로 기본 상태에서 줌인해도 변하지 않는다
-        assert_eq!(apply_zoom(MINIMAP_RADIUS, -MINIMAP_ZOOM_STEP), MINIMAP_RADIUS);
+        assert_eq!(
+            apply_zoom(MINIMAP_RADIUS, -MINIMAP_ZOOM_STEP),
+            MINIMAP_RADIUS
+        );
     }
 
     #[test]
@@ -450,105 +531,71 @@ mod tests {
     }
 
     #[test]
-    fn box_filter_1d_weights_sum_to_one() {
-        for scale in [1.0_f32, 2.5, 3.5] {
-            for fx in [10.0_f32, 10.3, 10.5, 10.99] {
-                let lo = fx - scale * 0.5;
-                let hi = fx + scale * 0.5;
-                let i0 = lo.floor() as i32;
-                let i1 = hi.floor() as i32;
-                let total: f32 = (i0..=i1).map(|i| box_weight(i, lo, hi, scale)).sum();
-                assert!((total - 1.0).abs() < 1e-5, "scale={scale} fx={fx}: total={total}");
-            }
-        }
+    fn minimap_pixel_to_world_tile_center_returns_player_tile() {
+        let tile =
+            minimap_pixel_to_world_tile(40, 50, MINIMAP_RADIUS as u32, MINIMAP_RADIUS as u32, 1.0);
+        assert_eq!(tile, (40, 50));
     }
 
     #[test]
-    fn box_filter_scale1_equals_lerp() {
-        // scale=1 일 때 box filter 는 선형 보간과 동일해야 한다
-        let fx = 10.3_f32;
-        let lo = fx - 0.5;
-        let hi = fx + 0.5;
-        let w0 = box_weight(10, lo, hi, 1.0); // 기여: [10.0, 10.5) → 0.5 / 1.0 = 0.5
-        let w1 = box_weight(11, lo, hi, 1.0); // 기여: [10.5, 10.8) → 0.3 / 1.0 = 0.3
-        // 실제 w0 = (10.5 - 10.0) / 1.0 = 0.5, w1 = (10.8 - 10.5) / 1.0 = 0.3 → total = 0.8? NO
-        // lo=9.8, hi=10.8: tile 9: (10.0-9.8)/1.0=0.2, tile 10: (10.8-10.0)/1.0=0.8
-        let lo2 = 9.8_f32; let hi2 = 10.8_f32;
-        let wa = box_weight(9,  lo2, hi2, 1.0);
-        let wb = box_weight(10, lo2, hi2, 1.0);
-        assert!((wa + wb - 1.0).abs() < 1e-6);
-        let _ = (w0, w1); // used above
+    fn minimap_pixel_to_world_tile_zoomed_out_samples_farther_tile() {
+        let tile = minimap_pixel_to_world_tile(
+            40,
+            50,
+            (MINIMAP_RADIUS + 2) as u32,
+            (MINIMAP_RADIUS - 3) as u32,
+            2.0,
+        );
+        assert_eq!(tile, (44, 56));
     }
 
     #[test]
-    fn tile_boost_player_returns_player_boost() {
+    fn tile_color_out_of_bounds_returns_unexplored() {
         let map = Map::new(10, 10);
-        assert_eq!(tile_boost(&map, 3, 3, 3, 3), PLAYER_BOOST);
+        assert_eq!(tile_color(&map, -1, 0, 0, 0), C_UNEXPLORED);
+        assert_eq!(tile_color(&map, 10, 0, 0, 0), C_UNEXPLORED);
     }
 
     #[test]
-    fn tile_boost_revealed_wall_returns_wall_boost() {
-        let mut map = Map::new(10, 10);
-        map.set_tile(5, 5, TileKind::Wall);
-        let idx = map.index(5, 5);
-        map.tiles[idx].revealed = true;
-        assert_eq!(tile_boost(&map, 5, 5, 0, 0), WALL_BOOST);
+    fn tile_color_unrevealed_returns_unexplored() {
+        let map = Map::new(10, 10);
+        assert_eq!(tile_color(&map, 5, 5, 0, 0), C_UNEXPLORED);
     }
 
     #[test]
-    fn tile_boost_visible_wall_returns_wall_boost() {
-        let mut map = Map::new(10, 10);
-        map.set_tile(5, 5, TileKind::Wall);
-        let idx = map.index(5, 5);
-        map.tiles[idx].visible = true;
-        assert_eq!(tile_boost(&map, 5, 5, 0, 0), WALL_BOOST);
+    fn tile_color_player_returns_yellow() {
+        let map = Map::new(10, 10);
+        assert_eq!(tile_color(&map, 3, 3, 3, 3), C_PLAYER);
     }
 
     #[test]
-    fn tile_boost_unrevealed_wall_returns_one() {
+    fn tile_color_visible_wall_and_floor_are_distinct() {
         let mut map = Map::new(10, 10);
-        map.set_tile(5, 5, TileKind::Wall);
-        // visible/revealed 모두 false → 미탐험 벽은 부스트 없음
-        assert_eq!(tile_boost(&map, 5, 5, 0, 0), 1.0);
-    }
-
-    #[test]
-    fn tile_boost_floor_returns_one() {
-        let mut map = Map::new(10, 10);
+        map.set_tile(4, 4, TileKind::Wall);
         map.set_tile(5, 5, TileKind::Floor);
-        let idx = map.index(5, 5);
-        map.tiles[idx].revealed = true;
-        assert_eq!(tile_boost(&map, 5, 5, 0, 0), 1.0);
+        let wall_idx = map.index(4, 4);
+        let floor_idx = map.index(5, 5);
+        map.tiles[wall_idx].visible = true;
+        map.tiles[floor_idx].visible = true;
+
+        assert_eq!(tile_color(&map, 4, 4, 0, 0), C_VISIBLE_WALL);
+        assert_eq!(tile_color(&map, 5, 5, 0, 0), C_VISIBLE_FLOOR);
+        assert_ne!(C_VISIBLE_WALL, C_VISIBLE_FLOOR);
     }
 
     #[test]
-    fn tile_boost_out_of_bounds_returns_one() {
-        let map = Map::new(10, 10);
-        assert_eq!(tile_boost(&map, -1, 0, 0, 0), 1.0);
-        assert_eq!(tile_boost(&map, 10, 0, 0, 0), 1.0);
-    }
+    fn tile_color_revealed_wall_and_floor_are_distinct() {
+        let mut map = Map::new(10, 10);
+        map.set_tile(4, 4, TileKind::Wall);
+        map.set_tile(5, 5, TileKind::Floor);
+        let wall_idx = map.index(4, 4);
+        let floor_idx = map.index(5, 5);
+        map.tiles[wall_idx].revealed = true;
+        map.tiles[floor_idx].revealed = true;
 
-    #[test]
-    fn tile_color_f32_out_of_bounds_returns_dark() {
-        let map = Map::new(10, 10);
-        let c = tile_color_f32(&map, -1, 0, 0, 0);
-        assert_eq!(c, [10.0, 8.0, 6.0, 255.0]);
-        let c = tile_color_f32(&map, 10, 0, 0, 0);
-        assert_eq!(c, [10.0, 8.0, 6.0, 255.0]);
-    }
-
-    #[test]
-    fn tile_color_f32_unrevealed_returns_dark() {
-        let map = Map::new(10, 10); // 모든 타일 미탐험
-        let c = tile_color_f32(&map, 5, 5, 0, 0);
-        assert_eq!(c, [10.0, 8.0, 6.0, 255.0]);
-    }
-
-    #[test]
-    fn tile_color_f32_player_returns_yellow() {
-        let map = Map::new(10, 10);
-        let c = tile_color_f32(&map, 3, 3, 3, 3);
-        assert_eq!(c, [255.0, 220.0, 0.0, 255.0]);
+        assert_eq!(tile_color(&map, 4, 4, 0, 0), C_REVEALED_WALL);
+        assert_eq!(tile_color(&map, 5, 5, 0, 0), C_REVEALED_FLOOR);
+        assert_ne!(C_REVEALED_WALL, C_REVEALED_FLOOR);
     }
 
     #[test]
@@ -592,7 +639,11 @@ mod tests {
         let mut dm = DiscoveredMarkers::default();
         dm.add(5, 5, MarkerKind::Portal, ZoneId::Town);
         dm.add(5, 5, MarkerKind::Portal, ZoneId::Town);
-        assert_eq!(dm.0.len(), 1, "동일 위치·종류의 마커는 중복 추가되지 않아야 한다");
+        assert_eq!(
+            dm.0.len(),
+            1,
+            "동일 위치·종류의 마커는 중복 추가되지 않아야 한다"
+        );
     }
 
     #[test]
@@ -612,26 +663,42 @@ mod tests {
         assert_eq!(dm.0.len(), 2);
     }
 
-
     #[test]
     fn quest_target_marker_uses_distinct_color() {
-        assert_ne!(MarkerKind::QuestTarget.color(), MarkerKind::QuestGiver.color());
+        assert_ne!(
+            MarkerKind::QuestTarget.color(),
+            MarkerKind::QuestGiver.color()
+        );
         assert_eq!(MarkerKind::QuestTarget.color(), [255, 0, 255, 255]);
     }
 
     #[test]
     fn marker_pixel_coords_in_range_for_center_tile() {
-        // 플레이어와 동일 위치 마커 → 미니맵 정중앙 픽셀
-        let px = 40usize;
-        let py = 50usize;
-        let scale = 1.0f32;
-        let mx = px as f32;
-        let my = py as f32;
-        let mtx = MINIMAP_RADIUS + ((mx - px as f32) / scale).round() as i32;
-        let mty = MINIMAP_RADIUS - ((my - py as f32) / scale).round() as i32;
-        assert_eq!(mtx, MINIMAP_RADIUS);
-        assert_eq!(mty, MINIMAP_RADIUS);
-        assert!((mtx as u32) < MINIMAP_SIDE);
-        assert!((mty as u32) < MINIMAP_SIDE);
+        // 플레이어와 동일 위치 마커는 미니맵 정중앙 픽셀에 놓인다.
+        assert_eq!(
+            marker_pixel_coords(40, 50, 40, 50, 1.0),
+            Some((MINIMAP_RADIUS as u32, MINIMAP_RADIUS as u32)),
+        );
+    }
+
+    #[test]
+    fn marker_pixel_coords_outside_range_returns_none() {
+        assert_eq!(marker_pixel_coords(40, 50, 0, 50, 1.0), None);
+    }
+
+    #[test]
+    fn marker_stamp_includes_center_and_cardinals() {
+        let x = MINIMAP_RADIUS as u32;
+        let y = MINIMAP_RADIUS as u32;
+        assert_eq!(
+            marker_stamp_pixels(x, y),
+            [
+                (x as i32, y as i32),
+                (x as i32 - 1, y as i32),
+                (x as i32 + 1, y as i32),
+                (x as i32, y as i32 - 1),
+                (x as i32, y as i32 + 1),
+            ],
+        );
     }
 }
