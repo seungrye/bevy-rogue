@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use crate::modules::{
     item::{ItemKind, PlayerInventory},
     quest::{item_id_to_kind, QuestCondition, QuestDef, QuestRegistry, QuestSpawn, QuestState},
-    ui::minimap::MINIMAP_DISPLAY_SIZE,
+    ui::minimap::{DiscoveredMarkers, MarkerKind, MINIMAP_DISPLAY_SIZE},
     zone::{WorldState, ZoneId},
 };
 
@@ -31,7 +31,7 @@ impl Plugin for QuestPanelPlugin {
     }
 }
 
-/// Creates the hidden quest panel shell that later receives rich quest text.
+/// 이후 풍부한 퀘스트 텍스트를 넣을 숨겨진 퀘스트 패널 껍데기를 만든다.
 fn setup_quest_panel(mut commands: Commands) {
     commands.spawn((
         NodeBundle {
@@ -63,7 +63,7 @@ fn setup_quest_panel(mut commands: Commands) {
     });
 }
 
-/// Toggles the quest panel with Q and updates visibility immediately for snappy UI feedback.
+/// Q 입력으로 퀘스트 패널을 열고 닫으며, 즉각적인 반응을 위해 visibility를 바로 갱신한다.
 fn toggle_quest_panel(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut panel_open: ResMut<QuestPanelOpen>,
@@ -76,16 +76,17 @@ fn toggle_quest_panel(
     }
 }
 
-/// Refreshes quest panel visibility and text when quest-relevant state changes.
+/// 퀘스트 관련 상태가 바뀌면 패널 표시 여부와 텍스트를 갱신한다.
 ///
-/// The visibility sync is intentionally here as well as in the keyboard toggle so
-/// non-keyboard flows, such as starting a new run, can close the panel cleanly.
+/// visibility 동기화는 키보드 토글뿐 아니라 여기에도 둔다.
+/// 새 run 시작처럼 키보드 토글을 거치지 않는 흐름도 패널을 깔끔하게 닫기 위해서다.
 fn update_quest_panel(
     panel_open: Res<QuestPanelOpen>,
     registry: Res<QuestRegistry>,
     state: Res<QuestState>,
     inventory: Res<PlayerInventory>,
     world: Res<WorldState>,
+    markers: Res<DiscoveredMarkers>,
     asset_server: Res<AssetServer>,
     mut panel_q: Query<&mut Visibility, With<QuestPanel>>,
     mut text_q: Query<&mut Text, With<QuestPanelContent>>,
@@ -96,24 +97,32 @@ fn update_quest_panel(
         }
     }
     if !panel_open.0 { return; }
-    if !panel_open.is_changed() && !state.is_changed() && !inventory.is_changed() && !world.is_changed() { return; }
+    if !panel_open.is_changed()
+        && !state.is_changed()
+        && !inventory.is_changed()
+        && !world.is_changed()
+        && !markers.is_changed()
+    {
+        return;
+    }
 
     let font = asset_server.load("fonts/NanumSquareNeo-bRg.ttf");
     let Ok(mut text) = text_q.get_single_mut() else { return };
-    text.sections = build_quest_sections(&registry, &state, &inventory, &world, &font);
+    text.sections = build_quest_sections(&registry, &state, &inventory, &world, &markers, &font);
 }
 
-/// Builds a single styled text section with the panel's shared font size.
+/// 패널 공통 글꼴 크기를 적용한 텍스트 섹션 하나를 만든다.
 fn ts(value: impl Into<String>, font: Handle<Font>, color: Color) -> TextSection {
     TextSection { value: value.into(), style: TextStyle { font, font_size: FONT_SIZE, color } }
 }
 
-/// Builds the quest panel text, including objective, target zone, progress, and next action hints.
+/// 목표 문장, 대상 존, 진행도, 다음 행동 힌트를 포함한 퀘스트 패널 텍스트를 만든다.
 fn build_quest_sections(
     registry: &QuestRegistry,
     state: &QuestState,
     inventory: &PlayerInventory,
     world: &WorldState,
+    markers: &DiscoveredMarkers,
     font: &Handle<Font>,
 ) -> Vec<TextSection> {
     let f = font.clone();
@@ -153,7 +162,8 @@ fn build_quest_sections(
             s.push(ts(format!("    {}\n", line), f.clone(), progress_color));
         }
         if !done && should_hint_giver_dialogue(def, phase) {
-            s.push(ts(format!("    다음: {}와 대화\n", def.giver_npc), f.clone(), meta_color));
+            let marker_hint = quest_giver_marker_hint(def, world, markers);
+            s.push(ts(format!("    다음: {}와 대화{}\n", def.giver_npc, marker_hint), f.clone(), meta_color));
         }
         s.push(ts("\n", f.clone(), obj_color));
     }
@@ -161,7 +171,7 @@ fn build_quest_sections(
     s
 }
 
-/// Returns target zone hints inferred from phase spawns and zone-based auto-advance conditions.
+/// phase 스폰과 존 기반 자동 진행 조건에서 추론한 목표 존 힌트를 반환한다.
 fn quest_location_hints(
     def: &QuestDef,
     phase_id: &str,
@@ -188,7 +198,7 @@ fn quest_location_hints(
         .collect()
 }
 
-/// Returns item collection progress for quest spawns that belong to the current phase.
+/// 현재 phase에 속한 퀘스트 스폰의 아이템 수집 진행도를 반환한다.
 fn quest_progress_hints(
     def: &QuestDef,
     phase_id: &str,
@@ -208,7 +218,7 @@ fn quest_progress_hints(
     lines
 }
 
-/// Selects phase spawns that still matter to the player.
+/// 아직 플레이어에게 의미가 남아 있는 현재 phase 스폰만 고른다.
 fn pending_phase_spawns<'a>(
     def: &'a QuestDef,
     phase_id: &str,
@@ -220,21 +230,21 @@ fn pending_phase_spawns<'a>(
         .collect()
 }
 
-/// Counts how many matching quest items the player currently carries.
+/// 플레이어가 현재 들고 있는 같은 퀘스트 아이템 수를 센다.
 fn inventory_count(inventory: &PlayerInventory, kind: ItemKind) -> u32 {
     inventory.items.iter()
         .filter(|item| item.kind == kind)
         .count() as u32
 }
 
-/// Adds a zone only once while preserving the order inferred from quest data.
+/// 퀘스트 데이터에서 나온 순서를 유지하면서 같은 존은 한 번만 추가한다.
 fn push_unique_zone(zones: &mut Vec<ZoneId>, zone: &ZoneId) {
     if !zones.iter().any(|known| known == zone) {
         zones.push(zone.clone());
     }
 }
 
-/// Walks nested quest conditions and extracts every zone condition that can guide navigation.
+/// 중첩된 퀘스트 조건을 순회하며 길 안내에 쓸 수 있는 모든 존 조건을 추출한다.
 fn collect_condition_zones(condition: &QuestCondition, zones: &mut Vec<ZoneId>) {
     match condition {
         QuestCondition::InZone(zone) => push_unique_zone(zones, zone),
@@ -251,7 +261,23 @@ fn collect_condition_zones(condition: &QuestCondition, zones: &mut Vec<ZoneId>) 
     }
 }
 
-/// Decides whether the current phase likely expects the player to return to the quest giver.
+
+/// 현재 존에서 발견된 퀘스트 제공자 마커가 있으면 대화 힌트에 붙일 짧은 상태 문구를 만든다.
+fn quest_giver_marker_hint(
+    def: &QuestDef,
+    world: &WorldState,
+    markers: &DiscoveredMarkers,
+) -> &'static str {
+    if def.giver_npc.trim().is_empty() {
+        return "";
+    }
+    let has_marker_here = markers.0.iter().any(|marker| {
+        marker.zone == world.current && marker.kind == MarkerKind::QuestGiver
+    });
+    if has_marker_here { " (현재 존 / 미니맵 표시)" } else { "" }
+}
+
+/// 현재 phase가 퀘스트 제공자에게 돌아가야 하는 흐름인지 판단한다.
 fn should_hint_giver_dialogue(def: &QuestDef, phase: &crate::modules::quest::QuestPhaseDef) -> bool {
     !phase.on_interact.is_empty() && def.giver_npc.trim().len() > 0
 }
@@ -323,7 +349,7 @@ mod tests {
     fn empty_state_shows_no_quests_message() {
         let reg = QuestRegistry::default();
         let st  = QuestState::default();
-        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &Handle::default());
+        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default());
         let all_text = all_text(sections);
         assert!(all_text.contains("진행 중인 퀘스트 없음"));
     }
@@ -331,7 +357,7 @@ mod tests {
     #[test]
     fn active_quest_shows_title_and_objective() {
         let (reg, st) = make_registry_and_state("active");
-        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &Handle::default());
+        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default());
         let all_text = all_text(sections);
         assert!(all_text.contains("잃어버린 보석"));
         assert!(all_text.contains("보석을 찾아라"));
@@ -340,7 +366,7 @@ mod tests {
     #[test]
     fn active_quest_shows_target_zone_and_progress() {
         let (reg, st) = make_registry_and_state("active");
-        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &Handle::default());
+        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default());
         let all_text = all_text(sections);
         assert!(all_text.contains("위치: 던전 2층"));
         assert!(all_text.contains("진행: 영원의 보석 0/1"));
@@ -351,7 +377,7 @@ mod tests {
         let (reg, st) = make_registry_and_state("active");
         let mut world = default_world();
         world.current = ZoneId::Dungeon(2);
-        let sections = build_quest_sections(&reg, &st, &default_inventory(), &world, &Handle::default());
+        let sections = build_quest_sections(&reg, &st, &default_inventory(), &world, &DiscoveredMarkers::default(), &Handle::default());
         let all_text = all_text(sections);
         assert!(all_text.contains("위치: 던전 2층 / 현재 위치"));
     }
@@ -361,7 +387,7 @@ mod tests {
         let (reg, st) = make_registry_and_state("active");
         let mut inventory = default_inventory();
         inventory.items.push(InventoryItem { kind: ItemKind::QuestItem(QuestItemKind::EternalGem) });
-        let sections = build_quest_sections(&reg, &st, &inventory, &default_world(), &Handle::default());
+        let sections = build_quest_sections(&reg, &st, &inventory, &default_world(), &DiscoveredMarkers::default(), &Handle::default());
         let all_text = all_text(sections);
         assert!(all_text.contains("완료: 영원의 보석 1/1"));
     }
@@ -369,15 +395,27 @@ mod tests {
     #[test]
     fn ready_quest_hints_giver_dialogue() {
         let (reg, st) = make_registry_and_state("ready");
-        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &Handle::default());
+        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default());
         let all_text = all_text(sections);
         assert!(all_text.contains("다음: 장로와 대화"));
     }
 
     #[test]
+    fn ready_quest_hints_current_zone_marker_when_giver_discovered() {
+        let (reg, st) = make_registry_and_state("ready");
+        let mut markers = DiscoveredMarkers::default();
+        markers.add(4, 5, MarkerKind::QuestGiver, ZoneId::Town);
+
+        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &markers, &Handle::default());
+        let all_text = all_text(sections);
+
+        assert!(all_text.contains("다음: 장로와 대화 (현재 존 / 미니맵 표시)"));
+    }
+
+    #[test]
     fn done_quest_shows_completed_mark() {
         let (reg, st) = make_registry_and_state("done");
-        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &Handle::default());
+        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default());
         let all_text = all_text(sections);
         assert!(all_text.contains("[완료]"));
     }
@@ -402,7 +440,7 @@ mod tests {
         });
         let mut st = QuestState::default();
         st.set_phase("q", "active");
-        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &Handle::default());
+        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default());
         let all_text = all_text(sections);
         assert!(all_text.contains("active"));
     }

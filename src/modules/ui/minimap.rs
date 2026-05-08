@@ -15,6 +15,7 @@ use crate::modules::{
 #[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MarkerKind {
     QuestGiver,
+    QuestTarget,
     Portal,
     StairDown,
     StairUp,
@@ -23,8 +24,9 @@ pub enum MarkerKind {
 impl MarkerKind {
     pub fn color(&self) -> [u8; 4] {
         match self {
-            MarkerKind::QuestGiver => [255, 255,   0, 255],
-            MarkerKind::Portal     => [  0, 255, 255, 255],
+            MarkerKind::QuestGiver  => [255, 255,   0, 255],
+            MarkerKind::QuestTarget => [255,   0, 255, 255],
+            MarkerKind::Portal      => [  0, 255, 255, 255],
             MarkerKind::StairDown  => [255, 153,   0, 255],
             MarkerKind::StairUp    => [128, 255, 128, 255],
         }
@@ -598,7 +600,8 @@ mod tests {
         let mut dm = DiscoveredMarkers::default();
         dm.add(5, 5, MarkerKind::Portal, ZoneId::Town);
         dm.add(5, 5, MarkerKind::QuestGiver, ZoneId::Town);
-        assert_eq!(dm.0.len(), 2);
+        dm.add(5, 5, MarkerKind::QuestTarget, ZoneId::Town);
+        assert_eq!(dm.0.len(), 3);
     }
 
     #[test]
@@ -607,6 +610,13 @@ mod tests {
         dm.add(5, 5, MarkerKind::Portal, ZoneId::Town);
         dm.add(5, 5, MarkerKind::Portal, ZoneId::Forest);
         assert_eq!(dm.0.len(), 2);
+    }
+
+
+    #[test]
+    fn quest_target_marker_uses_distinct_color() {
+        assert_ne!(MarkerKind::QuestTarget.color(), MarkerKind::QuestGiver.color());
+        assert_eq!(MarkerKind::QuestTarget.color(), [255, 0, 255, 255]);
     }
 
     #[test]

@@ -4,6 +4,7 @@ use serde::Deserialize;
 use crate::modules::{
     item::{PlayerInventory, ItemKind, QuestItemKind, InventoryItem, Item},
     map::{MapResource, TILE_SIZE, tile_to_world_coords, UsedSpawnTiles, random_floor_tile_in_room},
+    ui::minimap::{DiscoveredMarkers, MarkerKind},
     zone::{ZoneId, SpawnQuestPortalEvent},
 };
 
@@ -520,6 +521,7 @@ fn spawn_quest_items(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut used_spawn: ResMut<UsedSpawnTiles>,
+    mut markers: ResMut<DiscoveredMarkers>,
 ) {
     if !map_res.is_changed() { return; }
 
@@ -569,6 +571,8 @@ fn spawn_quest_items(
                     },
                     Item { kind, tile_x: tx, tile_y: ty },
                 ));
+                // 퀘스트 아이템은 목표물 자체이므로 스폰되는 순간 미니맵 목표 마커로 등록한다.
+                markers.add(tx, ty, MarkerKind::QuestTarget, world.current.clone());
                 info!("퀘스트 아이템 스폰: {} at ({}, {})", spawn.item, tx, ty);
             }
 

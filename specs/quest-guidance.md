@@ -26,10 +26,20 @@
 
 - [x] 현재 phase의 `on_interact` 액션이 비어 있지 않으면 퀘스트 제공자와 대화 힌트를 표시한다
 - [x] 완료 phase에서는 대화 힌트를 표시하지 않는다
+- [x] 현재 존에 발견된 퀘스트 제공자 마커가 있으면 `현재 존 / 미니맵 표시` 힌트를 덧붙인다
+
+### 미니맵 목표 마커
+
+- [x] 퀘스트 목표 아이템용 `QuestTarget` 마커 종류를 추가한다
+- [x] 퀘스트 아이템이 월드에 스폰될 때 같은 타일에 `QuestTarget` 마커를 등록한다
+- [x] `QuestTarget` 마커는 기존 퀘스트 제공자 마커와 다른 색을 사용한다
+- [x] 기존 `DiscoveredMarkers` 중복 방지 규칙을 그대로 따른다
 
 ## 구현 위치
 
 - `src/modules/ui/quest_panel.rs`
+- `src/modules/ui/minimap.rs`
+- `src/modules/quest/mod.rs`
 - `docs/roguelike-feature-checklist.md`
 
 ## 테스트
@@ -40,11 +50,13 @@
 - [x] `ready_quest_hints_giver_dialogue`
 - [x] `nested_zone_conditions_are_collected_once`
 - [x] `auto_advance_zone_conditions_become_location_hints`
+- [x] `ready_quest_hints_current_zone_marker_when_giver_discovered`
+- [x] `quest_target_marker_uses_distinct_color`
 - [x] 전체 회귀: `cargo test`
 
 ## 남은 개선 후보
 
-- 미니맵 마커와 퀘스트 목표 연동
-- 완료 가능한 NPC의 현재 존 또는 방향 표시
+- 완료 가능한 NPC의 방향 표시
+- 발견되지 않은 퀘스트 제공자 NPC의 현재 존 추론
 - Named 존 포탈이 아직 열리지 않았을 때 입구 안내
 - 여러 목표가 있는 phase에서 우선순위와 완료 상태를 더 세밀하게 표시
