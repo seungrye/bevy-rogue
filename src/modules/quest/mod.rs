@@ -203,13 +203,15 @@ impl Plugin for QuestPlugin {
 
 /// 모든 퀘스트의 GiveItem/RemoveItem/spawn 등에서 참조하는 quest item ID 가
 /// quest_items registry 에 존재하는지 명시적으로 검증한다.
-/// (validate_quest_def 도 동일 검증을 수행하지만 이 시스템은 명시적 startup 단계 검증)
-fn validate_quest_item_refs(quest_registry: Res<QuestRegistry>) {
+fn validate_quest_item_refs(
+    quest_registry: Res<QuestRegistry>,
+    quest_items: Res<crate::modules::item::QuestItemRegistry>,
+) {
     let mut errors: Vec<String> = Vec::new();
     for (qid, qdef) in &quest_registry.quests {
         // spawns
         for spawn in &qdef.spawns {
-            if item_id_to_kind(&spawn.item).is_none() {
+            if item_id_to_kind(&spawn.item, &quest_items).is_none() {
                 errors.push(format!(
                     "퀘스트 '{}' 의 spawns item_id '{}' 가 인식되지 않습니다",
                     qid, spawn.item
@@ -219,11 +221,11 @@ fn validate_quest_item_refs(quest_registry: Res<QuestRegistry>) {
         // 모든 phase 의 action 들을 탐색
         for (phase_id, phase) in &qdef.phases {
             for action in phase.on_interact.iter() {
-                check_action_item_ids(action, qid, phase_id, &mut errors);
+                check_action_item_ids(action, qid, phase_id, &quest_items, &mut errors);
             }
             for auto in &phase.auto_advance {
                 for action in &auto.actions {
-                    check_action_item_ids(action, qid, phase_id, &mut errors);
+                    check_action_item_ids(action, qid, phase_id, &quest_items, &mut errors);
                 }
             }
         }
@@ -236,13 +238,19 @@ fn validate_quest_item_refs(quest_registry: Res<QuestRegistry>) {
     }
 }
 
-fn check_action_item_ids(action: &QuestAction, qid: &str, phase_id: &str, errors: &mut Vec<String>) {
+fn check_action_item_ids(
+    action: &QuestAction,
+    qid: &str,
+    phase_id: &str,
+    quest_items: &crate::modules::item::QuestItemRegistry,
+    errors: &mut Vec<String>,
+) {
     match action {
         QuestAction::GiveItem(id)
         | QuestAction::GiveItems { item: id, .. }
         | QuestAction::RemoveItem(id)
         | QuestAction::DespawnWorldItem(id) => {
-            if item_id_to_kind(id).is_none() {
+            if item_id_to_kind(id, quest_items).is_none() {
                 errors.push(format!(
                     "퀘스트 '{}' phase '{}': item_id '{}' 가 인식되지 않습니다",
                     qid, phase_id, id
@@ -251,7 +259,7 @@ fn check_action_item_ids(action: &QuestAction, qid: &str, phase_id: &str, errors
         }
         QuestAction::Branch { if_true, if_false, .. } => {
             for a in if_true.iter().chain(if_false.iter()) {
-                check_action_item_ids(a, qid, phase_id, errors);
+                check_action_item_ids(a, qid, phase_id, quest_items, errors);
             }
         }
         _ => {}
@@ -260,7 +268,7 @@ fn check_action_item_ids(action: &QuestAction, qid: &str, phase_id: &str, errors
 
 // ── Systems ──────────────────────────────────────────────────────────────────
 
-fn load_quests(mut registry: ResMut<QuestRegistry>) {
+fn load_quests(mut registry: ResMut<QuestRegistry>, quest_items: Res<crate::modules::item::QuestItemRegistry>) {
     let Ok(dir) = std::fs::read_dir("assets/quests") else {
         error!("[치명적] assets/quests 디렉터리를 찾을 수 없습니다. 게임을 시작할 수 없습니다.");
         std::process::exit(1);
@@ -291,7 +299,7 @@ fn load_quests(mut registry: ResMut<QuestRegistry>) {
         };
 
         // 시맨틱 검증
-        let errors = validate_quest_def(&def);
+        let errors = validate_quest_def(&def, &quest_items);
         if !errors.is_empty() {
             for msg in &errors {
                 error!("[퀘스트 오류] {:?} — {}", path, msg);
@@ -322,7 +330,7 @@ fn load_quests(mut registry: ResMut<QuestRegistry>) {
 }
 
 /// QuestDef 의 내부 일관성을 검증하고 오류 메시지 목록을 반환한다
-pub fn validate_quest_def(def: &QuestDef) -> Vec<String> {
+pub fn validate_quest_def(def: &QuestDef, quest_items: &crate::modules::item::QuestItemRegistry) -> Vec<String> {
     let mut errors = Vec::new();
 
     // initial_phase 존재 확인
@@ -335,7 +343,7 @@ pub fn validate_quest_def(def: &QuestDef) -> Vec<String> {
     for (phase_id, phase) in &def.phases {
         // on_interact AdvancePhase 참조 확인
         for action in &phase.on_interact {
-            collect_action_errors(action, &def.phases, phase_id, &mut errors);
+            collect_action_errors(action, &def.phases, phase_id, quest_items, &mut errors);
         }
         // auto_advance next_phase 및 런타임에서 실제 실행되는 액션만 허용
         for auto in &phase.auto_advance {
@@ -352,14 +360,14 @@ pub fn validate_quest_def(def: &QuestDef) -> Vec<String> {
                         phase_id, action
                     ));
                 }
-                collect_action_errors(action, &def.phases, phase_id, &mut errors);
+                collect_action_errors(action, &def.phases, phase_id, quest_items, &mut errors);
             }
         }
     }
 
     // spawns 아이템 ID 확인
     for spawn in &def.spawns {
-        if item_id_to_kind(&spawn.item).is_none() {
+        if item_id_to_kind(&spawn.item, quest_items).is_none() {
             errors.push(format!(
                 "spawns: item_id '{}' 를 인식할 수 없습니다", spawn.item
             ));
@@ -386,6 +394,7 @@ fn collect_action_errors(
     action: &QuestAction,
     phases: &HashMap<String, QuestPhaseDef>,
     phase_id: &str,
+    quest_items: &crate::modules::item::QuestItemRegistry,
     errors: &mut Vec<String>,
 ) {
     match action {
@@ -397,7 +406,7 @@ fn collect_action_errors(
             }
         }
         QuestAction::GiveItem(id) | QuestAction::GiveItems { item: id, .. } | QuestAction::RemoveItem(id) | QuestAction::DespawnWorldItem(id) => {
-            if item_id_to_kind(id).is_none() {
+            if item_id_to_kind(id, quest_items).is_none() {
                 errors.push(format!(
                     "페이즈 '{}': item_id '{}' 를 인식할 수 없습니다", phase_id, id
                 ));
@@ -405,7 +414,7 @@ fn collect_action_errors(
         }
         QuestAction::Branch { if_true, if_false, .. } => {
             for a in if_true.iter().chain(if_false.iter()) {
-                collect_action_errors(a, phases, phase_id, errors);
+                collect_action_errors(a, phases, phase_id, quest_items, errors);
             }
         }
         _ => {}
@@ -440,6 +449,7 @@ fn check_auto_advance(
     mut inventory: ResMut<PlayerInventory>,
     world: Res<crate::modules::zone::WorldState>,
     mut despawn_item: EventWriter<DespawnWorldItemEvent>,
+    quest_items: Res<crate::modules::item::QuestItemRegistry>,
 ) {
     let mut advances: Vec<(String, String, Vec<QuestAction>)> = Vec::new();
 
@@ -454,7 +464,7 @@ fn check_auto_advance(
             None => continue,
         };
         for auto in &phase_def.auto_advance {
-            if eval_condition(&auto.condition, &inventory, &world, &state) {
+            if eval_condition(&auto.condition, &inventory, &world, &state, &quest_items) {
                 advances.push((quest_id.clone(), auto.next_phase.clone(), auto.actions.clone()));
                 break; // 첫 번째 충족 조건만 사용
             }
@@ -471,7 +481,7 @@ fn check_auto_advance(
                     despawn_item.send(DespawnWorldItemEvent(item_id.clone()));
                 }
                 QuestAction::RemoveItem(item_id) => {
-                    if let Some(kind) = item_id_to_kind(item_id) {
+                    if let Some(kind) = item_id_to_kind(item_id, &quest_items) {
                         inventory.items.retain(|i| i.kind != kind);
                     }
                 }
@@ -496,6 +506,7 @@ pub fn execute_actions(
     kill_npc: &mut EventWriter<KillNpcEvent>,
     open_portal: &mut EventWriter<SpawnQuestPortalEvent>,
     despawn_item: &mut EventWriter<DespawnWorldItemEvent>,
+    quest_items: &crate::modules::item::QuestItemRegistry,
 ) {
     for action in actions {
         match action {
@@ -504,15 +515,15 @@ pub fn execute_actions(
                 info!("퀘스트 [{}] 단계 전진: {}", quest_id, phase);
             }
             QuestAction::GiveItem(item_id) => {
-                if let Some(kind) = item_id_to_kind(item_id) {
+                if let Some(kind) = item_id_to_kind(item_id, quest_items) {
                     inventory.items.push(InventoryItem { kind });
                     log.send(crate::modules::ui::LogMessage(
-                        format!("{} 획득!", kind.display_name())
+                        format!("{} 획득!", kind.display_name(quest_items))
                     ));
                 }
             }
             QuestAction::GiveItems { item: item_id, count } => {
-                if let Some(kind) = item_id_to_kind(item_id) {
+                if let Some(kind) = item_id_to_kind(item_id, quest_items) {
                     for _ in 0..*count {
                         match kind {
                             ItemKind::Consumable(ck) => inventory.add_consumable(ck),
@@ -520,15 +531,15 @@ pub fn execute_actions(
                         }
                     }
                     log.send(crate::modules::ui::LogMessage(
-                        format!("{} x{} 획득!", kind.display_name(), count)
+                        format!("{} x{} 획득!", kind.display_name(quest_items), count)
                     ));
                 }
             }
             QuestAction::RemoveItem(item_id) => {
-                if let Some(kind) = item_id_to_kind(item_id) {
+                if let Some(kind) = item_id_to_kind(item_id, quest_items) {
                     inventory.items.retain(|i| i.kind != kind);
                     log.send(crate::modules::ui::LogMessage(
-                        format!("{} 반납.", kind.display_name())
+                        format!("{} 반납.", kind.display_name(quest_items))
                     ));
                 }
             }
@@ -562,12 +573,12 @@ pub fn execute_actions(
                 info!("월드 아이템 제거: {}", item_id);
             }
             QuestAction::Branch { condition, if_true, if_false } => {
-                let branch = if eval_condition(condition, inventory, world, state) {
+                let branch = if eval_condition(condition, inventory, world, state, quest_items) {
                     if_true.as_slice()
                 } else {
                     if_false.as_slice()
                 };
-                execute_actions(branch, quest_id, state, inventory, log, world, kill_npc, open_portal, despawn_item);
+                execute_actions(branch, quest_id, state, inventory, log, world, kill_npc, open_portal, despawn_item, quest_items);
             }
         }
     }
@@ -580,10 +591,11 @@ pub fn eval_condition(
     inventory: &PlayerInventory,
     world: &crate::modules::zone::WorldState,
     quest_state: &QuestState,
+    quest_items: &crate::modules::item::QuestItemRegistry,
 ) -> bool {
     match cond {
         QuestCondition::HasItem(item_id) => {
-            let Some(kind) = item_id_to_kind(item_id) else { return false };
+            let Some(kind) = item_id_to_kind(item_id, quest_items) else { return false };
             inventory.items.iter().any(|i| i.kind == kind)
         }
         QuestCondition::InZone(zone) => &world.current == zone,
@@ -593,13 +605,13 @@ pub fn eval_condition(
         QuestCondition::FlagIs { flag, value } => quest_state.flag_is(flag, value),
         QuestCondition::HasFlag(flag) => quest_state.has_flag(flag),
         QuestCondition::And(conds) => {
-            conds.iter().all(|c| eval_condition(c, inventory, world, quest_state))
+            conds.iter().all(|c| eval_condition(c, inventory, world, quest_state, quest_items))
         }
         QuestCondition::Or(conds) => {
-            conds.iter().any(|c| eval_condition(c, inventory, world, quest_state))
+            conds.iter().any(|c| eval_condition(c, inventory, world, quest_state, quest_items))
         }
         QuestCondition::Not(inner) => {
-            !eval_condition(inner, inventory, world, quest_state)
+            !eval_condition(inner, inventory, world, quest_state, quest_items)
         }
     }
 }
@@ -614,6 +626,7 @@ fn spawn_quest_items(
     asset_server: Res<AssetServer>,
     mut used_spawn: ResMut<UsedSpawnTiles>,
     mut markers: ResMut<DiscoveredMarkers>,
+    quest_items: Res<crate::modules::item::QuestItemRegistry>,
 ) {
     if !map_res.is_changed() { return; }
 
@@ -635,10 +648,10 @@ fn spawn_quest_items(
             if let Some(ref cond) = spawn.condition {
                 // spawn_quest_items 에서는 inventory 접근 불가 — 플래그/존/페이즈 조건만 평가
                 let dummy_inv = crate::modules::item::PlayerInventory::default();
-                if !eval_condition(cond, &dummy_inv, &world, &state) { continue; }
+                if !eval_condition(cond, &dummy_inv, &world, &state, &quest_items) { continue; }
             }
 
-            let Some(kind) = item_id_to_kind(&spawn.item) else { continue };
+            let Some(kind) = item_id_to_kind(&spawn.item, &quest_items) else { continue };
             let map = &map_res.0;
 
             let rooms = &map.rooms;
@@ -654,7 +667,7 @@ fn spawn_quest_items(
                 let pos = tile_to_world_coords(tx, ty);
                 commands.spawn((
                     Text2dBundle {
-                        text: Text::from_section(kind.glyph(), TextStyle {
+                        text: Text::from_section(kind.glyph(&quest_items), TextStyle {
                             font: font.clone(),
                             font_size: TILE_SIZE,
                             color: kind.color(),
@@ -676,7 +689,7 @@ fn spawn_quest_items(
 
 // ── item_id 매핑 ─────────────────────────────────────────────────────────────
 
-pub fn item_id_to_kind(id: &str) -> Option<ItemKind> {
+pub fn item_id_to_kind(id: &str, quest_items: &crate::modules::item::QuestItemRegistry) -> Option<ItemKind> {
     match id {
         "sword"               => Some(ItemKind::Weapon(crate::modules::item::WeaponKind::Sword)),
         "spear"               => Some(ItemKind::Weapon(crate::modules::item::WeaponKind::Spear)),
@@ -684,21 +697,19 @@ pub fn item_id_to_kind(id: &str) -> Option<ItemKind> {
         "leather_armor"       => Some(ItemKind::Armor(crate::modules::item::ArmorKind::LeatherArmor)),
         "health_potion"       => Some(ItemKind::Consumable(crate::modules::item::ConsumableKind::HealthPotion)),
         // 그 외는 quest item registry 에서 조회 — 알려진 quest item ID 면 QuestItemKind 반환
-        other => {
-            if crate::modules::item::quest_items()
-                .map(|m| m.contains_key(other)).unwrap_or(false)
-            {
-                Some(ItemKind::QuestItem(QuestItemKind(crate::modules::item::intern_quest_id(other))))
-            } else {
-                None
-            }
-        }
+        other => quest_items.intern(other).map(|s| ItemKind::QuestItem(QuestItemKind(s))),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::OnceLock;
+
+    static TEST_QI: OnceLock<crate::modules::item::QuestItemRegistry> = OnceLock::new();
+    fn qi() -> &'static crate::modules::item::QuestItemRegistry {
+        TEST_QI.get_or_init(|| crate::modules::item::build_test_registry())
+    }
 
     fn make_registry_with_gem_quest() -> QuestRegistry {
         let mut r = QuestRegistry::default();
@@ -744,10 +755,10 @@ mod tests {
 
     #[test]
     fn item_id_to_kind_maps_correctly() {
-        crate::modules::item::load_quest_items();
-        assert_eq!(item_id_to_kind("eternal_gem"),        Some(ItemKind::QuestItem(QuestItemKind("eternal_gem"))));
-        assert_eq!(item_id_to_kind("philosophers_stone"), Some(ItemKind::QuestItem(QuestItemKind("philosophers_stone"))));
-        assert!(item_id_to_kind("unknown").is_none());
+        let _ = qi();
+        assert_eq!(item_id_to_kind("eternal_gem", qi()),        Some(ItemKind::QuestItem(QuestItemKind("eternal_gem"))));
+        assert_eq!(item_id_to_kind("philosophers_stone", qi()), Some(ItemKind::QuestItem(QuestItemKind("philosophers_stone"))));
+        assert!(item_id_to_kind("unknown", qi()).is_none());
     }
 
     #[test]
@@ -773,7 +784,7 @@ mod tests {
     fn make_inventory_with(item_ids: &[&str]) -> PlayerInventory {
         let mut inv = PlayerInventory::default();
         for id in item_ids {
-            if let Some(kind) = item_id_to_kind(id) {
+            if let Some(kind) = item_id_to_kind(id, qi()) {
                 inv.items.push(InventoryItem { kind });
             }
         }
@@ -789,10 +800,10 @@ mod tests {
             QuestCondition::HasItem("dragon_scale".into()),
             QuestCondition::HasItem("ancient_scroll".into()),
         ]);
-        assert!(!eval_condition(&cond, &inv, &world, &state));
+        assert!(!eval_condition(&cond, &inv, &world, &state, qi()));
 
         let inv2 = make_inventory_with(&["dragon_scale", "ancient_scroll"]);
-        assert!(eval_condition(&cond, &inv2, &world, &state));
+        assert!(eval_condition(&cond, &inv2, &world, &state, qi()));
     }
 
     #[test]
@@ -804,10 +815,10 @@ mod tests {
             QuestCondition::HasItem("dragon_scale".into()),
             QuestCondition::HasItem("ancient_scroll".into()),
         ]);
-        assert!(eval_condition(&cond, &inv, &world, &state));
+        assert!(eval_condition(&cond, &inv, &world, &state, qi()));
 
         let empty = PlayerInventory::default();
-        assert!(!eval_condition(&cond, &empty, &world, &state));
+        assert!(!eval_condition(&cond, &empty, &world, &state, qi()));
     }
 
     #[test]
@@ -816,9 +827,9 @@ mod tests {
         let state = QuestState::default();
         let world = make_world();
         let cond = QuestCondition::Not(Box::new(QuestCondition::HasItem("ancient_scroll".into())));
-        assert!(eval_condition(&cond, &inv, &world, &state));
+        assert!(eval_condition(&cond, &inv, &world, &state, qi()));
         let cond2 = QuestCondition::Not(Box::new(QuestCondition::HasItem("dragon_scale".into())));
-        assert!(!eval_condition(&cond2, &inv, &world, &state));
+        assert!(!eval_condition(&cond2, &inv, &world, &state, qi()));
     }
 
     #[test]
@@ -827,9 +838,9 @@ mod tests {
         let mut state = QuestState::default();
         let world = make_world();
         let cond = QuestCondition::PhaseIs { quest: "gem_quest".into(), phase: "done".into() };
-        assert!(!eval_condition(&cond, &inv, &world, &state));
+        assert!(!eval_condition(&cond, &inv, &world, &state, qi()));
         state.set_phase("gem_quest", "done");
-        assert!(eval_condition(&cond, &inv, &world, &state));
+        assert!(eval_condition(&cond, &inv, &world, &state, qi()));
     }
 
     #[test]
@@ -860,13 +871,13 @@ mod tests {
         let world = make_world();
         let inv_both = make_inventory_with(&["dragon_scale", "ancient_scroll"]);
         let matched: Option<String> = phase.auto_advance.iter()
-            .find(|a| eval_condition(&a.condition, &inv_both, &world, &state))
+            .find(|a| eval_condition(&a.condition, &inv_both, &world, &state, qi()))
             .map(|a| a.next_phase.clone());
         assert_eq!(matched.as_deref(), Some("both_ready"), "둘 다 있으면 1순위가 선택돼야 한다");
 
         let inv_scale = make_inventory_with(&["dragon_scale"]);
         let matched2: Option<String> = phase.auto_advance.iter()
-            .find(|a| eval_condition(&a.condition, &inv_scale, &world, &state))
+            .find(|a| eval_condition(&a.condition, &inv_scale, &world, &state, qi()))
             .map(|a| a.next_phase.clone());
         assert_eq!(matched2.as_deref(), Some("has_scale_hint"), "용비늘만 있으면 2순위가 선택돼야 한다");
     }
@@ -898,11 +909,11 @@ mod tests {
 
         // EventWriter 없이 내부 로직만 재현
         if let QuestAction::Branch { condition, if_true, if_false } = &action {
-            let branch = if eval_condition(condition, &inv, &world, &state) { if_true } else { if_false };
+            let branch = if eval_condition(condition, &inv, &world, &state, qi()) { if_true } else { if_false };
             for a in branch {
                 match a {
                     QuestAction::RemoveItem(id) => {
-                        if let Some(kind) = item_id_to_kind(id) {
+                        if let Some(kind) = item_id_to_kind(id, qi()) {
                             inv.items.retain(|i| i.kind != kind);
                         }
                     }
@@ -920,9 +931,9 @@ mod tests {
 
     #[test]
     fn new_item_ids_mapped_correctly() {
-        crate::modules::item::load_quest_items();
-        assert_eq!(item_id_to_kind("dragon_scale"),   Some(ItemKind::QuestItem(QuestItemKind("dragon_scale"))));
-        assert_eq!(item_id_to_kind("ancient_scroll"), Some(ItemKind::QuestItem(QuestItemKind("ancient_scroll"))));
+        let _ = qi();
+        assert_eq!(item_id_to_kind("dragon_scale", qi()),   Some(ItemKind::QuestItem(QuestItemKind("dragon_scale"))));
+        assert_eq!(item_id_to_kind("ancient_scroll", qi()), Some(ItemKind::QuestItem(QuestItemKind("ancient_scroll"))));
     }
 
     #[test]
@@ -947,9 +958,9 @@ mod tests {
         let world = make_world();
         let mut state = QuestState::default();
         let cond = QuestCondition::FlagIs { flag: "npc_alive".to_string(), value: "true".to_string() };
-        assert!(!eval_condition(&cond, &inv, &world, &state));
+        assert!(!eval_condition(&cond, &inv, &world, &state, qi()));
         state.set_flag("npc_alive", "true");
-        assert!(eval_condition(&cond, &inv, &world, &state));
+        assert!(eval_condition(&cond, &inv, &world, &state, qi()));
     }
 
     #[test]
@@ -958,11 +969,11 @@ mod tests {
         let world = make_world();
         let mut state = QuestState::default();
         let cond = QuestCondition::HasFlag("village_burned".to_string());
-        assert!(!eval_condition(&cond, &inv, &world, &state));
+        assert!(!eval_condition(&cond, &inv, &world, &state, qi()));
         state.set_flag("village_burned", "true");
-        assert!(eval_condition(&cond, &inv, &world, &state));
+        assert!(eval_condition(&cond, &inv, &world, &state, qi()));
         state.clear_flag("village_burned");
-        assert!(!eval_condition(&cond, &inv, &world, &state));
+        assert!(!eval_condition(&cond, &inv, &world, &state, qi()));
     }
 
     #[test]
@@ -1047,7 +1058,7 @@ mod tests {
                 },
             )
         "#).expect("RON 파싱 성공해야 한다");
-        let errors = validate_quest_def(&def);
+        let errors = validate_quest_def(&def, qi());
         assert!(
             errors.iter().any(|e| e.contains("지원하지 않는 액션")),
             "unsupported auto action 오류가 있어야 한다: {:?}",
@@ -1076,7 +1087,7 @@ mod tests {
                 ],
             )
         "#).expect("RON 파싱 성공해야 한다");
-        let errors = validate_quest_def(&def);
+        let errors = validate_quest_def(&def, qi());
         assert!(
             errors.iter().any(|e| e.contains("HasItem")),
             "spawn HasItem 조건 오류가 있어야 한다: {:?}",
@@ -1112,9 +1123,9 @@ mod tests {
 
     #[test]
     fn all_quest_files_pass_semantic_validation() {
-        crate::modules::item::load_quest_items();
+        let _ = qi();
         for (path, def) in load_all_quest_defs() {
-            let errors = validate_quest_def(&def);
+            let errors = validate_quest_def(&def, qi());
             assert!(
                 errors.is_empty(),
                 "{} 시맨틱 검증 실패:\n{}",
@@ -1126,11 +1137,11 @@ mod tests {
 
     #[test]
     fn all_quest_item_ids_are_recognized() {
-        crate::modules::item::load_quest_items();
+        let _ = qi();
         for (path, def) in load_all_quest_defs() {
             for spawn in &def.spawns {
                 assert!(
-                    item_id_to_kind(&spawn.item).is_some(),
+                    item_id_to_kind(&spawn.item, qi()).is_some(),
                     "{}: spawns 의 item_id '{}' 가 item_id_to_kind 에 없다",
                     path, spawn.item
                 );
@@ -1188,49 +1199,49 @@ mod tests {
 
     #[test]
     fn parry_quest_item_ids_mapped_correctly() {
-        crate::modules::item::load_quest_items();
-        assert_eq!(item_id_to_kind("prototype_hammer"), Some(ItemKind::QuestItem(QuestItemKind("prototype_hammer"))));
-        assert_eq!(item_id_to_kind("steel_core"),       Some(ItemKind::QuestItem(QuestItemKind("steel_core"))));
-        assert_eq!(item_id_to_kind("pilot_badge"),      Some(ItemKind::QuestItem(QuestItemKind("pilot_badge"))));
+        let _ = qi();
+        assert_eq!(item_id_to_kind("prototype_hammer", qi()), Some(ItemKind::QuestItem(QuestItemKind("prototype_hammer"))));
+        assert_eq!(item_id_to_kind("steel_core", qi()),       Some(ItemKind::QuestItem(QuestItemKind("steel_core"))));
+        assert_eq!(item_id_to_kind("pilot_badge", qi()),      Some(ItemKind::QuestItem(QuestItemKind("pilot_badge"))));
     }
 
     #[test]
     fn demonsword_item_ids_mapped_correctly() {
-        crate::modules::item::load_quest_items();
-        assert_eq!(item_id_to_kind("demon_sword"),         Some(ItemKind::QuestItem(QuestItemKind("demon_sword"))));
-        assert_eq!(item_id_to_kind("elenas_memo"),         Some(ItemKind::QuestItem(QuestItemKind("elenas_memo"))));
-        assert_eq!(item_id_to_kind("ancient_ritual_book"), Some(ItemKind::QuestItem(QuestItemKind("ancient_ritual_book"))));
+        let _ = qi();
+        assert_eq!(item_id_to_kind("demon_sword", qi()),         Some(ItemKind::QuestItem(QuestItemKind("demon_sword"))));
+        assert_eq!(item_id_to_kind("elenas_memo", qi()),         Some(ItemKind::QuestItem(QuestItemKind("elenas_memo"))));
+        assert_eq!(item_id_to_kind("ancient_ritual_book", qi()), Some(ItemKind::QuestItem(QuestItemKind("ancient_ritual_book"))));
     }
 
     #[test]
     fn check_action_item_ids_detects_unknown_id() {
-        crate::modules::item::load_quest_items();
+        let _ = qi();
         let bad_action = QuestAction::GiveItem("nonexistent_item".to_string());
         let mut errors = Vec::new();
-        check_action_item_ids(&bad_action, "test_quest", "phase1", &mut errors);
+        check_action_item_ids(&bad_action, "test_quest", "phase1", qi(), &mut errors);
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("nonexistent_item"));
     }
 
     #[test]
     fn check_action_item_ids_passes_known_ids() {
-        crate::modules::item::load_quest_items();
+        let _ = qi();
         let good_action = QuestAction::GiveItem("eternal_gem".to_string());
         let mut errors = Vec::new();
-        check_action_item_ids(&good_action, "test_quest", "phase1", &mut errors);
+        check_action_item_ids(&good_action, "test_quest", "phase1", qi(), &mut errors);
         assert!(errors.is_empty());
     }
 
     #[test]
     fn check_action_item_ids_recurses_into_branches() {
-        crate::modules::item::load_quest_items();
+        let _ = qi();
         let action = QuestAction::Branch {
             condition: Box::new(QuestCondition::HasFlag("test".into())),
             if_true: vec![QuestAction::GiveItem("invalid_item_id".into())],
             if_false: vec![],
         };
         let mut errors = Vec::new();
-        check_action_item_ids(&action, "q", "p", &mut errors);
+        check_action_item_ids(&action, "q", "p", qi(), &mut errors);
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("invalid_item_id"));
     }

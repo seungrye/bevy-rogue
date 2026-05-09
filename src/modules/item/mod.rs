@@ -2,7 +2,6 @@ use bevy::prelude::*;
 use rand::Rng;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::OnceLock;
 use crate::modules::{
     map::{tile_to_world_coords, world_to_tile_coords, TILE_SIZE, PlayerActedEvent},
     player::{Player, MovingTo, PlayerSystemSet, PLAYER_ATK, PLAYER_DEF},
@@ -76,15 +75,15 @@ impl GlyphFontHandles {
     }
 }
 
-pub fn glyph_for_style(kind: ItemKind, style: GlyphStyle) -> &'static str {
+pub fn glyph_for_style(kind: ItemKind, style: GlyphStyle, registry: &QuestItemRegistry) -> &'static str {
     match style {
-        GlyphStyle::Ascii    => kind.glyph(),
-        GlyphStyle::Unicode  => glyph_unicode(kind),
-        GlyphStyle::GameIcon => glyph_game_icon(kind),
+        GlyphStyle::Ascii    => kind.glyph(registry),
+        GlyphStyle::Unicode  => glyph_unicode(kind, registry),
+        GlyphStyle::GameIcon => glyph_game_icon(kind, registry),
     }
 }
 
-fn glyph_unicode(kind: ItemKind) -> &'static str {
+fn glyph_unicode(kind: ItemKind, registry: &QuestItemRegistry) -> &'static str {
     match kind {
         ItemKind::Weapon(w) => match w {
             WeaponKind::Sword => "\u{1F5E1}", // 🗡 단검 모양
@@ -97,11 +96,11 @@ fn glyph_unicode(kind: ItemKind) -> &'static str {
         ItemKind::Consumable(c) => match c {
             ConsumableKind::HealthPotion => "\u{2764}", // ❤ 굵은 하트
         },
-        ItemKind::QuestItem(qk) => quest_item_meta(qk).map(|m| m.glyph_unicode).unwrap_or("?"),
+        ItemKind::QuestItem(qk) => registry.lookup(qk).map(|m| m.glyph_unicode).unwrap_or("?"),
     }
 }
 
-fn glyph_game_icon(kind: ItemKind) -> &'static str {
+fn glyph_game_icon(kind: ItemKind, registry: &QuestItemRegistry) -> &'static str {
     match kind {
         ItemKind::Weapon(w) => match w {
             WeaponKind::Sword => "\u{E946}", // RPG Awesome 넓은 검 아이콘
@@ -114,21 +113,17 @@ fn glyph_game_icon(kind: ItemKind) -> &'static str {
         ItemKind::Consumable(c) => match c {
             ConsumableKind::HealthPotion => "\u{EA72}", // RPG Awesome 물약 아이콘
         },
-        ItemKind::QuestItem(qk) => quest_item_meta(qk).map(|m| m.glyph_game_icon).unwrap_or("?"),
+        ItemKind::QuestItem(qk) => registry.lookup(qk).map(|m| m.glyph_game_icon).unwrap_or("?"),
     }
 }
 
-/// 퀘스트 아이템 ID — 런타임에 RON 에서 로드한 문자열을 leak 하여 &'static 으로 사용
-/// Copy 가 필요한 ItemKind 의 일부로 사용되므로 &'static str 기반.
+/// 퀘스트 아이템 ID — &'static str 기반 newtype (Copy 유지를 위해)
+/// 등록된 ID 는 startup 시점에 Box::leak 으로 영속화되어 registry 의 키와 동일.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct QuestItemKind(pub &'static str);
 
 impl QuestItemKind {
     pub fn id(self) -> &'static str { self.0 }
-
-    pub fn display_name(self) -> &'static str {
-        quest_item_meta(self).map(|m| m.display_name).unwrap_or("???")
-    }
 }
 
 // serde: 단순 문자열로 직렬화/역직렬화 (저장 데이터 호환)
@@ -140,8 +135,11 @@ impl serde::Serialize for QuestItemKind {
 
 impl<'de> serde::Deserialize<'de> for QuestItemKind {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // serde 컨텍스트에서는 registry 접근이 어려워 leak 으로 fallback.
+        // 저장 데이터 로드 시 사용되며, leak 은 save 데이터 크기에 의해 bounded.
+        // PartialEq/Hash 는 내용 비교라 registry 의 leak 된 키와도 동등하게 동작.
         let s = String::deserialize(d)?;
-        Ok(QuestItemKind(intern_quest_id(&s)))
+        Ok(QuestItemKind(Box::leak(s.into_boxed_str())))
     }
 }
 
@@ -157,8 +155,8 @@ pub struct QuestItemDef {
     pub image_path: String,
 }
 
-/// leak 된 &'static 메타데이터 — 메서드들이 무인자로 접근하기 위해 사용
-#[derive(Debug)]
+/// leak 된 &'static 메타데이터 — registry 가 보유
+#[derive(Debug, Clone)]
 pub struct QuestItemMeta {
     pub display_name: &'static str,
     pub glyph_ascii: &'static str,
@@ -168,26 +166,30 @@ pub struct QuestItemMeta {
     pub image_path: &'static str,
 }
 
-/// 전역 quest item registry — startup 시점에 RON 에서 로드되어 set 됨.
-/// OnceLock 사용 이유: ItemKind 의 각종 메서드 (glyph, display_name 등) 가 무인자로
-/// 데이터에 접근해야 하므로 (호출부에 registry 를 매번 넘기면 변경 폭이 너무 큼).
-static QUEST_ITEMS: OnceLock<HashMap<&'static str, QuestItemMeta>> = OnceLock::new();
+/// Bevy Resource — startup 시점에 RON 에서 로드되어 init 됨.
+/// VillagerRegistry 와 동일한 Resource 패턴으로 일관성 유지.
+#[derive(Resource, Default)]
+pub struct QuestItemRegistry {
+    pub items: HashMap<&'static str, QuestItemMeta>,
+}
 
-/// 같은 ID 의 leak 된 &'static str 을 한 번만 만들어 반환한다 (intern)
-pub fn intern_quest_id(id: &str) -> &'static str {
-    if let Some(map) = QUEST_ITEMS.get() {
-        if let Some((k, _)) = map.get_key_value(id) { return *k; }
+impl QuestItemRegistry {
+    pub fn lookup(&self, kind: QuestItemKind) -> Option<&QuestItemMeta> {
+        self.items.get(kind.0)
     }
-    // registry 미초기화 또는 등록되지 않은 ID — 안전하게 leak (테스트/검증 경로)
-    Box::leak(id.to_string().into_boxed_str())
-}
 
-pub fn quest_items() -> Option<&'static HashMap<&'static str, QuestItemMeta>> {
-    QUEST_ITEMS.get()
-}
+    pub fn lookup_id(&self, id: &str) -> Option<&QuestItemMeta> {
+        self.items.get(id)
+    }
 
-pub fn quest_item_meta(kind: QuestItemKind) -> Option<&'static QuestItemMeta> {
-    QUEST_ITEMS.get()?.get(kind.0)
+    pub fn contains(&self, id: &str) -> bool {
+        self.items.contains_key(id)
+    }
+
+    /// 같은 ID 의 leak 된 &'static str 을 반환한다 (registry 에 등록된 경우)
+    pub fn intern(&self, id: &str) -> Option<&'static str> {
+        self.items.get_key_value(id).map(|(k, _)| *k)
+    }
 }
 
 /// item 시스템 Startup 단계 ordering
@@ -196,8 +198,8 @@ pub enum ItemSystemSet {
     Load,
 }
 
-/// RON 에서 quest item 정의를 읽어 전역 registry 에 적재한다
-pub fn load_quest_items() {
+/// RON 에서 quest item 정의를 읽어 Resource 에 적재한다
+fn load_quest_items_system(mut registry: ResMut<QuestItemRegistry>) {
     let path = "assets/items/quest_items.ron";
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
@@ -218,11 +220,30 @@ pub fn load_quest_items() {
         map.insert(id, meta);
     }
     info!("quest item 로드: {} 종", map.len());
-    // 테스트 환경에서는 여러 번 호출될 수 있으므로 set 결과 무시
-    let _ = QUEST_ITEMS.set(map);
+    registry.items = map;
 }
 
-fn load_quest_items_system() { load_quest_items(); }
+/// 테스트용 — registry 를 inline 으로 구성한다
+#[cfg(test)]
+pub fn build_test_registry() -> QuestItemRegistry {
+    let path = "assets/items/quest_items.ron";
+    let text = std::fs::read_to_string(path).expect("quest_items.ron 읽기 실패");
+    let defs: Vec<QuestItemDef> = ron::de::from_str(&text).expect("quest_items.ron 파싱 실패");
+    let mut map: HashMap<&'static str, QuestItemMeta> = HashMap::new();
+    for def in defs {
+        let id: &'static str = Box::leak(def.id.into_boxed_str());
+        let meta = QuestItemMeta {
+            display_name:    Box::leak(def.display_name.into_boxed_str()),
+            glyph_ascii:     Box::leak(def.glyph_ascii.into_boxed_str()),
+            glyph_unicode:   Box::leak(def.glyph_unicode.into_boxed_str()),
+            glyph_game_icon: Box::leak(def.glyph_game_icon.into_boxed_str()),
+            pickup_message:  Box::leak(def.pickup_message.into_boxed_str()),
+            image_path:      Box::leak(def.image_path.into_boxed_str()),
+        };
+        map.insert(id, meta);
+    }
+    QuestItemRegistry { items: map }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum WeaponKind {
@@ -282,7 +303,7 @@ pub enum ItemKind {
 }
 
 impl ItemKind {
-    pub fn glyph(self) -> &'static str {
+    pub fn glyph(self, registry: &QuestItemRegistry) -> &'static str {
         match self {
             ItemKind::Weapon(w) => match w {
                 WeaponKind::Sword => "/",
@@ -295,7 +316,7 @@ impl ItemKind {
             ItemKind::Consumable(c) => match c {
                 ConsumableKind::HealthPotion => "!",
             },
-            ItemKind::QuestItem(qk) => quest_item_meta(qk).map(|m| m.glyph_ascii).unwrap_or("?"),
+            ItemKind::QuestItem(qk) => registry.lookup(qk).map(|m| m.glyph_ascii).unwrap_or("?"),
         }
     }
 
@@ -308,16 +329,16 @@ impl ItemKind {
         }
     }
 
-    pub fn display_name(self) -> &'static str {
+    pub fn display_name(self, registry: &QuestItemRegistry) -> &'static str {
         match self {
             ItemKind::Weapon(w)     => w.display_name(),
             ItemKind::Armor(a)      => a.display_name(),
             ItemKind::Consumable(c) => c.display_name(),
-            ItemKind::QuestItem(qk) => quest_item_meta(qk).map(|m| m.display_name).unwrap_or("???"),
+            ItemKind::QuestItem(qk) => registry.lookup(qk).map(|m| m.display_name).unwrap_or("???"),
         }
     }
 
-    pub fn pickup_message(self) -> &'static str {
+    pub fn pickup_message(self, registry: &QuestItemRegistry) -> &'static str {
         match self {
             ItemKind::Weapon(w) => match w {
                 WeaponKind::Sword => "검을 획득했다!",
@@ -330,7 +351,7 @@ impl ItemKind {
             ItemKind::Consumable(c) => match c {
                 ConsumableKind::HealthPotion => "체력 물약을 획득했다!",
             },
-            ItemKind::QuestItem(qk) => quest_item_meta(qk).map(|m| m.pickup_message).unwrap_or("아이템을 획득했다!"),
+            ItemKind::QuestItem(qk) => registry.lookup(qk).map(|m| m.pickup_message).unwrap_or("아이템을 획득했다!"),
         }
     }
 }
@@ -476,6 +497,7 @@ impl Plugin for ItemPlugin {
             .init_resource::<PlayerInventory>()
             .init_resource::<PlayerEquipment>()
             .init_resource::<EquipmentPanelOpen>()
+            .init_resource::<QuestItemRegistry>()
             .add_systems(Startup, (
                 load_quest_items_system.in_set(ItemSystemSet::Load),
                 setup_glyph_fonts,
@@ -506,6 +528,7 @@ fn spawn_dropped_items(
     mut commands: Commands,
     config: Res<GlyphConfig>,
     font_handles: Res<GlyphFontHandles>,
+    quest_items: Res<QuestItemRegistry>,
 ) {
     let mut rng = rand::thread_rng();
     for event in events.read() {
@@ -515,7 +538,7 @@ fn spawn_dropped_items(
             commands.spawn((
                 Text2dBundle {
                     text: Text::from_section(
-                        glyph_for_style(kind, config.style),
+                        glyph_for_style(kind, config.style, &quest_items),
                         TextStyle {
                             font: font_handles.for_style(config.style),
                             font_size: TILE_SIZE,
@@ -534,11 +557,12 @@ fn spawn_dropped_items(
 fn update_item_glyphs(
     config: Res<GlyphConfig>,
     font_handles: Res<GlyphFontHandles>,
+    quest_items: Res<QuestItemRegistry>,
     mut item_query: Query<(&Item, &mut Text)>,
 ) {
     if !config.is_changed() { return; }
     for (item, mut text) in item_query.iter_mut() {
-        text.sections[0].value = glyph_for_style(item.kind, config.style).to_string();
+        text.sections[0].value = glyph_for_style(item.kind, config.style, &quest_items).to_string();
         text.sections[0].style.font = font_handles.for_style(config.style);
     }
 }
@@ -562,6 +586,7 @@ fn pickup_items(
     mut inventory: ResMut<PlayerInventory>,
     mut log: EventWriter<LogMessage>,
     mut quest_acquired: EventWriter<QuestItemAcquiredEvent>,
+    quest_items: Res<QuestItemRegistry>,
 ) {
     if turn_events.read().next().is_none() { return; }
     let Ok((moving_to, transform)) = player_query.get_single() else { return };
@@ -586,7 +611,7 @@ fn pickup_items(
         if let ItemKind::QuestItem(qk) = kind {
             quest_acquired.send(QuestItemAcquiredEvent(qk));
         }
-        log.send(LogMessage(kind.pickup_message().to_string()));
+        log.send(LogMessage(kind.pickup_message(&quest_items).to_string()));
         commands.entity(entity).despawn();
     }
 }
@@ -601,8 +626,8 @@ fn apply_equipment_stats(
     stats.defense = effective_defense(&equipment);
 }
 
-fn quest_item_image_path(kind: QuestItemKind) -> &'static str {
-    quest_item_meta(kind).map(|m| m.image_path).unwrap_or("scene/open-chest.png")
+fn quest_item_image_path(kind: QuestItemKind, registry: &QuestItemRegistry) -> &'static str {
+    registry.lookup(kind).map(|m| m.image_path).unwrap_or("scene/open-chest.png")
 }
 
 fn spawn_quest_item_popup(
@@ -611,6 +636,7 @@ fn spawn_quest_item_popup(
     asset_server: Res<AssetServer>,
     popup_q: Query<(), With<QuestItemPopup>>,
     player_q: Query<(Option<&MovingTo>, &Transform), With<Player>>,
+    quest_items: Res<QuestItemRegistry>,
 ) {
     // 오래된 이벤트가 다음 프레임에 처리되지 않도록 먼저 모두 비운다.
     // 첫 번째 이벤트만 사용하고 나머지는 의도적으로 버린다.
@@ -623,7 +649,7 @@ fn spawn_quest_item_popup(
         .map(|m| world_to_tile_coords(m.target))
         .unwrap_or_else(|| world_to_tile_coords(transform.translation));
 
-    let image = asset_server.load(quest_item_image_path(*kind));
+    let image = asset_server.load(quest_item_image_path(*kind, &quest_items));
     commands.spawn((
         NodeBundle {
             style: Style {
@@ -684,9 +710,10 @@ fn handle_despawn_world_item(
     mut events: EventReader<DespawnWorldItemEvent>,
     item_query: Query<(Entity, &Item)>,
     mut commands: Commands,
+    quest_items: Res<QuestItemRegistry>,
 ) {
     for DespawnWorldItemEvent(item_id) in events.read() {
-        let Some(kind) = item_id_to_kind(item_id) else { continue };
+        let Some(kind) = item_id_to_kind(item_id, &quest_items) else { continue };
         for (entity, item) in item_query.iter() {
             if item.kind == kind {
                 commands.entity(entity).despawn();
@@ -825,26 +852,36 @@ mod tests {
         assert_eq!(GlyphStyle::from_str("unknown"), None);
     }
 
+    use std::sync::OnceLock;
+    static TEST_QI: OnceLock<QuestItemRegistry> = OnceLock::new();
+    fn qi() -> &'static QuestItemRegistry {
+        TEST_QI.get_or_init(|| build_test_registry())
+    }
+
+    fn lookup_display_name(qk: QuestItemKind) -> &'static str {
+        qi().lookup(qk).map(|m| m.display_name).unwrap_or("???")
+    }
+
     #[test]
     fn glyph_for_style_ascii_returns_ascii_chars() {
-        assert_eq!(glyph_for_style(ItemKind::Weapon(WeaponKind::Sword), GlyphStyle::Ascii), "/");
-        assert_eq!(glyph_for_style(ItemKind::Weapon(WeaponKind::Spear), GlyphStyle::Ascii), "|");
-        assert_eq!(glyph_for_style(ItemKind::Weapon(WeaponKind::Bow),   GlyphStyle::Ascii), ")");
+        assert_eq!(glyph_for_style(ItemKind::Weapon(WeaponKind::Sword), GlyphStyle::Ascii, qi()), "/");
+        assert_eq!(glyph_for_style(ItemKind::Weapon(WeaponKind::Spear), GlyphStyle::Ascii, qi()), "|");
+        assert_eq!(glyph_for_style(ItemKind::Weapon(WeaponKind::Bow),   GlyphStyle::Ascii, qi()), ")");
     }
 
     #[test]
     fn glyph_for_style_unicode_returns_symbols() {
-        let s = glyph_for_style(ItemKind::Weapon(WeaponKind::Sword), GlyphStyle::Unicode);
+        let s = glyph_for_style(ItemKind::Weapon(WeaponKind::Sword), GlyphStyle::Unicode, qi());
         assert_eq!(s, "\u{1F5E1}");
-        let shield = glyph_for_style(ItemKind::Armor(ArmorKind::LeatherArmor), GlyphStyle::Unicode);
+        let shield = glyph_for_style(ItemKind::Armor(ArmorKind::LeatherArmor), GlyphStyle::Unicode, qi());
         assert_eq!(shield, "\u{1F6E1}");
     }
 
     #[test]
     fn glyph_for_style_game_icon_returns_pua_codepoints() {
-        let s = glyph_for_style(ItemKind::Weapon(WeaponKind::Sword), GlyphStyle::GameIcon);
+        let s = glyph_for_style(ItemKind::Weapon(WeaponKind::Sword), GlyphStyle::GameIcon, qi());
         assert_eq!(s, "\u{E946}");
-        let potion = glyph_for_style(ItemKind::Consumable(ConsumableKind::HealthPotion), GlyphStyle::GameIcon);
+        let potion = glyph_for_style(ItemKind::Consumable(ConsumableKind::HealthPotion), GlyphStyle::GameIcon, qi());
         assert_eq!(potion, "\u{EA72}");
     }
 
@@ -853,102 +890,91 @@ mod tests {
         assert_eq!(GlyphStyle::default(), GlyphStyle::Ascii);
     }
 
-    fn ensure_loaded() { load_quest_items(); }
-
     #[test]
     fn quest_item_display_names() {
-        ensure_loaded();
-        assert_eq!(QuestItemKind("eternal_gem").display_name(), "영원의 보석");
-        assert_eq!(QuestItemKind("philosophers_stone").display_name(), "현자의 돌");
+        assert_eq!(lookup_display_name(QuestItemKind("eternal_gem")), "영원의 보석");
+        assert_eq!(lookup_display_name(QuestItemKind("philosophers_stone")), "현자의 돌");
     }
 
     #[test]
     fn quest_item_glyph_and_pickup_message() {
-        ensure_loaded();
         let gem = ItemKind::QuestItem(QuestItemKind("eternal_gem"));
-        assert_eq!(gem.glyph(), "*");
-        assert_eq!(gem.pickup_message(), "영원의 보석을 획득했다!");
+        assert_eq!(gem.glyph(qi()), "*");
+        assert_eq!(gem.pickup_message(qi()), "영원의 보석을 획득했다!");
         let stone = ItemKind::QuestItem(QuestItemKind("philosophers_stone"));
-        assert_eq!(stone.pickup_message(), "현자의 돌을 획득했다!");
+        assert_eq!(stone.pickup_message(qi()), "현자의 돌을 획득했다!");
     }
 
     #[test]
     fn demonsword_items_have_correct_glyphs_and_names() {
-        ensure_loaded();
-        assert_eq!(QuestItemKind("demon_sword").display_name(), "마검");
-        assert_eq!(QuestItemKind("elenas_memo").display_name(), "엘레나의 메모");
-        assert_eq!(QuestItemKind("ancient_ritual_book").display_name(), "고대 의식서");
+        assert_eq!(lookup_display_name(QuestItemKind("demon_sword")), "마검");
+        assert_eq!(lookup_display_name(QuestItemKind("elenas_memo")), "엘레나의 메모");
+        assert_eq!(lookup_display_name(QuestItemKind("ancient_ritual_book")), "고대 의식서");
 
         let sword = ItemKind::QuestItem(QuestItemKind("demon_sword"));
         let memo  = ItemKind::QuestItem(QuestItemKind("elenas_memo"));
         let book  = ItemKind::QuestItem(QuestItemKind("ancient_ritual_book"));
 
-        assert_eq!(sword.glyph(), "D");
-        assert_eq!(memo.glyph(),  "e");
-        assert_eq!(book.glyph(),  "R");
+        assert_eq!(sword.glyph(qi()), "D");
+        assert_eq!(memo.glyph(qi()),  "e");
+        assert_eq!(book.glyph(qi()),  "R");
 
-        assert!(sword.pickup_message().contains("마검"));
-        assert!(memo.pickup_message().contains("폐허 요새"));
-        assert!(book.pickup_message().contains("봉인 의식"));
+        assert!(sword.pickup_message(qi()).contains("마검"));
+        assert!(memo.pickup_message(qi()).contains("폐허 요새"));
+        assert!(book.pickup_message(qi()).contains("봉인 의식"));
     }
 
     #[test]
     fn parry_quest_items_have_correct_glyphs_and_names() {
-        ensure_loaded();
-        assert_eq!(QuestItemKind("prototype_hammer").display_name(), "시제 6식 파암추");
-        assert_eq!(QuestItemKind("steel_core").display_name(),       "강철 갑주 심장");
-        assert_eq!(QuestItemKind("pilot_badge").display_name(),      "전속 파일럿 인증서");
+        assert_eq!(lookup_display_name(QuestItemKind("prototype_hammer")), "시제 6식 파암추");
+        assert_eq!(lookup_display_name(QuestItemKind("steel_core")),       "강철 갑주 심장");
+        assert_eq!(lookup_display_name(QuestItemKind("pilot_badge")),      "전속 파일럿 인증서");
 
         let hammer = ItemKind::QuestItem(QuestItemKind("prototype_hammer"));
         let core   = ItemKind::QuestItem(QuestItemKind("steel_core"));
         let badge  = ItemKind::QuestItem(QuestItemKind("pilot_badge"));
 
-        assert_eq!(hammer.glyph(), "H");
-        assert_eq!(core.glyph(),   "#");
-        assert_eq!(badge.glyph(),  "P");
+        assert_eq!(hammer.glyph(qi()), "H");
+        assert_eq!(core.glyph(qi()),   "#");
+        assert_eq!(badge.glyph(qi()),  "P");
 
-        assert!(hammer.pickup_message().contains("파암추"));
-        assert!(core.pickup_message().contains("보스 격파"));
-        assert!(badge.pickup_message().contains("파일럿"));
+        assert!(hammer.pickup_message(qi()).contains("파암추"));
+        assert!(core.pickup_message(qi()).contains("보스 격파"));
+        assert!(badge.pickup_message(qi()).contains("파일럿"));
     }
 
     #[test]
     fn demonsword_items_unicode_glyphs() {
-        ensure_loaded();
-        let sword = glyph_for_style(ItemKind::QuestItem(QuestItemKind("demon_sword")), GlyphStyle::Unicode);
+        let sword = glyph_for_style(ItemKind::QuestItem(QuestItemKind("demon_sword")), GlyphStyle::Unicode, qi());
         assert_eq!(sword, "\u{2694}");
-        let memo = glyph_for_style(ItemKind::QuestItem(QuestItemKind("elenas_memo")), GlyphStyle::Unicode);
+        let memo = glyph_for_style(ItemKind::QuestItem(QuestItemKind("elenas_memo")), GlyphStyle::Unicode, qi());
         assert_eq!(memo, "\u{270E}");
-        let book = glyph_for_style(ItemKind::QuestItem(QuestItemKind("ancient_ritual_book")), GlyphStyle::Unicode);
+        let book = glyph_for_style(ItemKind::QuestItem(QuestItemKind("ancient_ritual_book")), GlyphStyle::Unicode, qi());
         assert_eq!(book, "\u{2720}");
     }
 
     #[test]
     fn quest_items_ron_loads_all_29_items() {
-        ensure_loaded();
-        let map = quest_items().expect("registry 가 로드되어야 한다");
-        assert_eq!(map.len(), 29, "quest_items.ron 에 29 종이 정의되어야 한다");
+        let registry = qi();
+        assert_eq!(registry.items.len(), 29, "quest_items.ron 에 29 종이 정의되어야 한다");
     }
 
     #[test]
     fn quest_item_meta_returns_none_for_unknown_id() {
-        ensure_loaded();
         let unknown = QuestItemKind("does_not_exist");
-        assert!(quest_item_meta(unknown).is_none());
+        assert!(qi().lookup(unknown).is_none());
     }
 
     #[test]
     fn intern_quest_id_returns_same_pointer_for_same_id() {
-        ensure_loaded();
-        let a = intern_quest_id("eternal_gem");
-        let b = intern_quest_id("eternal_gem");
+        let a = qi().intern("eternal_gem").expect("등록된 ID 여야 한다");
+        let b = qi().intern("eternal_gem").expect("등록된 ID 여야 한다");
         // registry 에 등록된 ID 는 동일 &'static str (포인터 일치)
         assert_eq!(a.as_ptr(), b.as_ptr(), "같은 등록된 ID 는 같은 포인터여야 한다");
     }
 
     #[test]
     fn quest_item_kind_serde_roundtrip() {
-        ensure_loaded();
         let qk = QuestItemKind("eternal_gem");
         let s = ron::ser::to_string(&qk).unwrap();
         assert_eq!(s, "\"eternal_gem\"");

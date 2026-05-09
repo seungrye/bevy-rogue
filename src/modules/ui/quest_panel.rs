@@ -88,6 +88,7 @@ fn update_quest_panel(
     world: Res<WorldState>,
     markers: Res<DiscoveredMarkers>,
     asset_server: Res<AssetServer>,
+    quest_items: Res<crate::modules::item::QuestItemRegistry>,
     mut panel_q: Query<&mut Visibility, With<QuestPanel>>,
     mut text_q: Query<&mut Text, With<QuestPanelContent>>,
 ) {
@@ -108,7 +109,7 @@ fn update_quest_panel(
 
     let font = asset_server.load("fonts/NanumSquareNeo-bRg.ttf");
     let Ok(mut text) = text_q.get_single_mut() else { return };
-    text.sections = build_quest_sections(&registry, &state, &inventory, &world, &markers, &font);
+    text.sections = build_quest_sections(&registry, &state, &inventory, &world, &markers, &font, &quest_items);
 }
 
 /// 패널 공통 글꼴 크기를 적용한 텍스트 섹션 하나를 만든다.
@@ -124,6 +125,7 @@ fn build_quest_sections(
     world: &WorldState,
     markers: &DiscoveredMarkers,
     font: &Handle<Font>,
+    quest_items: &crate::modules::item::QuestItemRegistry,
 ) -> Vec<TextSection> {
     let f = font.clone();
     let mut s = vec![ts("/ Q U E S T S /\n\n", f.clone(), C_HEADER)];
@@ -158,7 +160,7 @@ fn build_quest_sections(
         for line in quest_location_hints(def, phase_id, state, world) {
             s.push(ts(format!("    {}\n", line), f.clone(), meta_color));
         }
-        for line in quest_progress_hints(def, phase_id, state, inventory) {
+        for line in quest_progress_hints(def, phase_id, state, inventory, quest_items) {
             s.push(ts(format!("    {}\n", line), f.clone(), progress_color));
         }
         if !done && should_hint_giver_dialogue(def, phase) {
@@ -204,15 +206,16 @@ fn quest_progress_hints(
     phase_id: &str,
     state: &QuestState,
     inventory: &PlayerInventory,
+    quest_items: &crate::modules::item::QuestItemRegistry,
 ) -> Vec<String> {
     let mut lines = Vec::new();
 
     for spawn in pending_phase_spawns(def, phase_id, state) {
-        let Some(kind) = item_id_to_kind(&spawn.item) else { continue };
+        let Some(kind) = item_id_to_kind(&spawn.item, quest_items) else { continue };
         let have = inventory_count(inventory, kind);
         let need = spawn.count.max(1);
         let status = if have >= need { "완료" } else { "진행" };
-        lines.push(format!("{}: {} {}/{}", status, kind.display_name(), have.min(need), need));
+        lines.push(format!("{}: {} {}/{}", status, kind.display_name(quest_items), have.min(need), need));
     }
 
     lines
@@ -334,6 +337,12 @@ mod tests {
         (reg, st)
     }
 
+    use std::sync::OnceLock;
+    static TEST_QI: OnceLock<crate::modules::item::QuestItemRegistry> = OnceLock::new();
+    fn qi() -> &'static crate::modules::item::QuestItemRegistry {
+        TEST_QI.get_or_init(|| crate::modules::item::build_test_registry())
+    }
+
     fn default_inventory() -> PlayerInventory {
         PlayerInventory::default()
     }
@@ -350,7 +359,7 @@ mod tests {
     fn empty_state_shows_no_quests_message() {
         let reg = QuestRegistry::default();
         let st  = QuestState::default();
-        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default());
+        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default(), qi());
         let all_text = all_text(sections);
         assert!(all_text.contains("진행 중인 퀘스트 없음"));
     }
@@ -358,7 +367,7 @@ mod tests {
     #[test]
     fn active_quest_shows_title_and_objective() {
         let (reg, st) = make_registry_and_state("active");
-        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default());
+        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default(), qi());
         let all_text = all_text(sections);
         assert!(all_text.contains("잃어버린 보석"));
         assert!(all_text.contains("보석을 찾아라"));
@@ -367,7 +376,7 @@ mod tests {
     #[test]
     fn active_quest_shows_target_zone_and_progress() {
         let (reg, st) = make_registry_and_state("active");
-        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default());
+        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default(), qi());
         let all_text = all_text(sections);
         assert!(all_text.contains("위치: 던전 2층"));
         assert!(all_text.contains("진행: 영원의 보석 0/1"));
@@ -378,7 +387,7 @@ mod tests {
         let (reg, st) = make_registry_and_state("active");
         let mut world = default_world();
         world.current = ZoneId::Dungeon(2);
-        let sections = build_quest_sections(&reg, &st, &default_inventory(), &world, &DiscoveredMarkers::default(), &Handle::default());
+        let sections = build_quest_sections(&reg, &st, &default_inventory(), &world, &DiscoveredMarkers::default(), &Handle::default(), qi());
         let all_text = all_text(sections);
         assert!(all_text.contains("위치: 던전 2층 / 현재 위치"));
     }
@@ -387,9 +396,9 @@ mod tests {
     fn active_quest_progress_counts_inventory_items() {
         let (reg, st) = make_registry_and_state("active");
         let mut inventory = default_inventory();
-        crate::modules::item::load_quest_items();
+        let _ = qi();
         inventory.items.push(InventoryItem { kind: ItemKind::QuestItem(QuestItemKind("eternal_gem")) });
-        let sections = build_quest_sections(&reg, &st, &inventory, &default_world(), &DiscoveredMarkers::default(), &Handle::default());
+        let sections = build_quest_sections(&reg, &st, &inventory, &default_world(), &DiscoveredMarkers::default(), &Handle::default(), qi());
         let all_text = all_text(sections);
         assert!(all_text.contains("완료: 영원의 보석 1/1"));
     }
@@ -397,7 +406,7 @@ mod tests {
     #[test]
     fn ready_quest_hints_giver_dialogue() {
         let (reg, st) = make_registry_and_state("ready");
-        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default());
+        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default(), qi());
         let all_text = all_text(sections);
         assert!(all_text.contains("다음: 장로와 대화"));
     }
@@ -408,7 +417,7 @@ mod tests {
         let mut markers = DiscoveredMarkers::default();
         markers.add(4, 5, MarkerKind::QuestGiver, ZoneId::Town);
 
-        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &markers, &Handle::default());
+        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &markers, &Handle::default(), qi());
         let all_text = all_text(sections);
 
         assert!(all_text.contains("다음: 장로와 대화 (현재 존 / 미니맵 표시)"));
@@ -417,7 +426,7 @@ mod tests {
     #[test]
     fn done_quest_shows_completed_mark() {
         let (reg, st) = make_registry_and_state("done");
-        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default());
+        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default(), qi());
         let all_text = all_text(sections);
         assert!(all_text.contains("[완료]"));
     }
@@ -443,7 +452,7 @@ mod tests {
         });
         let mut st = QuestState::default();
         st.set_phase("q", "active");
-        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default());
+        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default(), qi());
         let all_text = all_text(sections);
         assert!(all_text.contains("active"));
     }

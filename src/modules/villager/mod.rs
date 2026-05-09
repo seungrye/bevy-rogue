@@ -292,6 +292,7 @@ fn handle_bump(
     mut open_portal: EventWriter<SpawnQuestPortalEvent>,
     mut despawn_item: EventWriter<DespawnWorldItemEvent>,
     mut shop_open: EventWriter<crate::modules::ui::shop::ShopOpenEvent>,
+    quest_items: Res<crate::modules::item::QuestItemRegistry>,
 ) {
     for BumpTileEvent(bx, by) in events.read() {
         for mut villager in villager_query.iter_mut() {
@@ -301,7 +302,7 @@ fn handle_bump(
                 shop_open.send(crate::modules::ui::shop::ShopOpenEvent);
             } else if let Some(quest_id) = villager.quest_id.clone() {
                 let phase_before = quest_state.phases.get(&quest_id).cloned();
-                show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut kill_npc, &mut open_portal, &mut despawn_item);
+                show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut kill_npc, &mut open_portal, &mut despawn_item, &quest_items);
                 let phase_after = quest_state.phases.get(&quest_id).cloned();
                 // 퀘스트가 active 상태로 전환됐을 때 QuestGiver 마커 추가
                 if phase_before.as_deref() != Some("active") && phase_after.as_deref() == Some("active") {
@@ -329,6 +330,7 @@ fn show_quest_dialog(
     kill_npc: &mut EventWriter<KillNpcEvent>,
     open_portal: &mut EventWriter<SpawnQuestPortalEvent>,
     despawn_item: &mut EventWriter<DespawnWorldItemEvent>,
+    quest_items: &crate::modules::item::QuestItemRegistry,
 ) {
     // 퀘스트가 초기화되지 않았으면 initial_phase 로 초기화
     if !state.phases.contains_key(quest_id) {
@@ -357,7 +359,7 @@ fn show_quest_dialog(
     // 마지막 줄에서 액션 실행
     if !dialog.is_empty() && idx + 1 >= dialog.len() {
         villager.quest_dialogue_idx = 0;
-        execute_actions(&actions, quest_id, state, inventory, log, world, kill_npc, open_portal, despawn_item);
+        execute_actions(&actions, quest_id, state, inventory, log, world, kill_npc, open_portal, despawn_item, quest_items);
     } else {
         villager.quest_dialogue_idx = idx + 1;
     }
@@ -473,6 +475,7 @@ fn update_villager_glyph(
     quest_state: Res<QuestState>,
     inventory: Res<PlayerInventory>,
     world: Res<WorldState>,
+    quest_items: Res<crate::modules::item::QuestItemRegistry>,
     mut query: Query<(&Villager, &mut Text)>,
     added: Query<(), Added<Villager>>,
 ) {
@@ -480,7 +483,7 @@ fn update_villager_glyph(
     for (villager, mut text) in query.iter_mut() {
         let Some(ref qid) = villager.quest_id else { continue };
         let Some(def) = registry.get(qid) else { continue };
-        let (glyph, color) = quest_npc_glyph(qid, def, &quest_state, &inventory, &world, villager.base_color);
+        let (glyph, color) = quest_npc_glyph(qid, def, &quest_state, &inventory, &world, villager.base_color, &quest_items);
         text.sections[0].value = glyph.to_string();
         text.sections[0].style.color = color;
     }
@@ -511,6 +514,7 @@ pub fn quest_npc_glyph(
     inventory: &PlayerInventory,
     world: &WorldState,
     base_color: Color,
+    quest_items: &crate::modules::item::QuestItemRegistry,
 ) -> (&'static str, Color) {
     let yellow = Color::rgb(1.0, 0.9, 0.1);
     let green = Color::rgb(0.3, 1.0, 0.6);
@@ -546,7 +550,7 @@ pub fn quest_npc_glyph(
 
     // auto_advance 조건이 현재 충족됐으면 다음 페이즈로 넘어갈 수 있다
     let can_advance = phase.auto_advance.iter()
-        .any(|aa| eval_condition(&aa.condition, inventory, world, state));
+        .any(|aa| eval_condition(&aa.condition, inventory, world, state, quest_items));
     if can_advance {
         return ("!", green);
     }
@@ -566,6 +570,12 @@ mod tests {
     use super::*;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
+    use std::sync::OnceLock;
+
+    static TEST_QI: OnceLock<crate::modules::item::QuestItemRegistry> = OnceLock::new();
+    fn qi() -> &'static crate::modules::item::QuestItemRegistry {
+        TEST_QI.get_or_init(|| crate::modules::item::build_test_registry())
+    }
 
     #[test]
     fn next_dialogue_advances() {
@@ -843,7 +853,7 @@ mod tests {
         let state = QuestState::default();
         let inv = empty_inventory();
         let world = default_world();
-        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, Color::WHITE);
+        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, Color::WHITE, qi());
         assert_eq!(glyph, "?");
         assert_eq!(color, Color::rgb(1.0, 0.9, 0.1), "퀘스트 있음 = 노란색");
     }
@@ -854,7 +864,7 @@ mod tests {
         let state = make_state_at("not_started");
         let inv = empty_inventory();
         let world = default_world();
-        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, Color::WHITE);
+        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, Color::WHITE, qi());
         assert_eq!(glyph, "?");
         assert_eq!(color, Color::rgb(1.0, 0.9, 0.1), "initial_phase = 노란 ?");
     }
@@ -865,7 +875,7 @@ mod tests {
         let state = make_state_at("active");
         let inv = empty_inventory(); // 아이템 없음 → auto_advance 조건 미충족
         let world = default_world();
-        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, Color::WHITE);
+        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, Color::WHITE, qi());
         assert_eq!(glyph, "?");
         assert_eq!(color, Color::rgb(0.3, 1.0, 0.6), "조건 미충족 = 초록 ?");
     }
@@ -880,7 +890,7 @@ mod tests {
             kind: ItemKind::QuestItem(QuestItemKind("eternal_gem")),
         });
         let world = default_world();
-        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, Color::WHITE);
+        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, Color::WHITE, qi());
         assert_eq!(glyph, "!");
         assert_eq!(color, Color::rgb(0.3, 1.0, 0.6), "auto_advance 조건 충족 = 초록 !");
     }
@@ -891,7 +901,7 @@ mod tests {
         let state = make_state_at("ready");
         let inv = empty_inventory();
         let world = default_world();
-        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, Color::WHITE);
+        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, Color::WHITE, qi());
         assert_eq!(glyph, "!");
         assert_eq!(color, Color::rgb(0.3, 1.0, 0.6), "on_interact 있음 = 초록 !");
     }
@@ -903,7 +913,7 @@ mod tests {
         let inv = empty_inventory();
         let world = default_world();
         let base = Color::rgb(0.9, 0.8, 0.5);
-        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, base);
+        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, base, qi());
         assert_eq!(glyph, "v");
         assert_eq!(color, base, "터미널 = v + 기본 색상");
     }
@@ -975,7 +985,7 @@ mod tests {
         state.phases.insert("alchemist_quest".to_string(), "gathering".to_string());
         let inv = empty_inventory();
         let world = default_world();
-        let (glyph, color) = quest_npc_glyph("alchemist_quest", &def, &state, &inv, &world, Color::WHITE);
+        let (glyph, color) = quest_npc_glyph("alchemist_quest", &def, &state, &inv, &world, Color::WHITE, qi());
         assert_eq!(glyph, "?", "힌트만 있는 on_interact 는 '?' 여야 한다");
         assert_eq!(color, Color::rgb(0.3, 1.0, 0.6));
     }

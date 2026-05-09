@@ -49,13 +49,15 @@ Startup:
 - [x] 명시적 `validate_quest_item_refs` Startup 시스템 — Phase 1 의 `validate_quest_villager_refs` 와 대칭
 - [x] 모든 quest 파일의 spawns/GiveItem/RemoveItem 의 ID 가 registry 에 존재함을 테스트로 검증
 
-### 아키텍처 결정
+### 아키텍처 결정 (Resource 패턴 통일)
 
 - ItemKind 의 `Copy` 특성 유지를 위해 `String` 대신 `&'static str` 기반 newtype 사용
 - 메타데이터는 RON 로드 시점에 `Box::leak` 으로 `&'static` 으로 영속화 (29 종 × 6 필드 ≈ 작은 leak)
-- Bevy `Resource` 대신 전역 `OnceLock` 사용 — `ItemKind::glyph()` 등 메서드가 무인자로
-  메타데이터에 접근할 수 있게 하여 호출부 변경 최소화 (~250 위치)
-- `intern_quest_id(id)` 함수: 같은 ID 의 leak 된 `&'static str` 을 한 번만 만들어 반환
+- **Bevy `Resource` 패턴 사용** — `VillagerRegistry`(Phase 1) 와 일관성 유지
+- `ItemKind::glyph(qi)` 등 메서드는 `&QuestItemRegistry` 파라미터를 받음
+- 모든 시스템 / 자유 함수가 registry 를 명시적으로 받음 — ECS 의존성이 명시적으로 표현됨
+- `QuestItemRegistry::intern(id)` 메서드: 등록된 ID 의 leak 된 `&'static str` 반환
+- Serialize/Deserialize 는 컨텍스트가 없어 leak 으로 fallback (저장 데이터 크기에 의해 bounded)
 
 ## Phase 3 — 무기/방어구/소모품 외부화
 

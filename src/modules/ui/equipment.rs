@@ -171,6 +171,7 @@ fn update_equipment_panel(
     equipment: Res<PlayerEquipment>,
     ui_state: Res<EquipmentUiState>,
     asset_server: Res<AssetServer>,
+    quest_items: Res<crate::modules::item::QuestItemRegistry>,
     mut panel_q: Query<&mut Visibility, With<EquipmentPanel>>,
     mut text_q: Query<&mut Text, With<EquipmentPanelContent>>,
 ) {
@@ -186,7 +187,7 @@ fn update_equipment_panel(
         let kr_font  = asset_server.load("fonts/NanumSquareNeo-bRg.ttf");
         let rpg_font = asset_server.load("fonts/rpg-awesome.ttf");
         if let Ok(mut text) = text_q.get_single_mut() {
-            text.sections = build_panel_sections(&inventory, &equipment, ui_state.cursor, &kr_font, &rpg_font);
+            text.sections = build_panel_sections(&inventory, &equipment, ui_state.cursor, &kr_font, &rpg_font, &quest_items);
         }
     }
 }
@@ -212,6 +213,7 @@ pub(crate) fn build_panel_sections(
     cursor: usize,
     kr_font: &Handle<Font>,
     rpg_font: &Handle<Font>,
+    quest_items: &crate::modules::item::QuestItemRegistry,
 ) -> Vec<TextSection> {
     let kr  = |v: &str, c: Color| ts(v,  kr_font.clone(),  FONT_SIZE, c);
     let ico = |v: &str, c: Color| ts(v,  rpg_font.clone(), FONT_SIZE, c);
@@ -300,7 +302,7 @@ pub(crate) fn build_panel_sections(
             let icon_str = item_kind_icon(&inv_item.kind);
             s.push(kr(&format!("{} {} ", sel, i + 1),                     color));
             s.push(ico(&format!("{} ", icon_str),                          color));
-            s.push(kr(&format!("{}{}", inv_item.kind.display_name(), stat), color));
+            s.push(kr(&format!("{}{}", inv_item.kind.display_name(quest_items), stat), color));
             if equipped {
                 s.push(kr("  [장착]\n", c_equipped));
             } else {
@@ -329,10 +331,11 @@ pub(crate) fn build_panel_text(
     inventory: &PlayerInventory,
     equipment: &PlayerEquipment,
     cursor: usize,
+    quest_items: &crate::modules::item::QuestItemRegistry,
 ) -> String {
     let kr:  Handle<Font> = Handle::default();
     let rpg: Handle<Font> = Handle::default();
-    build_panel_sections(inventory, equipment, cursor, &kr, &rpg)
+    build_panel_sections(inventory, equipment, cursor, &kr, &rpg, quest_items)
         .into_iter()
         .map(|s| s.value)
         .collect()
@@ -342,13 +345,19 @@ pub(crate) fn build_panel_text(
 mod tests {
     use super::*;
     use crate::modules::item::{InventoryItem, WeaponKind, ArmorKind, ConsumableKind};
+    use std::sync::OnceLock;
+
+    static TEST_QI: OnceLock<crate::modules::item::QuestItemRegistry> = OnceLock::new();
+    fn qi() -> &'static crate::modules::item::QuestItemRegistry {
+        TEST_QI.get_or_init(|| crate::modules::item::build_test_registry())
+    }
 
     fn empty_inv() -> PlayerInventory { PlayerInventory::default() }
     fn empty_eq()  -> PlayerEquipment { PlayerEquipment::default() }
 
     #[test]
     fn empty_inventory_shows_empty_message() {
-        let text = build_panel_text(&empty_inv(), &empty_eq(), 0);
+        let text = build_panel_text(&empty_inv(), &empty_eq(), 0, qi());
         assert!(text.contains("비어있음"));
     }
 
@@ -358,7 +367,7 @@ mod tests {
         inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::Sword) });
         let mut eq = empty_eq();
         eq.weapon = Some(WeaponKind::Sword);
-        let text = build_panel_text(&inv, &eq, 0);
+        let text = build_panel_text(&inv, &eq, 0, qi());
         assert!(text.contains("[장착]"));
     }
 
@@ -366,7 +375,7 @@ mod tests {
     fn unequipped_weapon_no_equip_tag() {
         let mut inv = empty_inv();
         inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::Sword) });
-        let text = build_panel_text(&inv, &empty_eq(), 0);
+        let text = build_panel_text(&inv, &empty_eq(), 0, qi());
         assert!(!text.contains("[장착]"));
     }
 
@@ -375,7 +384,7 @@ mod tests {
         let mut inv = empty_inv();
         inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::Sword) });
         inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::Spear) });
-        let text = build_panel_text(&inv, &empty_eq(), 1);
+        let text = build_panel_text(&inv, &empty_eq(), 1, qi());
         let spear_line = text.lines().find(|l| l.contains("창")).unwrap_or("");
         assert!(spear_line.starts_with("> ") && spear_line.contains("창"), "spear line was: {spear_line:?}");
     }
@@ -385,7 +394,7 @@ mod tests {
         let mut inv = empty_inv();
         inv.add_consumable(ConsumableKind::HealthPotion);
         inv.add_consumable(ConsumableKind::HealthPotion);
-        let text = build_panel_text(&inv, &empty_eq(), 0);
+        let text = build_panel_text(&inv, &empty_eq(), 0, qi());
         assert!(text.contains("x2"));
     }
 
@@ -393,7 +402,7 @@ mod tests {
     fn weapon_atk_shown_in_panel() {
         let mut inv = empty_inv();
         inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::Spear) });
-        let text = build_panel_text(&inv, &empty_eq(), 0);
+        let text = build_panel_text(&inv, &empty_eq(), 0, qi());
         assert!(text.contains("ATK 9"));
     }
 
@@ -401,7 +410,7 @@ mod tests {
     fn armor_def_shown_in_panel() {
         let mut inv = empty_inv();
         inv.items.push(InventoryItem { kind: ItemKind::Armor(ArmorKind::LeatherArmor) });
-        let text = build_panel_text(&inv, &empty_eq(), 0);
+        let text = build_panel_text(&inv, &empty_eq(), 0, qi());
         assert!(text.contains("+2DEF"));
     }
 
@@ -412,7 +421,7 @@ mod tests {
         inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::Sword) });
         let mut eq = empty_eq();
         eq.weapon = Some(WeaponKind::Sword);
-        let text = build_panel_text(&inv, &eq, 0);
+        let text = build_panel_text(&inv, &eq, 0, qi());
         assert_eq!(text.matches("[장착]").count(), 1);
     }
 }
