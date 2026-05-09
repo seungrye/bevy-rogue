@@ -116,6 +116,11 @@ fn help_sections(font: &Handle<Font>) -> Vec<TextSection> {
     ]);
     push_group(&mut sections, font, "전투와 탐험", &[
         ("몬스터 방향 이동", "근접 공격"),
+        ("F", "원격 공격 시작 (활 장착 시)"),
+        ("Tab / Shift+Tab", "다음/이전 타겟"),
+        ("방향키 (원격 중)", "자유 커서 이동"),
+        ("Enter", "발사"),
+        ("Esc (원격 중)", "취소"),
         ("M", "전체화면 미니맵 토글"),
     ]);
     push_group(&mut sections, font, "패널", &[

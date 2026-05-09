@@ -7,7 +7,7 @@ use crate::modules::{
     },
     combat::{CombatStats, Defeated, Speed},
     item::EquipmentPanelOpen,
-    ui::{help::HelpPanelOpen, shop::ShopPanelOpen, LogMessage},
+    ui::{help::HelpPanelOpen, shop::ShopPanelOpen},
     elemental::ElementalStatus,
     item::{WeaponKind, PlayerEquipment, weapon_attack},
     projectile::{FireProjectileEvent, BOW_RANGE},
@@ -244,12 +244,13 @@ fn player_movement(
     mut acted: EventWriter<PlayerActedEvent>,
     mut bump: EventWriter<BumpTileEvent>,
     mut attack: EventWriter<AttackMonsterEvent>,
-    _log_writer: EventWriter<LogMessage>,
     equipment_open: Res<EquipmentPanelOpen>,
     shop_open: Res<ShopPanelOpen>,
     help_open: Res<HelpPanelOpen>,
+    ranged: Res<crate::modules::ranged::RangedTargeting>,
 ) {
     if equipment_open.0 || shop_open.0 || help_open.0 { return; }
+    if ranged.active { return; }
     let Ok((entity, transform)) = player_query.get_single() else { return };
 
     // 스페이스바: 제자리 대기 — hold state 초기화 후 턴 소비

@@ -105,6 +105,7 @@ fn main() {
         .add_plugins(modules::combat_feedback::CombatFeedbackPlugin)
         .add_plugins(modules::elemental::ElementalPlugin)
         .add_plugins(modules::projectile::ProjectilePlugin)
+        .add_plugins(modules::ranged::RangedPlugin)
         .add_plugins(ItemPlugin { initial_glyph_style })
         .add_plugins(modules::ui::GameUiPlugin)
         .add_plugins(modules::villager::VillagerPlugin)
