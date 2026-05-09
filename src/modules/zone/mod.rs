@@ -452,6 +452,7 @@ fn handle_spawn_quest_portal(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut used_spawn: ResMut<UsedSpawnTiles>,
+    mut markers: ResMut<crate::modules::ui::minimap::DiscoveredMarkers>,
 ) {
     for event in ev.read() {
         // 이미 등록된 Named 존은 중복 생성하지 않는다
@@ -468,6 +469,9 @@ fn handle_spawn_quest_portal(
         if let Some((px, py)) = portal_tile(map, &dir, &mut used_spawn.0, &mut rng) {
             let coord = tile_to_world_coords(px, py);
             let font = asset_server.load("fonts/FiraMono-Medium.ttf");
+            // 퀘스트로 새로 생성된 포털은 즉시 미니맵 마커 등록 — quest 받은 직후
+            // 멀리 있어도 위치를 알 수 있게 한다 (FOV 검사 우회).
+            markers.add(px, py, crate::modules::ui::minimap::MarkerKind::Portal, world.current.clone());
             commands.spawn((
                 Text2dBundle {
                     text: Text::from_section(dir.glyph(), TextStyle {

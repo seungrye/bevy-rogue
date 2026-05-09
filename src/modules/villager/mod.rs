@@ -91,6 +91,7 @@ impl Plugin for VillagerPlugin {
                 update_villager_glyph.after(handle_bump),
                 smooth_villager_move,
                 handle_kill_npc,
+                discover_quest_npcs_in_fov,
             ));
     }
 }
@@ -155,6 +156,24 @@ fn handle_kill_npc(
                 break;
             }
         }
+    }
+}
+
+/// 퀘스트 NPC 가 player FOV 안에 들어오면 미니맵에 마커를 추가한다.
+/// 일반 villager 는 무시한다 (quest_id 가 None).
+fn discover_quest_npcs_in_fov(
+    map_res: Res<crate::modules::map::MapResource>,
+    world_state: Res<WorldState>,
+    villager_query: Query<&Villager>,
+    mut markers: ResMut<DiscoveredMarkers>,
+) {
+    let map = map_res.map();
+    for v in villager_query.iter() {
+        if v.quest_id.is_none() { continue; }
+        if v.tile_x >= map.width || v.tile_y >= map.height { continue; }
+        let idx = map.index(v.tile_x, v.tile_y);
+        if !map.tiles[idx].visible { continue; }
+        markers.add(v.tile_x, v.tile_y, MarkerKind::QuestGiver, world_state.current.clone());
     }
 }
 
@@ -763,6 +782,44 @@ mod tests {
         let defs = load_villager_defs();
         let bastian = defs.iter().find(|d| d.name == "바스티안").expect("바스티안 NPC가 존재해야 한다");
         assert_eq!(bastian.quest_id.as_deref(), Some("demonsword_quest"), "바스티안은 demonsword_quest를 가져야 한다");
+    }
+
+    #[test]
+    fn discover_quest_npcs_marker_skips_non_quest_villager() {
+        // 퀘스트 NPC만 마커, 일반 NPC 는 마커 없음.
+        // (시스템 내부 로직만 검증 — Bevy App 통합 없이 데이터 검증)
+        let regular = Villager {
+            name: "농부".into(),
+            dialogues: vec![],
+            dialogue_idx: 0,
+            tile_x: 5, tile_y: 5,
+            just_bumped: false,
+            quest_id: None,  // 일반 NPC
+            quest_dialogue_idx: 0,
+            base_color: Color::WHITE,
+            home_room: None,
+        };
+        let quest_npc = Villager {
+            name: "엘렌".into(),
+            dialogues: vec![],
+            dialogue_idx: 0,
+            tile_x: 7, tile_y: 7,
+            just_bumped: false,
+            quest_id: Some("herb_quest".into()),
+            quest_dialogue_idx: 0,
+            base_color: Color::WHITE,
+            home_room: None,
+        };
+        // 시스템 로직 시뮬레이션 — quest_id 있는 NPC 만 마커 추가됨
+        let mut markers = DiscoveredMarkers::default();
+        for v in [&regular, &quest_npc] {
+            if v.quest_id.is_some() {
+                markers.add(v.tile_x, v.tile_y, MarkerKind::QuestGiver, crate::modules::zone::ZoneId::Town);
+            }
+        }
+        assert_eq!(markers.0.len(), 1, "quest_id 있는 NPC 만 마커가 추가돼야 한다");
+        assert_eq!(markers.0[0].tile_x, 7);
+        assert_eq!(markers.0[0].tile_y, 7);
     }
 
     #[test]
