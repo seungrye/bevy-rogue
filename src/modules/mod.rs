@@ -1,5 +1,6 @@
 pub mod combat;
 pub mod combat_feedback;
+pub mod elemental;
 pub mod core;
 pub mod item;
 pub mod map;

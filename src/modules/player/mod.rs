@@ -8,6 +8,7 @@ use crate::modules::{
     combat::{CombatStats, Defeated, Speed},
     item::EquipmentPanelOpen,
     ui::{help::HelpPanelOpen, shop::ShopPanelOpen, LogMessage},
+    elemental::ElementalStatus,
 };
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
@@ -189,6 +190,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, map_res:
             attack: PLAYER_ATK, defense: PLAYER_DEF,
         },
         Speed::new(1.0),
+        ElementalStatus::default(),
     )).with_children(|parent| {
         // HP 바 배경 (어두운 빨간색)
         parent.spawn(SpriteBundle {

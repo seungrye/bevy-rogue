@@ -12,9 +12,10 @@ use crate::modules::{
     combat::{CombatStats, Defeated, Speed, calc_damage},
     ui::LogMessage,
     combat_feedback::CombatFeedbackEvent,
-    item::ItemDropEvent,
+    item::{ItemDropEvent, PlayerEquipment},
     zone::{WorldState, ZonePersistence, MonsterSlot},
     map::GlobalTurn,
+    elemental::{ElementalApplyEvent, ElementalStatus, Stunned, monster_element, weapon_element},
 };
 
 const Z_MONSTER: f32 = 0.8;
@@ -177,6 +178,7 @@ fn spawn_from_slots(
             CombatStats { hp, max_hp: hp, mp: 0, max_mp: 0, attack: atk, defense: def },
             Speed::new(spd),
             MoveQueue::default(),
+            ElementalStatus::default(),
         ));
     }
 }
@@ -189,6 +191,8 @@ fn handle_player_attack(
     mut log_writer: EventWriter<LogMessage>,
     mut feedback_writer: EventWriter<CombatFeedbackEvent>,
     mut drop_writer: EventWriter<ItemDropEvent>,
+    mut elemental_writer: EventWriter<ElementalApplyEvent>,
+    equipment: Res<PlayerEquipment>,
 ) {
     for AttackMonsterEvent(tx, ty) in events.read() {
         let Ok(mut player_stats) = player_query.get_single_mut() else { continue };
@@ -207,6 +211,20 @@ fn handle_player_attack(
                 hit_entity: monster_entity,
                 original_color,
             });
+            // 원소 부여 (40% 확률, 장착 무기에 따라 결정)
+            if monster_stats.hp > 0 {
+                if let Some(weapon) = equipment.weapon {
+                    if rand::thread_rng().gen_bool(0.4) {
+                        if let Some(element) = weapon_element(weapon) {
+                            elemental_writer.send(ElementalApplyEvent {
+                                target: monster_entity,
+                                element,
+                            });
+                        }
+                    }
+                }
+            }
+
             if monster_stats.hp <= 0 {
                 let xp = xp_reward_for_monster(&monster.name);
                 let levels = grant_xp(&mut progress, &mut player_stats, xp);
@@ -243,10 +261,11 @@ fn monster_turn(
     mut commands: Commands,
     mut events: EventReader<PlayerActedEvent>,
     map_res: Res<MapResource>,
-    mut monster_query: Query<(&mut Monster, &mut MoveQueue, &CombatStats, &mut Speed), Without<Player>>,
+    mut monster_query: Query<(&mut Monster, &mut MoveQueue, &CombatStats, &mut Speed, Option<&Stunned>), Without<Player>>,
     mut player_query: Query<(Entity, &Transform, Option<&MovingTo>, &mut CombatStats), (With<Player>, Without<Monster>)>,
     mut log_writer: EventWriter<LogMessage>,
     mut feedback_writer: EventWriter<CombatFeedbackEvent>,
+    mut elemental_writer: EventWriter<ElementalApplyEvent>,
 ) {
     if events.read().next().is_none() { return; }
 
@@ -258,16 +277,20 @@ fn monster_turn(
         .unwrap_or_else(|| world_to_tile_coords(player_transform.translation));
 
     let mut occupied: HashSet<(usize, usize)> = monster_query.iter()
-        .filter(|(_, _, stats, _)| stats.hp > 0)
-        .map(|(m, _, _, _)| (m.tile_x, m.tile_y))
+        .filter(|(_, _, stats, _, _)| stats.hp > 0)
+        .map(|(m, _, _, _, _)| (m.tile_x, m.tile_y))
         .collect();
     occupied.insert((px, py));
 
     let mut player_dead = false;
     let mut rng = rand::thread_rng();
 
-    for (mut monster, mut move_queue, monster_stats, mut speed) in monster_query.iter_mut() {
+    for (mut monster, mut move_queue, monster_stats, mut speed, stunned) in monster_query.iter_mut() {
         if monster_stats.hp <= 0 { continue; }
+        if stunned.is_some() {
+            occupied.insert((monster.tile_x, monster.tile_y));
+            continue;
+        }
 
         occupied.remove(&(monster.tile_x, monster.tile_y));
 
@@ -297,6 +320,19 @@ fn monster_turn(
                         hit_entity: player_entity,
                         original_color: Color::YELLOW,
                     });
+
+                    // 원소 부여 (35% 확률, 몬스터 속성에 따라)
+                    if !player_dead {
+                        if let Some(element) = monster_element(&monster.name) {
+                            if rng.gen_bool(0.35) {
+                                elemental_writer.send(ElementalApplyEvent {
+                                    target: player_entity,
+                                    element,
+                                });
+                            }
+                        }
+                    }
+
                     if player_stats.hp <= 0 {
                         player_dead = true;
                         log_writer.send(LogMessage(format!(
