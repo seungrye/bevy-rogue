@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy_rapier2d::prelude::*;
 use crate::modules::ui::DIALOG_PANEL_HEIGHT_PX;
 use crate::modules::item::{GlyphStyle, ItemPlugin};
 mod modules;
@@ -97,10 +98,12 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0))
         .add_plugins(modules::map::MapPlugin { initial_algorithm })
         .add_plugins(modules::player::PlayerPlugin)
         .add_plugins(modules::monster::MonsterPlugin)
         .add_plugins(modules::combat_feedback::CombatFeedbackPlugin)
+        .add_plugins(modules::elemental::ElementalPlugin)
         .add_plugins(ItemPlugin { initial_glyph_style })
         .add_plugins(modules::ui::GameUiPlugin)
         .add_plugins(modules::villager::VillagerPlugin)

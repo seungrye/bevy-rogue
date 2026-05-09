@@ -8,6 +8,7 @@ rand = "0.8"
 noise = "0.8"
 # bevy = { version = "0.13", features = ["dynamic_linking"] }
 bevy = { version = "0.13" }
+bevy_rapier2d = "0.26"
 serde = { version = "1", features = ["derive"] }
 ron = "0.8"
 

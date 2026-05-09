@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy_rapier2d::prelude::*;
 use rand::Rng;
 use crate::modules::map::{tile_to_world_coords, TILE_SIZE, PlayerActedEvent};
 
@@ -6,11 +7,19 @@ pub const HIT_FLASH_DURATION: f32 = 0.15;
 pub const Z_BLOOD: f32 = 0.5;
 const BLOOD_LIFETIME_MIN: u32 = 15;
 const BLOOD_LIFETIME_MAX: u32 = 30;
+const PARTICLE_COUNT: usize = 8;
+const PARTICLE_LIFETIME: f32 = 0.45;
+const PARTICLE_SIZE: f32 = 3.0;
 
 #[derive(Component)]
 pub struct BloodStain {
     pub alpha: f32,
     pub decay_per_turn: f32,
+}
+
+#[derive(Component)]
+pub struct BloodParticle {
+    lifetime: f32,
 }
 
 #[derive(Component)]
@@ -36,7 +45,8 @@ impl Plugin for CombatFeedbackPlugin {
                 handle_combat_feedback,
                 fade_blood_stains,
                 apply_hit_flash,
-            ).chain());
+            ).chain())
+            .add_systems(Update, update_blood_particles);
     }
 }
 
@@ -62,6 +72,8 @@ fn handle_combat_feedback(
             BloodStain { alpha: 1.0, decay_per_turn: 1.0 / lifetime as f32 },
         ));
 
+        spawn_blood_particles(pos, &mut commands);
+
         if let Some(mut ec) = commands.get_entity(event.hit_entity) {
             let original_color = flash_query.get(event.hit_entity)
                 .map(|f| f.original_color)
@@ -70,6 +82,48 @@ fn handle_combat_feedback(
                 remaining: HIT_FLASH_DURATION,
                 original_color,
             });
+        }
+    }
+}
+
+fn spawn_blood_particles(pos: Vec2, commands: &mut Commands) {
+    let mut rng = rand::thread_rng();
+    for _ in 0..PARTICLE_COUNT {
+        let angle = rng.gen_range(0.0_f32..std::f32::consts::TAU);
+        let speed = rng.gen_range(30.0_f32..120.0);
+        commands.spawn((
+            SpriteBundle {
+                sprite: Sprite {
+                    color: Color::rgba(0.85, 0.05, 0.05, 1.0),
+                    custom_size: Some(Vec2::splat(PARTICLE_SIZE)),
+                    ..default()
+                },
+                transform: Transform::from_xyz(pos.x, pos.y, Z_BLOOD + 0.1),
+                ..default()
+            },
+            RigidBody::Dynamic,
+            Velocity::linear(Vec2::new(angle.cos() * speed, angle.sin() * speed)),
+            GravityScale(2.0),
+            Collider::ball(1.5),
+            Sensor,
+            BloodParticle { lifetime: PARTICLE_LIFETIME },
+        ));
+    }
+}
+
+fn update_blood_particles(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut query: Query<(Entity, &mut BloodParticle, &mut Sprite)>,
+) {
+    let dt = time.delta_seconds();
+    for (entity, mut particle, mut sprite) in query.iter_mut() {
+        particle.lifetime -= dt;
+        if particle.lifetime <= 0.0 {
+            commands.entity(entity).despawn();
+        } else {
+            let alpha = particle.lifetime / PARTICLE_LIFETIME;
+            sprite.color = Color::rgba(0.85, 0.05, 0.05, alpha);
         }
     }
 }
