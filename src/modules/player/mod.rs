@@ -9,6 +9,8 @@ use crate::modules::{
     item::EquipmentPanelOpen,
     ui::{help::HelpPanelOpen, shop::ShopPanelOpen, LogMessage},
     elemental::ElementalStatus,
+    item::{WeaponKind, PlayerEquipment, weapon_attack},
+    projectile::{FireProjectileEvent, BOW_RANGE},
 };
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
@@ -351,7 +353,11 @@ fn on_mouse_click(
     camera_q: Query<(&Camera, &GlobalTransform), With<Camera>>,
     player_query: Query<&Transform, With<Player>>,
     map_res: Res<MapResource>,
+    monster_tiles: Res<MonsterTiles>,
+    equipment: Res<PlayerEquipment>,
     mut player_path: ResMut<PlayerPath>,
+    mut fire_writer: EventWriter<FireProjectileEvent>,
+    mut acted_writer: EventWriter<PlayerActedEvent>,
     equipment_open: Res<EquipmentPanelOpen>,
     shop_open: Res<ShopPanelOpen>,
     help_open: Res<HelpPanelOpen>,
@@ -372,6 +378,25 @@ fn on_mouse_click(
     if map.get_tile(tx, ty) != TileKind::Floor { return; }
 
     let (px, py) = world_to_tile_coords(player_transform.translation);
+
+    // 활 장착 + 몬스터 타일 + FOV 내 가시 + 사거리 내 → 화살 발사
+    if equipment.weapon == Some(WeaponKind::Bow) && monster_tiles.0.contains(&(tx, ty)) {
+        let idx = ty * MAP_WIDTH + tx;
+        let dx = tx as i32 - px as i32;
+        let dy = ty as i32 - py as i32;
+        let in_range = dx * dx + dy * dy <= BOW_RANGE * BOW_RANGE;
+        if map.tiles[idx].visible && in_range {
+            fire_writer.send(FireProjectileEvent {
+                origin_tile: (px, py),
+                target_tile: (tx, ty),
+                damage: weapon_attack(WeaponKind::Bow),
+                element: Some(crate::modules::elemental::Element::Lightning),
+            });
+            acted_writer.send(PlayerActedEvent);
+            return;
+        }
+    }
+
     let path = pathfinding::find_path(map, (px, py), (tx, ty));
     player_path.0 = VecDeque::from(path);
 }
