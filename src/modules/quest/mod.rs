@@ -622,6 +622,10 @@ pub fn item_id_to_kind(id: &str) -> Option<ItemKind> {
         "demon_sword"         => Some(ItemKind::QuestItem(QuestItemKind::DemonSword)),
         "elenas_memo"         => Some(ItemKind::QuestItem(QuestItemKind::ElenasMemo)),
         "ancient_ritual_book" => Some(ItemKind::QuestItem(QuestItemKind::AncientRitualBook)),
+        // parry_quest
+        "prototype_hammer"    => Some(ItemKind::QuestItem(QuestItemKind::PrototypeHammer)),
+        "steel_core"          => Some(ItemKind::QuestItem(QuestItemKind::SteelCore)),
+        "pilot_badge"         => Some(ItemKind::QuestItem(QuestItemKind::PilotBadge)),
         _ => None,
     }
 }
@@ -1061,6 +1065,13 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn parry_quest_item_ids_mapped_correctly() {
+        assert!(matches!(item_id_to_kind("prototype_hammer"), Some(ItemKind::QuestItem(QuestItemKind::PrototypeHammer))));
+        assert!(matches!(item_id_to_kind("steel_core"),       Some(ItemKind::QuestItem(QuestItemKind::SteelCore))));
+        assert!(matches!(item_id_to_kind("pilot_badge"),      Some(ItemKind::QuestItem(QuestItemKind::PilotBadge))));
     }
 
     #[test]

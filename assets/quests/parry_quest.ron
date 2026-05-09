@@ -1,0 +1,79 @@
+QuestDef(
+    id: "parry_quest",
+    title: "파리 고수와 기계 공학자",
+    giver_npc: "그레체",
+    initial_phase: "not_started",
+
+    phases: {
+        "not_started": QuestPhaseDef(
+            dialog: [
+                "당신... 짐꾼치고는 눈빛이 예사롭지 않군요.",
+                "나는 신대중공 무기개발부의 그레체입니다.",
+                "지금 시제 6식 파암추 — 화약식 파일뱅커 내장형 둔기를 테스트 중인데,",
+                "제대로 쓸 줄 아는 파일럿이 없어서 곤란한 상황입니다.",
+                "D급 던전에 강철 갑주 보스가 출현했다는 정보가 있소.",
+                "그 보스를 이 파암추로 쓰러뜨려 주면 정식 채용하겠습니다.",
+            ],
+            on_interact: [
+                GiveItem("prototype_hammer"),
+                Log("그레체: 던전으로 가는 길을 열어드리겠습니다."),
+                OpenPortal(zone: "d_rank_dungeon", generator: "bsp"),
+                AdvancePhase("dungeon_ready"),
+            ],
+            auto_advance: [],
+            objective: Some("그레체의 이야기를 끝까지 들어라."),
+        ),
+
+        "dungeon_ready": QuestPhaseDef(
+            dialog: [
+                "아직 던전에서 돌아오지 않았군요.",
+                "강철 갑주 보스는 마법이 통하지 않습니다. 파암추의 파일뱅커를 잘 활용하세요.",
+                "타이밍이 생명입니다. 패리 후 반격이 핵심이에요.",
+            ],
+            on_interact: [],
+            auto_advance: [
+                AutoAdvance(
+                    condition: HasItem("steel_core"),
+                    next_phase: "boss_defeated",
+                ),
+            ],
+            objective: Some("D급 던전에서 강철 갑주 심장을 획득하라."),
+        ),
+
+        "boss_defeated": QuestPhaseDef(
+            dialog: [
+                "...강철 갑주 심장! 정말 해냈군요!",
+                "마법도 통하지 않는 놈을 그 파암추 하나로...",
+                "게다가 저 파일뱅커 타이밍. 완벽한 패리 후 반격이었어요.",
+                "당신, 제 전속 테스트 파일럿이 되어 주세요. 이건 거절을 허락하지 않겠습니다.",
+            ],
+            on_interact: [
+                RemoveItem("prototype_hammer"),
+                RemoveItem("steel_core"),
+                GiveItem("pilot_badge"),
+                Log("그레체의 전속 테스트 파일럿이 되었다. 새로운 여정이 시작된다."),
+                AdvancePhase("done"),
+            ],
+            auto_advance: [],
+            objective: Some("그레체에게 결과를 보고하라."),
+        ),
+
+        "done": QuestPhaseDef(
+            dialog: [
+                "신대중공의 최신 무기들이 기다리고 있습니다.",
+                "다음 시제품은 더 위험하니까, 각오해 두세요.",
+            ],
+            on_interact: [],
+            auto_advance: [],
+            objective: Some("전속 테스트 파일럿으로 채용 완료."),
+        ),
+    },
+
+    spawns: [
+        QuestSpawn(
+            phase: "dungeon_ready",
+            item: "steel_core",
+            zone: Named("d_rank_dungeon"),
+        ),
+    ],
+)

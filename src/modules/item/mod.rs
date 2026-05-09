@@ -121,6 +121,9 @@ fn glyph_unicode(kind: ItemKind) -> &'static str {
             QuestItemKind::DemonSword        => "\u{2694}", // ⚔ 교차한 검 (마검)
             QuestItemKind::ElenasMemo        => "\u{270E}", // ✎ 연필 (메모)
             QuestItemKind::AncientRitualBook => "\u{2720}", // ✠ 몰타 십자 (의식서)
+            QuestItemKind::PrototypeHammer   => "\u{2692}", // ⚒ 곡괭이 (파암추)
+            QuestItemKind::SteelCore         => "\u{2B22}", // ⬢ 육각형 (강철 심장)
+            QuestItemKind::PilotBadge        => "\u{2605}", // ★ 별 (인증서)
         },
     }
 }
@@ -165,6 +168,9 @@ fn glyph_game_icon(kind: ItemKind) -> &'static str {
             QuestItemKind::DemonSword        => "\u{2694}", // 대체 글리프: ⚔
             QuestItemKind::ElenasMemo        => "\u{270E}", // 대체 글리프: ✎
             QuestItemKind::AncientRitualBook => "\u{2720}", // 대체 글리프: ✠
+            QuestItemKind::PrototypeHammer   => "\u{2692}", // 대체 글리프: ⚒
+            QuestItemKind::SteelCore         => "\u{2B22}", // 대체 글리프: ⬢
+            QuestItemKind::PilotBadge        => "\u{2605}", // 대체 글리프: ★
         },
     }
 }
@@ -206,6 +212,10 @@ pub enum QuestItemKind {
     DemonSword,
     ElenasMemo,
     AncientRitualBook,
+    // 파리 퀘스트 — 파리 고수와 기계 공학자
+    PrototypeHammer,
+    SteelCore,
+    PilotBadge,
 }
 
 impl QuestItemKind {
@@ -237,6 +247,9 @@ impl QuestItemKind {
             QuestItemKind::DemonSword        => "마검",
             QuestItemKind::ElenasMemo        => "엘레나의 메모",
             QuestItemKind::AncientRitualBook => "고대 의식서",
+            QuestItemKind::PrototypeHammer   => "시제 6식 파암추",
+            QuestItemKind::SteelCore         => "강철 갑주 심장",
+            QuestItemKind::PilotBadge        => "전속 파일럿 인증서",
         }
     }
 }
@@ -339,6 +352,9 @@ impl ItemKind {
                 QuestItemKind::DemonSword        => "D",
                 QuestItemKind::ElenasMemo        => "e",
                 QuestItemKind::AncientRitualBook => "R",
+                QuestItemKind::PrototypeHammer   => "H",
+                QuestItemKind::SteelCore         => "#",
+                QuestItemKind::PilotBadge        => "P",
             },
         }
     }
@@ -401,6 +417,9 @@ impl ItemKind {
                 QuestItemKind::DemonSword        => "마검을 집어들었다. 손에서 어둠의 기운이 흐른다...",
                 QuestItemKind::ElenasMemo        => "엘레나의 메모를 발견했다. 폐허 요새에 의식서가 있다고 한다.",
                 QuestItemKind::AncientRitualBook => "고대 의식서를 손에 넣었다. 봉인 의식의 방법이 담겨 있다.",
+                QuestItemKind::PrototypeHammer   => "시제 6식 파암추를 받았다. 내부에 화약식 파일뱅커가 내장되어 있다.",
+                QuestItemKind::SteelCore         => "강철 갑주의 심장을 획득했다. 보스 격파의 확실한 증거다.",
+                QuestItemKind::PilotBadge        => "전속 파일럿 인증서를 받았다. 그레체의 무기 테스터가 되었다.",
             },
         }
     }
@@ -697,6 +716,9 @@ fn quest_item_image_path(kind: QuestItemKind) -> &'static str {
         QuestItemKind::DemonSword        => "scene/open-chest.png",
         QuestItemKind::ElenasMemo        => "scene/open-chest.png",
         QuestItemKind::AncientRitualBook => "scene/open-chest.png",
+        QuestItemKind::PrototypeHammer   => "scene/open-chest.png",
+        QuestItemKind::SteelCore         => "scene/open-chest.png",
+        QuestItemKind::PilotBadge        => "scene/open-chest.png",
     }
 }
 
@@ -980,6 +1002,25 @@ mod tests {
         assert!(sword.pickup_message().contains("마검"));
         assert!(memo.pickup_message().contains("폐허 요새"));
         assert!(book.pickup_message().contains("봉인 의식"));
+    }
+
+    #[test]
+    fn parry_quest_items_have_correct_glyphs_and_names() {
+        assert_eq!(QuestItemKind::PrototypeHammer.display_name(), "시제 6식 파암추");
+        assert_eq!(QuestItemKind::SteelCore.display_name(),       "강철 갑주 심장");
+        assert_eq!(QuestItemKind::PilotBadge.display_name(),      "전속 파일럿 인증서");
+
+        let hammer = ItemKind::QuestItem(QuestItemKind::PrototypeHammer);
+        let core   = ItemKind::QuestItem(QuestItemKind::SteelCore);
+        let badge  = ItemKind::QuestItem(QuestItemKind::PilotBadge);
+
+        assert_eq!(hammer.glyph(), "H");
+        assert_eq!(core.glyph(),   "#");
+        assert_eq!(badge.glyph(),  "P");
+
+        assert!(hammer.pickup_message().contains("파암추"));
+        assert!(core.pickup_message().contains("보스 격파"));
+        assert!(badge.pickup_message().contains("파일럿"));
     }
 
     #[test]

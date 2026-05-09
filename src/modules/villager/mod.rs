@@ -164,6 +164,7 @@ static VILLAGER_DATA: &[(&str, [f32; 3], &[&str], Option<&str>, f32)] = &[
     ("조라",         [0.40, 0.55, 0.85], &[], Some("targaryen_quest"),   0.6),
     ("샘웰",         [0.80, 0.70, 0.50], &[], Some("jon_snow_quest"),    0.5),
     ("바스티안",     [0.85, 0.75, 0.60], &[], Some("demonsword_quest"),  0.4),
+    ("그레체",       [0.55, 0.70, 0.90], &[], Some("parry_quest"),       0.6),
     ("노인",   [0.65, 0.65, 0.75], &[
         "이 마을에는 오랜 비밀이 있다네.",
         "오래전에 이 땅에 큰 전쟁이 있었지.",
@@ -819,6 +820,12 @@ mod tests {
     fn noin_npc_has_world_fracture_quest() {
         let noin = VILLAGER_DATA.iter().find(|d| d.0 == "노인").expect("노인 NPC가 존재해야 한다");
         assert_eq!(noin.3, Some("world_fracture"), "노인은 world_fracture 퀘스트를 가져야 한다");
+    }
+
+    #[test]
+    fn gretchen_npc_has_parry_quest() {
+        let gretchen = VILLAGER_DATA.iter().find(|d| d.0 == "그레체").expect("그레체 NPC가 존재해야 한다");
+        assert_eq!(gretchen.3, Some("parry_quest"), "그레체는 parry_quest를 가져야 한다");
     }
 
     #[test]
