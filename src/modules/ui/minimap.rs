@@ -89,25 +89,9 @@ impl DiscoveredMarkers {
 pub const MINIMAP_RADIUS: i32 = 20;
 pub const MINIMAP_SIDE: u32 = (MINIMAP_RADIUS * 2 + 1) as u32;
 pub const MINIMAP_DISPLAY_SIZE: f32 = 180.0;
-const MINIMAP_VIEW_RADIUS_MIN: i32 = MINIMAP_RADIUS;
-const MINIMAP_VIEW_RADIUS_MAX: i32 = 70;
-const MINIMAP_ZOOM_STEP: i32 = 5;
 
 #[derive(Resource)]
 pub struct MinimapImage(pub Handle<Image>);
-
-#[derive(Resource)]
-pub struct MinimapConfig {
-    pub view_radius: i32,
-}
-
-impl Default for MinimapConfig {
-    fn default() -> Self {
-        Self {
-            view_radius: MINIMAP_RADIUS,
-        }
-    }
-}
 
 #[derive(Component)]
 pub struct MinimapOverlay;
@@ -119,8 +103,7 @@ pub struct MinimapPlugin;
 
 impl Plugin for MinimapPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<MinimapConfig>()
-            .init_resource::<DiscoveredMarkers>()
+        app.init_resource::<DiscoveredMarkers>()
             .init_resource::<FullMapOpen>()
             .add_systems(
                 Startup,
@@ -136,7 +119,6 @@ impl Plugin for MinimapPlugin {
                 (
                     update_minimap,
                     update_generator_name,
-                    zoom_minimap,
                     toggle_full_map,
                     update_full_map_visibility.after(toggle_full_map),
                     update_full_map_image.after(update_full_map_visibility),
@@ -334,11 +316,13 @@ fn update_full_map_image(
     let map = map_res.map();
     let Some(image) = images.get_mut(&full_map.0) else { return; };
 
-    // 1) 타일 색칠 — 발견된 영역만
-    for y in 0..FULL_MAP_H {
+    // 1) 타일 색칠 — 발견된 영역만.
+    // 게임 좌표는 좌하단 원점(y 증가가 위), 이미지는 좌상단 원점이므로 y 를 뒤집는다.
+    for ty in 0..FULL_MAP_H {
         for x in 0..FULL_MAP_W {
-            let pixel_idx = (y * FULL_MAP_W + x) as usize * 4;
-            let color = full_map_tile_color(map, x as i32, y as i32, player_x, player_y);
+            let pixel_y = FULL_MAP_H - 1 - ty;
+            let pixel_idx = (pixel_y * FULL_MAP_W + x) as usize * 4;
+            let color = full_map_tile_color(map, x as i32, ty as i32, player_x, player_y);
             image.data[pixel_idx..pixel_idx + 4].copy_from_slice(&color);
         }
     }
@@ -347,7 +331,8 @@ fn update_full_map_image(
     for marker in markers.0.iter().filter(|m| m.zone == world_state.current) {
         let (mx, my) = (marker.tile_x, marker.tile_y);
         if mx >= FULL_MAP_W as usize || my >= FULL_MAP_H as usize { continue; }
-        let pixel_idx = (my as u32 * FULL_MAP_W + mx as u32) as usize * 4;
+        let pixel_y = FULL_MAP_H as usize - 1 - my;
+        let pixel_idx = (pixel_y as u32 * FULL_MAP_W + mx as u32) as usize * 4;
         image.data[pixel_idx..pixel_idx + 4].copy_from_slice(&marker.kind.color());
     }
 }
@@ -377,33 +362,6 @@ pub(crate) fn full_map_tile_color(map: &Map, x: i32, y: i32, player_x: usize, pl
             TileKind::Floor => C_REVEALED_FLOOR,
         }
     }
-}
-
-/// view_radius 를 clamp하여 반환한다 (순수 함수, 테스트 가능)
-pub fn apply_zoom(current: i32, delta: i32) -> i32 {
-    (current + delta).clamp(MINIMAP_VIEW_RADIUS_MIN, MINIMAP_VIEW_RADIUS_MAX)
-}
-
-fn zoom_minimap(keyboard: Res<ButtonInput<KeyCode>>, mut config: ResMut<MinimapConfig>) {
-    let ctrl = keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
-    if !ctrl {
-        return;
-    }
-
-    let zoom_in =
-        keyboard.just_pressed(KeyCode::Equal) || keyboard.just_pressed(KeyCode::NumpadAdd);
-    let zoom_out =
-        keyboard.just_pressed(KeyCode::Minus) || keyboard.just_pressed(KeyCode::NumpadSubtract);
-
-    // 줌인 = 반경 감소 (타일 더 크게), 줌아웃 = 반경 증가 (더 넓게)
-    let delta = if zoom_in {
-        -MINIMAP_ZOOM_STEP
-    } else if zoom_out {
-        MINIMAP_ZOOM_STEP
-    } else {
-        return;
-    };
-    config.view_radius = apply_zoom(config.view_radius, delta);
 }
 
 fn update_generator_name(
@@ -534,7 +492,6 @@ fn update_minimap(
     minimap_res: Res<MinimapImage>,
     mut images: ResMut<Assets<Image>>,
     player_query: Query<&Transform, With<Player>>,
-    config: Res<MinimapConfig>,
     overlay_q: Query<&Visibility, With<MinimapOverlay>>,
     mut last_pos: Local<Option<IVec2>>,
     world_state: Res<WorldState>,
@@ -547,7 +504,7 @@ fn update_minimap(
         }
     }
 
-    if map_res.is_changed() || config.is_changed() {
+    if map_res.is_changed() {
         *last_pos = None;
     }
 
@@ -568,7 +525,8 @@ fn update_minimap(
         return;
     };
 
-    let scale = config.view_radius as f32 / MINIMAP_RADIUS as f32;
+    // zoom 제거 — 항상 1:1 매핑 (한 픽셀 == 한 타일)
+    let scale = 1.0_f32;
 
     for ty in 0..MINIMAP_SIDE {
         for tx in 0..MINIMAP_SIDE {
@@ -652,47 +610,6 @@ mod tests {
     fn display_size_is_positive() {
         assert!(MINIMAP_DISPLAY_SIZE > 0.0);
         assert!(MINIMAP_SIDE > 0);
-    }
-
-    #[test]
-    fn zoom_out_increases_radius() {
-        assert_eq!(apply_zoom(20, MINIMAP_ZOOM_STEP), 25);
-    }
-
-    #[test]
-    fn zoom_clamps_at_max_radius() {
-        assert_eq!(
-            apply_zoom(MINIMAP_VIEW_RADIUS_MAX, MINIMAP_ZOOM_STEP),
-            MINIMAP_VIEW_RADIUS_MAX
-        );
-    }
-
-    #[test]
-    fn zoom_clamps_at_min_is_default_radius() {
-        // 최솟값이 기본값과 같으므로 기본 상태에서 줌인해도 변하지 않는다
-        assert_eq!(
-            apply_zoom(MINIMAP_RADIUS, -MINIMAP_ZOOM_STEP),
-            MINIMAP_RADIUS
-        );
-    }
-
-    #[test]
-    fn default_view_radius_equals_min() {
-        assert_eq!(MINIMAP_VIEW_RADIUS_MIN, MINIMAP_RADIUS);
-        assert!(MINIMAP_RADIUS <= MINIMAP_VIEW_RADIUS_MAX);
-    }
-
-    #[test]
-    fn zoom_scale_at_default_is_one() {
-        let scale = MINIMAP_RADIUS as f32 / MINIMAP_RADIUS as f32;
-        assert!((scale - 1.0).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn zoom_scale_zoomed_out_is_greater_than_one() {
-        let radius = apply_zoom(MINIMAP_RADIUS, MINIMAP_ZOOM_STEP);
-        let scale = radius as f32 / MINIMAP_RADIUS as f32;
-        assert!(scale > 1.0);
     }
 
     #[test]

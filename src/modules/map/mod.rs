@@ -405,33 +405,16 @@ fn execute_regen(
     }
 }
 
-/// 카메라 중심 기준으로 타일이 뷰포트 내에 있는지 확인한다 (+ 2타일 여백 포함)
-pub(crate) fn tile_in_viewport(tx: i32, ty: i32, cx: i32, cy: i32) -> bool {
-    const HALF_W: i32 = 22; // 40타일 / 2 + 2 여백
-    const HALF_H: i32 = 15; // 25타일 / 2 + 2 여백
-    (tx - cx).abs() <= HALF_W && (ty - cy).abs() <= HALF_H
-}
-
 pub fn update_tile_visibility(
     map_res: Res<MapResource>,
-    camera_q: Query<&Transform, With<Camera>>,
     mut tile_query: Query<(&TileEntity, &mut Text, &mut Visibility)>,
 ) {
     if !map_res.is_changed() { return; }
 
-    let (cx, cy) = camera_q.get_single()
-        .map(|t| world_to_tile_coords(t.translation))
-        .map(|(x, y)| (x as i32, y as i32))
-        .unwrap_or((MAP_WIDTH as i32 / 2, MAP_HEIGHT as i32 / 2));
-
     let map = map_res.map();
     for (tile, mut text, mut vis) in tile_query.iter_mut() {
         let idx = map.index(tile.x, tile.y);
-        let in_vp = tile_in_viewport(tile.x as i32, tile.y as i32, cx, cy);
-
-        let target_vis = if in_vp && map.tiles[idx].visible {
-            Visibility::Visible
-        } else if in_vp && map.tiles[idx].revealed {
+        let target_vis = if map.tiles[idx].visible || map.tiles[idx].revealed {
             Visibility::Visible
         } else {
             Visibility::Hidden
@@ -633,27 +616,9 @@ pub fn is_line_of_sight_clear(map: &Map, x0: i32, y0: i32, x1: i32, y1: i32) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{MapGenerator, MapGeneratorRegistry, Map, tile_in_viewport,
+    use super::{MapGenerator, MapGeneratorRegistry, Map,
         TileKind, Rect, random_floor_tile_anywhere};
     use rand::SeedableRng;
-
-    #[test]
-    fn viewport_contains_camera_center() {
-        assert!(tile_in_viewport(10, 10, 10, 10));
-    }
-
-    #[test]
-    fn viewport_includes_tiles_at_boundary() {
-        // HALF_W=22, HALF_H=15
-        assert!(tile_in_viewport(22, 0, 0, 0));
-        assert!(tile_in_viewport(0, 15, 0, 0));
-    }
-
-    #[test]
-    fn viewport_excludes_tiles_beyond_boundary() {
-        assert!(!tile_in_viewport(23, 0, 0, 0));
-        assert!(!tile_in_viewport(0, 16, 0, 0));
-    }
 
     struct NamedGen(&'static str);
     impl MapGenerator for NamedGen {

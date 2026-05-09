@@ -420,12 +420,32 @@ fn respawn_player_on_regen(
 
 fn camera_follow_player(
     player_query: Query<&Transform, With<Player>>,
-    mut camera_query: Query<&mut Transform, (With<Camera>, Without<Player>)>,
+    mut camera_query: Query<(&mut Transform, &OrthographicProjection), (With<Camera>, Without<Player>)>,
 ) {
+    use crate::modules::map::{MAP_WIDTH, MAP_HEIGHT, TILE_SIZE};
     let Ok(pt) = player_query.get_single() else { return };
-    let Ok(mut ct) = camera_query.get_single_mut() else { return };
-    ct.translation.x = pt.translation.x;
-    ct.translation.y = pt.translation.y;
+    let Ok((mut ct, proj)) = camera_query.get_single_mut() else { return };
+
+    // 카메라 viewport 가 윈도우 크기에 따라 변하므로 동적으로 clamp.
+    // viewport 가 맵보다 크면 외부 노출이 불가피하므로 중앙 (0, 0) 에 고정.
+    let map_w = MAP_WIDTH as f32 * TILE_SIZE;
+    let map_h = MAP_HEIGHT as f32 * TILE_SIZE;
+    let half_w = proj.area.width() / 2.0;
+    let half_h = proj.area.height() / 2.0;
+
+    let cx = if half_w * 2.0 >= map_w {
+        0.0
+    } else {
+        pt.translation.x.clamp(half_w - map_w / 2.0, map_w / 2.0 - half_w)
+    };
+    let cy = if half_h * 2.0 >= map_h {
+        0.0
+    } else {
+        pt.translation.y.clamp(half_h - map_h / 2.0, map_h / 2.0 - half_h)
+    };
+
+    ct.translation.x = cx;
+    ct.translation.y = cy;
 }
 
 fn update_fov(
