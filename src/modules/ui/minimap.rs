@@ -334,13 +334,8 @@ pub(crate) fn marker_pixel_coords(
     Some((mtx, mty))
 }
 
-/// 마커 중심 픽셀과 상하좌우 픽셀을 반환한다.
-/// 한 점보다 또렷한 작은 십자 형태를 만들어 고해상도 UI에서도 흐려 보이지 않게 한다.
-pub(crate) fn marker_stamp_pixels(center_x: u32, center_y: u32) -> [(i32, i32); 5] {
-    let x = center_x as i32;
-    let y = center_y as i32;
-    [(x, y), (x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]
-}
+// (이전에 5 픽셀 십자 stamp 가 있었으나, 미니맵에서 너무 큰 영역을 차지해 제거.
+// 색상이 충분히 구분되므로 1 픽셀로도 가독성이 충분하다.)
 
 /// 미니맵 이미지의 단일 픽셀에 색상을 기록한다.
 /// 스탬프 일부가 경계에 걸릴 때는 다이아몬드 내부 픽셀만 남긴다.
@@ -422,17 +417,14 @@ fn update_minimap(
         }
     }
 
-    // 마커는 작은 십자 스탬프로 올려 한 픽셀 점보다 눈에 잘 띄게 한다.
+    // 마커는 단일 픽셀 — 색상으로 종류 구분.
     for marker in markers.0.iter().filter(|m| m.zone == world_state.current) {
         let Some((mtx, mty)) =
             marker_pixel_coords(player_x, player_y, marker.tile_x, marker.tile_y, scale)
         else {
             continue;
         };
-
-        for (x, y) in marker_stamp_pixels(mtx, mty) {
-            write_minimap_pixel(image, x, y, marker.kind.color());
-        }
+        write_minimap_pixel(image, mtx as i32, mty as i32, marker.kind.color());
     }
 }
 
@@ -687,18 +679,12 @@ mod tests {
     }
 
     #[test]
-    fn marker_stamp_includes_center_and_cardinals() {
-        let x = MINIMAP_RADIUS as u32;
-        let y = MINIMAP_RADIUS as u32;
+    fn marker_pixel_at_player_position_is_center() {
+        // 마커가 플레이어 위치에 있으면 미니맵 중앙 픽셀이 된다 — 1 픽셀 마커
+        let center = MINIMAP_RADIUS as u32;
         assert_eq!(
-            marker_stamp_pixels(x, y),
-            [
-                (x as i32, y as i32),
-                (x as i32 - 1, y as i32),
-                (x as i32 + 1, y as i32),
-                (x as i32, y as i32 - 1),
-                (x as i32, y as i32 + 1),
-            ],
+            marker_pixel_coords(40, 50, 40, 50, 1.0),
+            Some((center, center))
         );
     }
 }
