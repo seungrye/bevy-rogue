@@ -421,6 +421,107 @@ pub struct ConsumableMeta {
     pub effect: ConsumableEffect,
 }
 
+// ── 시작 로드아웃 (assets/items/start_loadout.ron) ─────────────────────────
+
+/// 새 게임 시작 시 적용되는 기본 인벤토리·장비·금화.
+/// id 는 weapons.ron / armors.ron / consumables.ron 의 식별자.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct StartLoadout {
+    pub gold: u32,
+    #[serde(default)]
+    pub weapon: Option<String>,
+    #[serde(default)]
+    pub armor: Option<String>,
+    #[serde(default)]
+    pub items: Vec<String>,
+    #[serde(default)]
+    pub consumables: Vec<(String, u32)>,
+}
+
+#[derive(Resource, Default)]
+pub struct StartLoadoutRegistry(pub StartLoadout);
+
+const START_LOADOUT_PATH: &str = "assets/items/start_loadout.ron";
+
+fn load_start_loadout_system(mut registry: ResMut<StartLoadoutRegistry>) {
+    match std::fs::read_to_string(START_LOADOUT_PATH) {
+        Ok(text) => match ron::de::from_str::<StartLoadout>(&text) {
+            Ok(loadout) => {
+                info!("start_loadout 로드 완료 (gold: {}, items: {}, consumables: {})",
+                    loadout.gold, loadout.items.len(), loadout.consumables.len());
+                registry.0 = loadout;
+            }
+            Err(e) => {
+                warn!("{} 파싱 실패, 기본 로드아웃 사용: {}", START_LOADOUT_PATH, e);
+                registry.0 = StartLoadout { gold: 50, ..Default::default() };
+            }
+        },
+        Err(_) => {
+            registry.0 = StartLoadout { gold: 50, ..Default::default() };
+        }
+    }
+}
+
+/// loadout 을 inventory / equipment 에 적용한다.
+/// 호출자가 미리 inventory / equipment 를 default 로 초기화한 뒤 호출.
+/// 등록되지 않은 id 는 warn 로그 후 스킵.
+pub fn apply_start_loadout(
+    inv: &mut PlayerInventory,
+    eq: &mut PlayerEquipment,
+    loadout: &StartLoadout,
+    registry: &ItemRegistry,
+) {
+    inv.gold = loadout.gold;
+
+    if let Some(id) = &loadout.weapon {
+        match registry.intern_weapon(id) {
+            Some(intern) => eq.weapon = Some(WeaponKind(intern)),
+            None => warn!("start_loadout: 알 수 없는 weapon id '{}'", id),
+        }
+    }
+    if let Some(id) = &loadout.armor {
+        match registry.intern_armor(id) {
+            Some(intern) => eq.armor = Some(ArmorKind(intern)),
+            None => warn!("start_loadout: 알 수 없는 armor id '{}'", id),
+        }
+    }
+
+    for id in &loadout.items {
+        if let Some(intern) = registry.intern_weapon(id) {
+            inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind(intern)) });
+        } else if let Some(intern) = registry.intern_armor(id) {
+            inv.items.push(InventoryItem { kind: ItemKind::Armor(ArmorKind(intern)) });
+        } else {
+            warn!("start_loadout: 알 수 없는 item id '{}'", id);
+        }
+    }
+
+    for (id, count) in &loadout.consumables {
+        match registry.intern_consumable(id) {
+            Some(intern) => {
+                for _ in 0..*count {
+                    inv.add_consumable(ConsumableKind(intern));
+                }
+            }
+            None => warn!("start_loadout: 알 수 없는 consumable id '{}'", id),
+        }
+    }
+}
+
+/// 세이브 파일이 없을 때만 시작 로드아웃을 적용한다.
+/// 세이브가 있으면 `save::load_if_save_exists` 가 inventory 를 덮어쓴다.
+fn apply_start_loadout_if_no_save(
+    mut inv: ResMut<PlayerInventory>,
+    mut eq: ResMut<PlayerEquipment>,
+    loadout: Res<StartLoadoutRegistry>,
+    registry: Res<ItemRegistry>,
+) {
+    if std::path::Path::new(crate::modules::save::SAVE_PATH).exists() {
+        return;
+    }
+    apply_start_loadout(&mut inv, &mut eq, &loadout.0, &registry);
+}
+
 // ── 로드 시스템 ────────────────────────────────────────────────────────────
 fn load_weapons_system(mut registry: ResMut<ItemRegistry>) {
     let path = "assets/items/weapons.ron";
@@ -694,13 +795,16 @@ impl Plugin for ItemPlugin {
             .init_resource::<PlayerEquipment>()
             .init_resource::<EquipmentPanelOpen>()
             .init_resource::<QuestItemRegistry>()
+            .init_resource::<StartLoadoutRegistry>()
             .add_systems(Startup, (
                 load_quest_items_system.in_set(ItemSystemSet::Load),
                 load_weapons_system.in_set(ItemSystemSet::Load),
                 load_armors_system.in_set(ItemSystemSet::Load),
                 load_consumables_system.in_set(ItemSystemSet::Load),
+                load_start_loadout_system.in_set(ItemSystemSet::Load),
                 setup_glyph_fonts,
             ))
+            .add_systems(PostStartup, apply_start_loadout_if_no_save)
             .add_systems(Update, (
                 spawn_dropped_items,
                 pickup_items.after(PlayerSystemSet::MovementComplete),
@@ -1059,6 +1163,53 @@ mod tests {
     #[test]
     fn glyph_style_from_str_invalid_returns_none() {
         assert_eq!(GlyphStyle::from_str("unknown"), None);
+    }
+
+    #[test]
+    fn start_loadout_ron_parses() {
+        let text = std::fs::read_to_string("assets/items/start_loadout.ron")
+            .expect("start_loadout.ron 읽기 실패");
+        let loadout: StartLoadout = ron::de::from_str(&text).expect("start_loadout.ron 파싱 실패");
+        assert_eq!(loadout.gold, 50);
+        assert_eq!(loadout.items, vec!["sword", "spear", "bow"]);
+        assert_eq!(loadout.consumables, vec![("health_potion".to_string(), 10)]);
+    }
+
+    #[test]
+    fn apply_start_loadout_pushes_inventory_items() {
+        let mut inv = PlayerInventory::default();
+        let mut eq = PlayerEquipment::default();
+        let loadout = StartLoadout {
+            gold: 100,
+            weapon: None,
+            armor: None,
+            items: vec!["sword".into(), "spear".into(), "bow".into()],
+            consumables: vec![("health_potion".into(), 10)],
+        };
+        apply_start_loadout(&mut inv, &mut eq, &loadout, qi());
+        assert_eq!(inv.gold, 100);
+        assert_eq!(inv.items.len(), 3);
+        let total_potions: u32 = inv.consumables.iter()
+            .filter(|(k, _)| *k == ConsumableKind::HEALTH_POTION)
+            .map(|(_, n)| *n).sum();
+        assert_eq!(total_potions, 10);
+    }
+
+    #[test]
+    fn apply_start_loadout_skips_unknown_id() {
+        let mut inv = PlayerInventory::default();
+        let mut eq = PlayerEquipment::default();
+        let loadout = StartLoadout {
+            gold: 0,
+            weapon: Some("nonexistent".into()),
+            armor: None,
+            items: vec!["bogus".into(), "sword".into()],
+            consumables: vec![("not_a_thing".into(), 5)],
+        };
+        apply_start_loadout(&mut inv, &mut eq, &loadout, qi());
+        assert!(eq.weapon.is_none(), "알 수 없는 weapon id 는 스킵");
+        assert_eq!(inv.items.len(), 1, "알 수 없는 item id 는 스킵");
+        assert!(inv.consumables.is_empty(), "알 수 없는 consumable id 는 스킵");
     }
 
     fn lookup_display_name(qk: QuestItemKind) -> &'static str {

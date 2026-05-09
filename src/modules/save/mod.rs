@@ -12,7 +12,7 @@ use crate::modules::{
     map::world_to_tile_coords,
 };
 
-const SAVE_PATH: &str = "save/progress.ron";
+pub const SAVE_PATH: &str = "save/progress.ron";
 const SAVE_TMP:  &str = "save/progress.ron.tmp";
 const SAVE_VERSION: u32 = 5;
 

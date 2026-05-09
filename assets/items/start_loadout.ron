@@ -1,0 +1,13 @@
+// 새 게임 시작 시 플레이어 기본 인벤토리·장비·금화.
+// 형식: StartLoadout
+//   gold: 시작 금화
+//   weapon / armor: 장착 슬롯 (None 이면 미장착). id 는 weapons.ron / armors.ron 참조.
+//   items: 인벤토리에 들어갈 무기/방어구 id 목록 (중복 허용 — 같은 종류 여러 개)
+//   consumables: 소비 아이템 (id, count) 목록
+StartLoadout(
+    gold: 50,
+    weapon: None,
+    armor: None,
+    items: ["sword", "spear", "bow"],
+    consumables: [("health_potion", 10)],
+)

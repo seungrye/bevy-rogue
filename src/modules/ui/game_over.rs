@@ -154,6 +154,8 @@ struct NewGameParams<'w, 's> {
     villager_q: Query<'w, 's, Entity, With<Villager>>,
     portal_q: Query<'w, 's, Entity, With<ZonePortal>>,
     blood_q: Query<'w, 's, Entity, With<BloodStain>>,
+    item_registry: Res<'w, crate::modules::item::ItemRegistry>,
+    start_loadout: Res<'w, crate::modules::item::StartLoadoutRegistry>,
 }
 
 /// Game Over 상태에서 `Esc` 입력을 게임 종료 이벤트로 변환한다.
@@ -216,6 +218,12 @@ fn start_new_run(params: &mut NewGameParams) {
     *params.quest_state = QuestState::default();
     *params.inventory = PlayerInventory::default();
     *params.equipment = PlayerEquipment::default();
+    crate::modules::item::apply_start_loadout(
+        &mut params.inventory,
+        &mut params.equipment,
+        &params.start_loadout.0,
+        &params.item_registry,
+    );
     *params.progress = PlayerProgress::default();
     params.message_log.0.clear();
     params.equipment_open.0 = false;
