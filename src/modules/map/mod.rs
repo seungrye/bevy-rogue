@@ -557,6 +557,7 @@ pub fn world_to_tile_coords(world_pos: Vec3) -> (usize, usize) {
 
 /// 방 안의 Floor 타일 중 `used` 에 없는 타일을 무작위로 하나 골라 반환한다.
 /// 선택된 타일은 `used` 에 추가되어 이후 호출에서 중복 선택이 방지된다.
+/// room 경계가 맵 범위를 벗어나면 자동으로 clamp 한다.
 pub fn random_floor_tile_in_room(
     room: &Rect,
     map: &Map,
@@ -564,10 +565,49 @@ pub fn random_floor_tile_in_room(
     rng: &mut impl rand::Rng,
 ) -> Option<(usize, usize)> {
     use rand::seq::SliceRandom;
-    let mut candidates: Vec<(usize, usize)> = (room.x1..=room.x2)
-        .flat_map(|x| (room.y1..=room.y2).map(move |y| (x, y)))
-        .filter(|&(x, y)| map.get_tile(x, y) == TileKind::Floor && !used.contains(&(x, y)))
+    let x_max = (room.x2.min(map.width.saturating_sub(1))).max(room.x1);
+    let y_max = (room.y2.min(map.height.saturating_sub(1))).max(room.y1);
+    let mut candidates: Vec<(usize, usize)> = (room.x1..=x_max)
+        .flat_map(|x| (room.y1..=y_max).map(move |y| (x, y)))
+        .filter(|&(x, y)| x < map.width && y < map.height
+            && map.get_tile(x, y) == TileKind::Floor
+            && !used.contains(&(x, y)))
         .collect();
+    candidates.shuffle(rng);
+    let &(x, y) = candidates.first()?;
+    used.insert((x, y));
+    Some((x, y))
+}
+
+/// rooms 중에서 무작위 room 을 골라 그 안의 Floor 타일을 반환한다.
+/// 한 room 에 빈 자리가 없으면 다음 room 시도. 모든 room 실패 시 맵 전체에서
+/// 선형 탐색으로 Floor 타일을 찾는다 (견고한 fallback).
+///
+/// 퀘스트 아이템·몬스터 스폰 등 "어디든 Floor 라면 OK" 인 경우에 사용한다.
+pub fn random_floor_tile_anywhere(
+    rooms: &[Rect],
+    map: &Map,
+    used: &mut std::collections::HashSet<(usize, usize)>,
+    rng: &mut impl rand::Rng,
+) -> Option<(usize, usize)> {
+    use rand::seq::SliceRandom;
+    // 1) room 무작위 순서로 시도 → 단일 room 집중 방지
+    let mut order: Vec<usize> = (0..rooms.len()).collect();
+    order.shuffle(rng);
+    for idx in order {
+        if let Some(p) = random_floor_tile_in_room(&rooms[idx], map, used, rng) {
+            return Some(p);
+        }
+    }
+    // 2) 마지막 fallback — 맵 전체에서 Floor 타일 선형 검색
+    let mut candidates: Vec<(usize, usize)> = Vec::new();
+    for y in 0..map.height {
+        for x in 0..map.width {
+            if map.get_tile(x, y) == TileKind::Floor && !used.contains(&(x, y)) {
+                candidates.push((x, y));
+            }
+        }
+    }
     candidates.shuffle(rng);
     let &(x, y) = candidates.first()?;
     used.insert((x, y));
@@ -593,7 +633,9 @@ pub fn is_line_of_sight_clear(map: &Map, x0: i32, y0: i32, x1: i32, y1: i32) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{MapGenerator, MapGeneratorRegistry, Map, tile_in_viewport};
+    use super::{MapGenerator, MapGeneratorRegistry, Map, tile_in_viewport,
+        TileKind, Rect, random_floor_tile_anywhere};
+    use rand::SeedableRng;
 
     #[test]
     fn viewport_contains_camera_center() {
@@ -665,5 +707,68 @@ mod tests {
     fn generate_with_unknown_returns_none() {
         let r = registry_with(&["A"]);
         assert!(r.generate_with("missing", 10, 10, 1).is_none());
+    }
+
+    #[test]
+    fn random_floor_tile_anywhere_returns_floor_only() {
+        // 두 room — 첫 room 은 모두 wall, 두 번째는 모두 floor
+        let mut map = Map::new(20, 20);
+        // 두 번째 room 영역만 floor 로 변경
+        for y in 10..15 { for x in 10..15 { map.set_tile(x, y, TileKind::Floor); } }
+        let rooms = vec![
+            Rect::new(2, 2, 5, 5),    // 모두 Wall
+            Rect::new(10, 10, 5, 5),  // 모두 Floor
+        ];
+        let mut used = std::collections::HashSet::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let (x, y) = random_floor_tile_anywhere(&rooms, &map, &mut used, &mut rng).unwrap();
+        // 무조건 두 번째 room 안에서 나와야 함 (첫 room 은 wall 뿐)
+        assert!(x >= 10 && x <= 14 && y >= 10 && y <= 14);
+        assert_eq!(map.get_tile(x, y), TileKind::Floor);
+    }
+
+    #[test]
+    fn random_floor_tile_anywhere_distributes_across_rooms() {
+        // 두 room, 모두 충분한 floor — 여러 번 호출 시 두 room 모두 사용됨
+        let mut map = Map::new(40, 20);
+        for y in 1..19 { for x in 1..39 { map.set_tile(x, y, TileKind::Floor); } }
+        let rooms = vec![
+            Rect::new(1, 1, 10, 10),    // 좌측
+            Rect::new(20, 1, 10, 10),   // 우측
+        ];
+        let mut used = std::collections::HashSet::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let mut left_count = 0;
+        let mut right_count = 0;
+        for _ in 0..20 {
+            let (x, _) = random_floor_tile_anywhere(&rooms, &map, &mut used, &mut rng).unwrap();
+            if x < 12 { left_count += 1; } else { right_count += 1; }
+        }
+        // 두 room 모두 한 번 이상 선택돼야 한다 (단일 room 집중 회피)
+        assert!(left_count > 0 && right_count > 0,
+            "left={}, right={}: 한쪽으로 집중되면 안 된다", left_count, right_count);
+    }
+
+    #[test]
+    fn random_floor_tile_anywhere_clamps_room_beyond_map_bounds() {
+        // room.x2 가 map.width 를 넘어도 영역 밖 좌표를 반환하지 않는다
+        let mut map = Map::new(10, 10);
+        for y in 0..10 { for x in 0..10 { map.set_tile(x, y, TileKind::Floor); } }
+        let rooms = vec![Rect::new(5, 5, 100, 100)];  // 의도적으로 영역 밖 boundary
+        let mut used = std::collections::HashSet::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(1);
+        for _ in 0..30 {
+            let (x, y) = random_floor_tile_anywhere(&rooms, &map, &mut used, &mut rng).unwrap();
+            assert!(x < map.width && y < map.height, "({},{}) 가 영역 밖이면 안 된다", x, y);
+        }
+    }
+
+    #[test]
+    fn random_floor_tile_anywhere_returns_none_when_no_floor() {
+        let map = Map::new(10, 10);  // 전체 wall
+        let rooms = vec![Rect::new(1, 1, 8, 8)];
+        let mut used = std::collections::HashSet::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(1);
+        assert!(random_floor_tile_anywhere(&rooms, &map, &mut used, &mut rng).is_none());
     }
 }

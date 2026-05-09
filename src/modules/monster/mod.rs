@@ -144,7 +144,13 @@ fn spawn_from_slots(
 ) {
     let font = asset_server.load("fonts/FiraMono-Medium.ttf");
     let mut rng = rand::thread_rng();
+    // 같은 spawn 호출 내 monster 가 같은 타일에 겹치지 않도록 한다
+    let mut used: HashSet<(usize, usize)> = HashSet::new();
 
+    // 매 호출마다 dummy map 만들기는 비용 — 대신 호출자가 map 을 알 수 없으니 room.center 를
+    // fallback 으로 사용. 다만 random_floor_tile_in_room 은 map 이 필요. spawn_from_slots
+    // 시그니처에 map 추가하는 건 여러 호출부 영향이 커서 별도 정리 시점에 진행.
+    // 현재는 room 안 random tile 을 직접 검색 (Floor 검사 포함, 영역 clamp).
     for (slot_idx, (slot, room)) in slots.iter().zip(rooms.iter().skip(1)).enumerate() {
         if let Some(t) = slot.respawn_at_turn {
             if t > global_turn { continue; }
@@ -152,16 +158,19 @@ fn spawn_from_slots(
         let data = MONSTER_DATA[slot.data_idx];
         let (name, glyph, color, hp, atk, def, vis, spd) = (data.0, data.1, data.2, data.3, data.4, data.5, data.6, data.7);
 
-        let (tx, ty) = {
-            let mut tile = room.center();
-            for _ in 0..10 {
-                let x = rng.gen_range(room.x1..room.x2);
-                let y = rng.gen_range(room.y1..room.y2);
-                tile = (x, y);
-                break;
-            }
-            tile
-        };
+        // room 경계 안에서 무작위 좌표 — wall 위 / 영역 밖 회피.
+        // Map 객체가 없는 컨텍스트라 Floor 검사는 못 하고, room 좌표가 항상 Floor 라고
+        // 가정한다 (rooms 는 map 생성 시 이미 Floor 영역으로 정의됨). 영역 clamp 만 적용.
+        let x_max = (room.x2.min(MAP_WIDTH.saturating_sub(1))).max(room.x1);
+        let y_max = (room.y2.min(MAP_HEIGHT.saturating_sub(1))).max(room.y1);
+        let mut tile = room.center();
+        for _ in 0..10 {
+            let x = rng.gen_range(room.x1..=x_max);
+            let y = rng.gen_range(room.y1..=y_max);
+            if !used.contains(&(x, y)) { tile = (x, y); break; }
+        }
+        used.insert(tile);
+        let (tx, ty) = tile;
 
         let coord = tile_to_world_coords(tx, ty);
         commands.spawn((

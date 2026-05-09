@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use serde::Deserialize;
 use crate::modules::{
     item::{PlayerInventory, ItemKind, QuestItemKind, InventoryItem, Item, ItemSystemSet},
-    map::{MapResource, TILE_SIZE, tile_to_world_coords, UsedSpawnTiles, random_floor_tile_in_room},
+    map::{MapResource, TILE_SIZE, tile_to_world_coords, UsedSpawnTiles, random_floor_tile_anywhere},
     ui::minimap::{DiscoveredMarkers, MarkerKind},
     zone::{ZoneId, SpawnQuestPortalEvent},
 };
@@ -654,15 +654,21 @@ fn spawn_quest_items(
             let Some(kind) = item_id_to_kind(&spawn.item, &quest_items) else { continue };
             let map = &map_res.0;
 
-            let rooms = &map.rooms;
-            let candidate_rooms: Vec<_> = if rooms.len() > 1 { rooms[1..].iter().collect() } else { rooms.iter().collect() };
+            // rooms[0] 은 보통 player 시작 방 — 가능하면 다른 room 우선.
+            // 1 개뿐이면 그 방에라도 스폰.
+            let rooms_slice: &[crate::modules::map::Rect] = if map.rooms.len() > 1 {
+                &map.rooms[1..]
+            } else {
+                &map.rooms[..]
+            };
             let font = asset_server.load("fonts/FiraMono-Medium.ttf");
 
             for _ in 0..spawn.count {
-                let (tx, ty) = candidate_rooms.iter()
-                    .flat_map(|r| random_floor_tile_in_room(r, map, &mut used_spawn.0, &mut rng))
-                    .next()
-                    .unwrap_or_else(|| map.rooms.last().map(|r| r.center()).unwrap_or((map.width / 2, map.height / 2)));
+                let Some((tx, ty)) = random_floor_tile_anywhere(rooms_slice, map, &mut used_spawn.0, &mut rng)
+                else {
+                    info!("퀘스트 아이템 스폰 실패 — Floor 타일 없음: {}", spawn.item);
+                    continue;
+                };
 
                 let pos = tile_to_world_coords(tx, ty);
                 commands.spawn((
