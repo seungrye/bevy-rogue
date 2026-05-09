@@ -45,6 +45,102 @@ newtype. 상수 `WeaponKind::SWORD/SPEAR/BOW`, `ArmorKind::LEATHER_ARMOR`,
 `intern_*(id)`. `QuestItemRegistry` 는 type alias 로 호환 유지. 게임 로직
 enum (`Element`, `ConsumableEffect`) 은 그대로 — RON 에서 enum variant 로.
 
+## RON 데이터 형식
+
+### `assets/items/weapons.ron` (`Vec<WeaponDef>`)
+```ron
+[
+    WeaponDef(
+        id: "sword",
+        display_name: "검",
+        glyph_ascii: "/",
+        glyph_unicode: "\u{1F5E1}",
+        glyph_game_icon: "\u{E946}",
+        pickup_message: "검을 획득했다!",
+        attack_power: 7,
+        element: Some("fire"),
+    ),
+]
+```
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `id` | `String` | 내부 식별자 (`item_id_to_kind` 매핑) |
+| `display_name` | `String` | UI 표기 |
+| `glyph_ascii` / `glyph_unicode` / `glyph_game_icon` | `String` | 글리프 스타일별 표시 문자 |
+| `pickup_message` | `String` | 획득 시 로그 |
+| `attack_power` | `i32` | 장착 시 공격력 (기본 ATK 대체) |
+| `element` | `Option<String>` | `"fire"`/`"ice"`/`"lightning"` 또는 `None` |
+
+### `assets/items/armors.ron` (`Vec<ArmorDef>`)
+```ron
+[
+    ArmorDef(
+        id: "leather_armor",
+        display_name: "가죽 갑옷",
+        glyph_ascii: "]",
+        glyph_unicode: "\u{1F6E1}",
+        glyph_game_icon: "\u{EA96}",
+        pickup_message: "가죽 갑옷을 획득했다!",
+        defense_bonus: 2,
+    ),
+]
+```
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `id` | `String` | 내부 식별자 |
+| `display_name` | `String` | UI 표기 |
+| `glyph_ascii` / `glyph_unicode` / `glyph_game_icon` | `String` | 글리프 |
+| `pickup_message` | `String` | 획득 시 로그 |
+| `defense_bonus` | `i32` | 기본 DEF 에 더해지는 보너스 |
+
+### `assets/items/consumables.ron` (`Vec<ConsumableDef>`)
+```ron
+[
+    ConsumableDef(
+        id: "health_potion",
+        display_name: "체력 물약",
+        glyph_ascii: "!",
+        glyph_unicode: "\u{2764}",
+        glyph_game_icon: "\u{EA72}",
+        pickup_message: "체력 물약을 획득했다!",
+        effect: Heal(8),
+    ),
+]
+```
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `id` | `String` | 내부 식별자 |
+| `display_name` | `String` | UI 표기 |
+| `glyph_*` | `String` | 글리프 |
+| `pickup_message` | `String` | 획득 시 로그 |
+| `effect` | `ConsumableEffect` | 효과 enum — `Heal(i32)` (현재 유일 변형) |
+
+### `assets/items/quest_items.ron` (`Vec<QuestItemDef>`)
+```ron
+[
+    QuestItemDef(
+        id: "eternal_gem",
+        display_name: "영원의 보석",
+        glyph_ascii: "*",
+        glyph_unicode: "\u{25C6}",
+        glyph_game_icon: "\u{25C6}",
+        pickup_message: "영원의 보석을 획득했다!",
+        image_path: "scene/open-chest.png",
+    ),
+]
+```
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `id` | `String` | 퀘스트 RON 의 `GiveItem`/`RemoveItem`/spawn 에서 참조 |
+| `display_name` | `String` | 인벤토리/UI 표기 |
+| `glyph_*` | `String` | 글리프 |
+| `pickup_message` | `String` | 획득 시 로그 |
+| `image_path` | `String` | 획득 팝업 이미지 경로 (`assets/` 기준 상대) |
+
 ## 아이템 드롭
 
 몬스터 처치 시 `ItemDropEvent` 발행, 몬스터별 드롭 테이블 독립 확률 롤.

@@ -81,6 +81,42 @@
 - [x] 각 일반 NPC(퀘스트 없는 NPC 포함 노인)는 32줄 이상의 대사 보유
 - [x] 퀘스트 NPC(장로·연금술사)는 일반 대사 없이 퀘스트 다이얼로그만 사용
 
+## RON 데이터 형식
+
+### `assets/villagers/villagers.ron` (`Vec<VillagerDef>`)
+```ron
+[
+    VillagerDef(
+        name: "장로",
+        color: (0.9, 0.8, 0.5),
+        dialogs: [],
+        quest_id: Some("gem_quest"),
+        speed: 0.5,
+    ),
+    VillagerDef(
+        name: "촌장",
+        color: (1.0, 0.9, 0.4),
+        dialogs: [
+            "어서 오시오, 모험가여.",
+            "마을은 평화롭소.",
+        ],
+        quest_id: None,
+        speed: 1.0,
+    ),
+]
+```
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `name` | `String` | 표시 이름. 퀘스트 RON 의 `giver_npc` 와 일치해야 함 |
+| `color` | `(f32, f32, f32)` | RGB (0.0~1.0) |
+| `dialogs` | `Vec<String>` | 일반 대사 목록 (퀘스트 NPC 는 빈 배열) |
+| `quest_id` | `Option<String>` | 퀘스트 NPC 의 퀘스트 ID, 일반 NPC 는 `None` |
+| `speed` | `f32` | 이동 속도 배율 (1.0 = 기준) |
+
+`VillagerRegistry` Resource 가 Startup 에 로드. `validate_quest_villager_refs`
+가 모든 퀘스트의 `giver_npc` 가 registry 에 존재함을 검증.
+
 ## 구현 범위
 
 - `MapType` 열거형 (`Dungeon`, `Village`) — `Map` 구조체에 포함
