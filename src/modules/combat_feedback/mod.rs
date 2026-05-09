@@ -8,8 +8,10 @@ pub const Z_BLOOD: f32 = 0.5;
 const BLOOD_LIFETIME_MIN: u32 = 15;
 const BLOOD_LIFETIME_MAX: u32 = 30;
 const PARTICLE_COUNT: usize = 8;
-const PARTICLE_LIFETIME: f32 = 0.45;
+const PARTICLE_LIFETIME: f32 = 0.3;
 const PARTICLE_SIZE: f32 = 3.0;
+/// 마찰 계수 — 시간에 따라 속도 감소시켜 자연스러운 정지 효과
+const PARTICLE_DAMPING: f32 = 6.0;
 
 #[derive(Component)]
 pub struct BloodStain {
@@ -103,7 +105,10 @@ fn spawn_blood_particles(pos: Vec2, commands: &mut Commands) {
             },
             RigidBody::Dynamic,
             Velocity::linear(Vec2::new(angle.cos() * speed, angle.sin() * speed)),
-            GravityScale(2.0),
+            // 탑다운 시점 — 중력 없음 (이전 GravityScale(2.0) 은 측면 게임 외관)
+            GravityScale(0.0),
+            // 시간에 따라 속도가 감쇠하여 자연스럽게 정지
+            Damping { linear_damping: PARTICLE_DAMPING, angular_damping: 0.0 },
             Collider::ball(1.5),
             Sensor,
             BloodParticle { lifetime: PARTICLE_LIFETIME },
@@ -233,5 +238,13 @@ mod tests {
     fn hit_flash_remaining_clamps_to_zero() {
         let r = hit_flash_remaining_after(0.05, 0.15);
         assert_eq!(r, 0.0);
+    }
+
+    #[test]
+    fn particle_constants_are_topdown_friendly() {
+        // 탑다운 시점 — 중력은 spawn 시 GravityScale(0.0) 으로 설정됨
+        // (코드 검증 — 상수만 확인 가능)
+        assert!(PARTICLE_LIFETIME <= 0.4, "lifetime 이 너무 길면 정지된 채 남는다");
+        assert!(PARTICLE_DAMPING > 0.0, "damping 이 있어야 자연스럽게 정지");
     }
 }
