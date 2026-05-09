@@ -14,9 +14,6 @@ pub const BOW_RANGE: i32 = 8;
 const ARROW_LIFETIME: f32 = 2.0;
 const ARROW_SIZE: Vec2 = Vec2::new(8.0, 3.0);
 const ARROW_COLOR: Color = Color::rgb(0.8, 0.6, 0.2);
-const GRAVITY_SCALE: f32 = 1.5;
-const PIXELS_PER_METER: f32 = 100.0;
-const RAPIER_GRAVITY: f32 = 9.81;
 
 pub struct ProjectilePlugin;
 
@@ -52,10 +49,10 @@ fn fire_projectile(
         let delta = target - origin;
         let distance = delta.length().max(1.0);
 
+        // 탑다운 시점 — 중력 없이 직사. flight_time 은 속도 스케일링용으로 유지.
         let flight_time = 0.3 + distance / 400.0;
-        let g = GRAVITY_SCALE * RAPIER_GRAVITY * PIXELS_PER_METER;
         let vx = delta.x / flight_time;
-        let vy = (delta.y + 0.5 * g * flight_time * flight_time) / flight_time;
+        let vy = delta.y / flight_time;
 
         let initial_angle = vy.atan2(vx);
 
@@ -72,7 +69,7 @@ fn fire_projectile(
             },
             RigidBody::Dynamic,
             Velocity::linear(Vec2::new(vx, vy)),
-            GravityScale(GRAVITY_SCALE),
+            GravityScale(0.0),
             Collider::cuboid(4.0, 1.5),
             Sensor,
             Projectile {
@@ -193,13 +190,12 @@ mod tests {
     }
 
     #[test]
-    fn velocity_compensates_for_gravity() {
-        let g = GRAVITY_SCALE * RAPIER_GRAVITY * PIXELS_PER_METER;
+    fn flat_velocity_has_no_vertical_offset_for_horizontal_target() {
+        // 직사 — 수평 목표에 대한 vy 는 0 이어야 한다 (중력 보정 없음).
+        let dy = 0.0_f32;
         let flight_time = 0.5_f32;
-        let dy = 0.0_f32; // 수평 발사
-        let vy = (dy + 0.5 * g * flight_time * flight_time) / flight_time;
-        // 수직 속도가 양수여야 중력 보정이 된 것
-        assert!(vy > 0.0, "수평 목표에도 초기 상향 속도가 필요하다");
+        let vy = dy / flight_time;
+        assert_eq!(vy, 0.0);
     }
 
     #[test]
