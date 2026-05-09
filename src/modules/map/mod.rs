@@ -771,4 +771,26 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(1);
         assert!(random_floor_tile_anywhere(&rooms, &map, &mut used, &mut rng).is_none());
     }
+
+    #[test]
+    fn random_floor_tile_anywhere_never_returns_wall_in_mixed_map() {
+        // bsp 처럼 room boundary 안에 wall 이 섞인 맵에서도 wall 좌표 안 반환
+        let mut map = Map::new(20, 20);
+        // 체스판 패턴 — 절반은 floor, 절반은 wall
+        for y in 0..20 {
+            for x in 0..20 {
+                if (x + y) % 2 == 0 {
+                    map.set_tile(x, y, TileKind::Floor);
+                }
+            }
+        }
+        let rooms = vec![Rect::new(1, 1, 18, 18)];  // 전체 영역
+        let mut used = std::collections::HashSet::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(99);
+        for _ in 0..50 {
+            let (x, y) = random_floor_tile_anywhere(&rooms, &map, &mut used, &mut rng).unwrap();
+            assert_eq!(map.get_tile(x, y), TileKind::Floor,
+                "({},{}) 가 wall 인데 반환됨 — wall 위 spawn 버그", x, y);
+        }
+    }
 }

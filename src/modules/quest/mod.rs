@@ -197,7 +197,13 @@ impl Plugin for QuestPlugin {
                     .after(QuestSystemSet::Load)
                     .after(ItemSystemSet::Load),
             ))
-            .add_systems(Update, (check_auto_advance, spawn_quest_items));
+            .add_systems(Update, (
+                check_auto_advance,
+                // apply_map 이 새 MapResource 를 교체한 뒤에 실행되어야 한다.
+                // 같은 frame 에 ordering 없이 실행되면 옛 map 의 rooms/tiles 를 보고
+                // 좌표를 골라 새 map 에서 wall 위에 spawn 되는 race condition 발생.
+                spawn_quest_items.after(crate::modules::map::MapSystemSet::ExecuteRegen),
+            ));
     }
 }
 
@@ -669,6 +675,13 @@ fn spawn_quest_items(
                     info!("퀘스트 아이템 스폰 실패 — Floor 타일 없음: {}", spawn.item);
                     continue;
                 };
+
+                // 안전망: random_floor_tile_anywhere 가 Floor 만 반환해야 하지만
+                // race condition / map 캐시 불일치 등으로 wall 좌표가 나올 가능성을 가드한다.
+                if map.get_tile(tx, ty) != crate::modules::map::TileKind::Floor {
+                    error!("퀘스트 아이템 spawn 좌표 ({}, {}) 가 Floor 가 아님 — 스킵: {}", tx, ty, spawn.item);
+                    continue;
+                }
 
                 let pos = tile_to_world_coords(tx, ty);
                 commands.spawn((
