@@ -361,6 +361,7 @@ fn on_mouse_click(
     equipment_open: Res<EquipmentPanelOpen>,
     shop_open: Res<ShopPanelOpen>,
     help_open: Res<HelpPanelOpen>,
+    items: Res<crate::modules::item::ItemRegistry>,
 ) {
     if !mouse_input.just_pressed(MouseButton::Left) { return; }
     if equipment_open.0 || shop_open.0 || help_open.0 { return; }
@@ -380,7 +381,7 @@ fn on_mouse_click(
     let (px, py) = world_to_tile_coords(player_transform.translation);
 
     // 활 장착 + 몬스터 타일 + FOV 내 가시 + 사거리 내 → 화살 발사
-    if equipment.weapon == Some(WeaponKind::Bow) && monster_tiles.0.contains(&(tx, ty)) {
+    if equipment.weapon == Some(WeaponKind::BOW) && monster_tiles.0.contains(&(tx, ty)) {
         let idx = ty * MAP_WIDTH + tx;
         let dx = tx as i32 - px as i32;
         let dy = ty as i32 - py as i32;
@@ -389,7 +390,7 @@ fn on_mouse_click(
             fire_writer.send(FireProjectileEvent {
                 origin_tile: (px, py),
                 target_tile: (tx, ty),
-                damage: weapon_attack(WeaponKind::Bow),
+                damage: weapon_attack(WeaponKind::BOW, &items),
                 element: Some(crate::modules::elemental::Element::Lightning),
             });
             acted_writer.send(PlayerActedEvent);

@@ -97,6 +97,7 @@ fn handle_equipment_input(
     mut equipment: ResMut<PlayerEquipment>,
     mut player_query: Query<&mut CombatStats, With<Player>>,
     mut log: EventWriter<LogMessage>,
+    items: Res<crate::modules::item::ItemRegistry>,
 ) {
     if !panel_open.0 { return; }
 
@@ -123,19 +124,19 @@ fn handle_equipment_input(
                 ItemKind::Weapon(w) => {
                     if equipment.weapon == Some(w) {
                         equipment.weapon = None;
-                        log.send(LogMessage(format!("{} 해제.", w.display_name())));
+                        log.send(LogMessage(format!("{} 해제.", w.display_name(&items))));
                     } else {
                         equipment.weapon = Some(w);
-                        log.send(LogMessage(format!("{} 장착.", w.display_name())));
+                        log.send(LogMessage(format!("{} 장착.", w.display_name(&items))));
                     }
                 }
                 ItemKind::Armor(a) => {
                     if equipment.armor == Some(a) {
                         equipment.armor = None;
-                        log.send(LogMessage(format!("{} 해제.", a.display_name())));
+                        log.send(LogMessage(format!("{} 해제.", a.display_name(&items))));
                     } else {
                         equipment.armor = Some(a);
-                        log.send(LogMessage(format!("{} 장착.", a.display_name())));
+                        log.send(LogMessage(format!("{} 장착.", a.display_name(&items))));
                     }
                 }
                 ItemKind::Consumable(_) | ItemKind::QuestItem(_) => {}
@@ -146,11 +147,11 @@ fn handle_equipment_input(
                 let (ck, _) = inventory.consumables[ci];
                 if inventory.use_consumable(ck) {
                     if let Ok(mut stats) = player_query.get_single_mut() {
-                        let heal = ck.heal_amount();
+                        let heal = ck.heal_amount(&items);
                         stats.hp = (stats.hp + heal).min(stats.max_hp);
                         log.send(LogMessage(format!(
                             "{} 사용. (HP +{}, {}/{})",
-                            ck.display_name(), heal, stats.hp, stats.max_hp
+                            ck.display_name(&items), heal, stats.hp, stats.max_hp
                         )));
                     }
                     let new_total = inventory.items.len() + inventory.consumables.len();
@@ -198,12 +199,15 @@ fn ts(value: impl Into<String>, font: Handle<Font>, size: f32, color: Color) -> 
 
 fn item_kind_icon(kind: &ItemKind) -> &'static str {
     match kind {
-        ItemKind::Weapon(WeaponKind::Sword) => WEAPON_ICON,
-        ItemKind::Weapon(WeaponKind::Spear) => SPEAR_ICON,
-        ItemKind::Weapon(WeaponKind::Bow)   => BOW_ICON,
-        ItemKind::Armor(_)                  => ARMOR_ICON,
-        ItemKind::Consumable(_)             => POTION_ICON,
-        ItemKind::QuestItem(_)              => "*",
+        ItemKind::Weapon(w) => match w.0 {
+            "sword" => WEAPON_ICON,
+            "spear" => SPEAR_ICON,
+            "bow"   => BOW_ICON,
+            _       => WEAPON_ICON,
+        },
+        ItemKind::Armor(_)     => ARMOR_ICON,
+        ItemKind::Consumable(_) => POTION_ICON,
+        ItemKind::QuestItem(_)  => "*",
     }
 }
 
@@ -244,15 +248,16 @@ pub(crate) fn build_panel_sections(
             s.push(kr("없음\n",                        c_inactive));
         }
         Some(w) => {
-            let icon_str = match w {
-                WeaponKind::Sword => WEAPON_ICON,
-                WeaponKind::Spear => SPEAR_ICON,
-                WeaponKind::Bow   => BOW_ICON,
+            let icon_str = match w.0 {
+                "sword" => WEAPON_ICON,
+                "spear" => SPEAR_ICON,
+                "bow"   => BOW_ICON,
+                _       => WEAPON_ICON,
             };
-            let atk = weapon_attack(w);
+            let atk = weapon_attack(w, quest_items);
             let bar = "|".repeat(atk as usize);
             s.push(ico(&format!("  {} ", icon_str),                        c_active));
-            s.push(kr(&format!("{}  ({})", w.display_name(), bar),         c_active));
+            s.push(kr(&format!("{}  ({})", w.display_name(quest_items), bar),         c_active));
             s.push(kr(&format!("  ATK {}\n", atk),                        c_stat));
         }
     }
@@ -265,10 +270,10 @@ pub(crate) fn build_panel_sections(
             s.push(kr("없음\n",                        c_inactive));
         }
         Some(a) => {
-            let def = armor_defense_bonus(a);
+            let def = armor_defense_bonus(a, quest_items);
             let bar = "|".repeat((def * 3) as usize);
             s.push(ico(&format!("  {} ", ARMOR_ICON),                      c_active));
-            s.push(kr(&format!("{}  ({})", a.display_name(), bar),         c_active));
+            s.push(kr(&format!("{}  ({})", a.display_name(quest_items), bar),         c_active));
             s.push(kr(&format!("  +{}DEF\n", def),                        c_stat));
         }
     }
@@ -295,8 +300,8 @@ pub(crate) fn build_panel_sections(
                 _ => false,
             };
             let stat = match inv_item.kind {
-                ItemKind::Weapon(w) => format!(" (ATK {})", weapon_attack(w)),
-                ItemKind::Armor(a)  => format!(" (+{}DEF)", armor_defense_bonus(a)),
+                ItemKind::Weapon(w) => format!(" (ATK {})", weapon_attack(w, quest_items)),
+                ItemKind::Armor(a)  => format!(" (+{}DEF)", armor_defense_bonus(a, quest_items)),
                 _                   => String::new(),
             };
             let icon_str = item_kind_icon(&inv_item.kind);
@@ -315,7 +320,7 @@ pub(crate) fn build_panel_sections(
             let (sel, color) = if idx == cursor { (">", c_cursor) } else { (" ", c_normal) };
             s.push(kr(&format!("{} {} ", sel, idx + 1),            color));
             s.push(ico(&format!("{} ", POTION_ICON),                color));
-            s.push(kr(&format!("{}  x{}\n", ck.display_name(), count), color));
+            s.push(kr(&format!("{}  x{}\n", ck.display_name(quest_items), count), color));
         }
     }
 
@@ -364,9 +369,9 @@ mod tests {
     #[test]
     fn equipped_weapon_shows_equip_tag() {
         let mut inv = empty_inv();
-        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::Sword) });
+        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
         let mut eq = empty_eq();
-        eq.weapon = Some(WeaponKind::Sword);
+        eq.weapon = Some(WeaponKind::SWORD);
         let text = build_panel_text(&inv, &eq, 0, qi());
         assert!(text.contains("[장착]"));
     }
@@ -374,7 +379,7 @@ mod tests {
     #[test]
     fn unequipped_weapon_no_equip_tag() {
         let mut inv = empty_inv();
-        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::Sword) });
+        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
         let text = build_panel_text(&inv, &empty_eq(), 0, qi());
         assert!(!text.contains("[장착]"));
     }
@@ -382,8 +387,8 @@ mod tests {
     #[test]
     fn cursor_marks_selected_row_with_arrow() {
         let mut inv = empty_inv();
-        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::Sword) });
-        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::Spear) });
+        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
+        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SPEAR) });
         let text = build_panel_text(&inv, &empty_eq(), 1, qi());
         let spear_line = text.lines().find(|l| l.contains("창")).unwrap_or("");
         assert!(spear_line.starts_with("> ") && spear_line.contains("창"), "spear line was: {spear_line:?}");
@@ -392,8 +397,8 @@ mod tests {
     #[test]
     fn consumable_shows_count() {
         let mut inv = empty_inv();
-        inv.add_consumable(ConsumableKind::HealthPotion);
-        inv.add_consumable(ConsumableKind::HealthPotion);
+        inv.add_consumable(ConsumableKind::HEALTH_POTION);
+        inv.add_consumable(ConsumableKind::HEALTH_POTION);
         let text = build_panel_text(&inv, &empty_eq(), 0, qi());
         assert!(text.contains("x2"));
     }
@@ -401,7 +406,7 @@ mod tests {
     #[test]
     fn weapon_atk_shown_in_panel() {
         let mut inv = empty_inv();
-        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::Spear) });
+        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SPEAR) });
         let text = build_panel_text(&inv, &empty_eq(), 0, qi());
         assert!(text.contains("ATK 9"));
     }
@@ -409,7 +414,7 @@ mod tests {
     #[test]
     fn armor_def_shown_in_panel() {
         let mut inv = empty_inv();
-        inv.items.push(InventoryItem { kind: ItemKind::Armor(ArmorKind::LeatherArmor) });
+        inv.items.push(InventoryItem { kind: ItemKind::Armor(ArmorKind::LEATHER_ARMOR) });
         let text = build_panel_text(&inv, &empty_eq(), 0, qi());
         assert!(text.contains("+2DEF"));
     }
@@ -417,10 +422,10 @@ mod tests {
     #[test]
     fn only_first_of_same_weapon_kind_gets_equip_tag() {
         let mut inv = empty_inv();
-        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::Sword) });
-        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::Sword) });
+        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
+        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
         let mut eq = empty_eq();
-        eq.weapon = Some(WeaponKind::Sword);
+        eq.weapon = Some(WeaponKind::SWORD);
         let text = build_panel_text(&inv, &eq, 0, qi());
         assert_eq!(text.matches("[장착]").count(), 1);
     }

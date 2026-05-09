@@ -691,13 +691,13 @@ fn spawn_quest_items(
 
 pub fn item_id_to_kind(id: &str, quest_items: &crate::modules::item::QuestItemRegistry) -> Option<ItemKind> {
     match id {
-        "sword"               => Some(ItemKind::Weapon(crate::modules::item::WeaponKind::Sword)),
-        "spear"               => Some(ItemKind::Weapon(crate::modules::item::WeaponKind::Spear)),
-        "bow"                 => Some(ItemKind::Weapon(crate::modules::item::WeaponKind::Bow)),
-        "leather_armor"       => Some(ItemKind::Armor(crate::modules::item::ArmorKind::LeatherArmor)),
-        "health_potion"       => Some(ItemKind::Consumable(crate::modules::item::ConsumableKind::HealthPotion)),
+        "sword"               => Some(ItemKind::Weapon(crate::modules::item::WeaponKind::SWORD)),
+        "spear"               => Some(ItemKind::Weapon(crate::modules::item::WeaponKind::SPEAR)),
+        "bow"                 => Some(ItemKind::Weapon(crate::modules::item::WeaponKind::BOW)),
+        "leather_armor"       => Some(ItemKind::Armor(crate::modules::item::ArmorKind::LEATHER_ARMOR)),
+        "health_potion"       => Some(ItemKind::Consumable(crate::modules::item::ConsumableKind::HEALTH_POTION)),
         // 그 외는 quest item registry 에서 조회 — 알려진 quest item ID 면 QuestItemKind 반환
-        other => quest_items.intern(other).map(|s| ItemKind::QuestItem(QuestItemKind(s))),
+        other => quest_items.intern_quest_item(other).map(|s| ItemKind::QuestItem(QuestItemKind(s))),
     }
 }
 

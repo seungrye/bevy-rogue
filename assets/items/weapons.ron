@@ -1,0 +1,40 @@
+// 무기 정의 — 게임 코드와 분리된 데이터
+// 형식: Vec<WeaponDef>
+//   id: 내부 식별자 (item_id_to_kind 의 매핑)
+//   display_name: UI 표기
+//   glyph_ascii / glyph_unicode / glyph_game_icon: 글리프 스타일별 표시 문자
+//   pickup_message: 획득 시 로그 메시지
+//   attack_power: 장착 시 공격력
+//   element: 원소 ID — Some("fire" / "ice" / "lightning") 또는 None
+[
+    WeaponDef(
+        id: "sword",
+        display_name: "검",
+        glyph_ascii: "/",
+        glyph_unicode: "\u{1F5E1}",
+        glyph_game_icon: "\u{E946}",
+        pickup_message: "검을 획득했다!",
+        attack_power: 7,
+        element: Some("fire"),
+    ),
+    WeaponDef(
+        id: "spear",
+        display_name: "창",
+        glyph_ascii: "|",
+        glyph_unicode: "\u{2B06}",
+        glyph_game_icon: "\u{EAAC}",
+        pickup_message: "창을 획득했다!",
+        attack_power: 9,
+        element: Some("ice"),
+    ),
+    WeaponDef(
+        id: "bow",
+        display_name: "활",
+        glyph_ascii: ")",
+        glyph_unicode: "\u{27A4}",
+        glyph_game_icon: "\u{E978}",
+        pickup_message: "활을 획득했다!",
+        attack_power: 5,
+        element: Some("lightning"),
+    ),
+]

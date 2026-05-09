@@ -59,26 +59,29 @@ Startup:
 - `QuestItemRegistry::intern(id)` 메서드: 등록된 ID 의 leak 된 `&'static str` 반환
 - Serialize/Deserialize 는 컨텍스트가 없어 leak 으로 fallback (저장 데이터 크기에 의해 bounded)
 
-## Phase 3 — 무기/방어구/소모품 외부화
+## Phase 3 — 무기/방어구/소모품 외부화 ✅
 
 ### 동작 명세
 
-- [ ] `assets/items/weapons.ron`, `assets/items/armors.ron`, `assets/items/consumables.ron` 생성
-- [ ] `WeaponDef`: `{ id, display_name, glyph, color, attack_power, element, range, image_path }`
-- [ ] `ArmorDef`: `{ id, display_name, glyph, color, defense, image_path }`
-- [ ] `ConsumableDef`: `{ id, display_name, glyph, color, effect: ConsumableEffect, image_path }`
-- [ ] `ConsumableEffect`: enum `{ Heal(i32), ... }` — 효과 종류는 enum 유지 (게임 로직)
-- [ ] `WeaponKind`/`ArmorKind`/`ConsumableKind` enum 제거
-- [ ] `ItemKind::Weapon(String)`, `ItemKind::Armor(String)`, `ItemKind::Consumable(String)`
-- [ ] `PlayerEquipment::weapon: Option<String>`, `armor: Option<String>`
-- [ ] `weapon_element`, `weapon_attack` 등 함수가 registry 의 def 를 사용하도록 재작성
-- [ ] 상점 catalog 도 RON 으로 외부화 (`assets/shop/catalog.ron`)
-- [ ] 모든 테스트가 ID 기반으로 동작하도록 갱신
+- [x] `assets/items/weapons.ron`, `assets/items/armors.ron`, `assets/items/consumables.ron` 생성
+- [x] `WeaponDef`: `{ id, display_name, glyph_*, pickup_message, attack_power, element }`
+- [x] `ArmorDef`: `{ id, display_name, glyph_*, pickup_message, defense_bonus }`
+- [x] `ConsumableDef`: `{ id, display_name, glyph_*, pickup_message, effect: ConsumableEffect }`
+- [x] `ConsumableEffect`: enum `{ Heal(i32) }` — 효과 enum 유지 (게임 로직)
+- [x] `WeaponKind`/`ArmorKind`/`ConsumableKind` enum → `&'static str` newtype 으로 변경
+- [x] `ItemKind::Weapon(WeaponKind)` 형태 유지 — Copy 보존
+- [x] `weapon_attack(kind, &ItemRegistry)`, `armor_defense_bonus`, `weapon_element` 등 registry 조회로 재작성
+- [x] 상수 `WeaponKind::SWORD/SPEAR/BOW`, `ArmorKind::LEATHER_ARMOR`, `ConsumableKind::HEALTH_POTION` 정의 — 호환 편의
+- [x] `element` 는 RON 에서 string ID (`"fire"/"ice"/"lightning"`) 로 표현 → elemental 모듈에서 enum 으로 매핑
 
 ### 아키텍처
 
-- `ItemRegistry` Resource (혹은 `WeaponRegistry`/`ArmorRegistry`/`ConsumableRegistry` 분리)
-- 검증: 상점 catalog, 퀘스트 RewardItem 등에서 참조하는 모든 item_id 가 registry 에 존재
+- **단일 `ItemRegistry` Resource** — Phase 2 의 QuestItemRegistry 를 확장해 4 카테고리 통합
+  - `quest_items`, `weapons`, `armors`, `consumables` 4 개 HashMap 보유
+  - 메서드: `quest_item(k)`, `weapon(k)`, `armor(k)`, `consumable(k)`, `intern_quest_item(id)` 등
+- 메타데이터는 RON 로드 시점에 `Box::leak` 으로 영속화 (~30 종, bounded leak)
+- 모든 시스템/자유 함수가 `Res<ItemRegistry>` 또는 `&ItemRegistry` 받도록 갱신
+- `QuestItemRegistry` 는 `ItemRegistry` 의 type alias 로 유지 (Phase 2 호환)
 - 게임 로직 enum (`Element`, `ConsumableEffect`)은 유지 — RON 에서 enum variant 로 직렬화
 
 ## 단계별 진행

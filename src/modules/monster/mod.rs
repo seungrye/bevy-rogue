@@ -193,6 +193,7 @@ fn handle_player_attack(
     mut drop_writer: EventWriter<ItemDropEvent>,
     mut elemental_writer: EventWriter<ElementalApplyEvent>,
     equipment: Res<PlayerEquipment>,
+    items: Res<crate::modules::item::ItemRegistry>,
 ) {
     for AttackMonsterEvent(tx, ty) in events.read() {
         let Ok(mut player_stats) = player_query.get_single_mut() else { continue };
@@ -215,7 +216,7 @@ fn handle_player_attack(
             if monster_stats.hp > 0 {
                 if let Some(weapon) = equipment.weapon {
                     if rand::thread_rng().gen_bool(0.4) {
-                        if let Some(element) = weapon_element(weapon) {
+                        if let Some(element) = weapon_element(weapon, &items) {
                             elemental_writer.send(ElementalApplyEvent {
                                 target: monster_entity,
                                 element,

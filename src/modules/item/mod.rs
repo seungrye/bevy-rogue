@@ -83,37 +83,21 @@ pub fn glyph_for_style(kind: ItemKind, style: GlyphStyle, registry: &QuestItemRe
     }
 }
 
-fn glyph_unicode(kind: ItemKind, registry: &QuestItemRegistry) -> &'static str {
+fn glyph_unicode(kind: ItemKind, r: &ItemRegistry) -> &'static str {
     match kind {
-        ItemKind::Weapon(w) => match w {
-            WeaponKind::Sword => "\u{1F5E1}", // 🗡 단검 모양
-            WeaponKind::Spear => "\u{2B06}",  // ⬆ 위쪽 화살표
-            WeaponKind::Bow   => "\u{27A4}",  // ➤ 오른쪽 화살촉
-        },
-        ItemKind::Armor(a) => match a {
-            ArmorKind::LeatherArmor => "\u{1F6E1}", // 🛡 방패
-        },
-        ItemKind::Consumable(c) => match c {
-            ConsumableKind::HealthPotion => "\u{2764}", // ❤ 굵은 하트
-        },
-        ItemKind::QuestItem(qk) => registry.lookup(qk).map(|m| m.glyph_unicode).unwrap_or("?"),
+        ItemKind::Weapon(w)     => r.weapon(w).map(|m| m.glyph_unicode).unwrap_or("?"),
+        ItemKind::Armor(a)      => r.armor(a).map(|m| m.glyph_unicode).unwrap_or("?"),
+        ItemKind::Consumable(c) => r.consumable(c).map(|m| m.glyph_unicode).unwrap_or("?"),
+        ItemKind::QuestItem(qk) => r.quest_item(qk).map(|m| m.glyph_unicode).unwrap_or("?"),
     }
 }
 
-fn glyph_game_icon(kind: ItemKind, registry: &QuestItemRegistry) -> &'static str {
+fn glyph_game_icon(kind: ItemKind, r: &ItemRegistry) -> &'static str {
     match kind {
-        ItemKind::Weapon(w) => match w {
-            WeaponKind::Sword => "\u{E946}", // RPG Awesome 넓은 검 아이콘
-            WeaponKind::Spear => "\u{EAAC}", // RPG Awesome 창끝 아이콘
-            WeaponKind::Bow   => "\u{E978}", // RPG Awesome 석궁 아이콘
-        },
-        ItemKind::Armor(a) => match a {
-            ArmorKind::LeatherArmor => "\u{EA96}", // RPG Awesome 방패 아이콘
-        },
-        ItemKind::Consumable(c) => match c {
-            ConsumableKind::HealthPotion => "\u{EA72}", // RPG Awesome 물약 아이콘
-        },
-        ItemKind::QuestItem(qk) => registry.lookup(qk).map(|m| m.glyph_game_icon).unwrap_or("?"),
+        ItemKind::Weapon(w)     => r.weapon(w).map(|m| m.glyph_game_icon).unwrap_or("?"),
+        ItemKind::Armor(a)      => r.armor(a).map(|m| m.glyph_game_icon).unwrap_or("?"),
+        ItemKind::Consumable(c) => r.consumable(c).map(|m| m.glyph_game_icon).unwrap_or("?"),
+        ItemKind::QuestItem(qk) => r.quest_item(qk).map(|m| m.glyph_game_icon).unwrap_or("?"),
     }
 }
 
@@ -166,31 +150,48 @@ pub struct QuestItemMeta {
     pub image_path: &'static str,
 }
 
-/// Bevy Resource — startup 시점에 RON 에서 로드되어 init 됨.
+/// 모든 아이템(weapons / armors / consumables / quest items) 의 메타데이터를 보유하는
+/// Bevy Resource. 4 개의 sub-map 으로 카테고리를 구분한다.
 /// VillagerRegistry 와 동일한 Resource 패턴으로 일관성 유지.
 #[derive(Resource, Default)]
-pub struct QuestItemRegistry {
-    pub items: HashMap<&'static str, QuestItemMeta>,
+pub struct ItemRegistry {
+    pub quest_items: HashMap<&'static str, QuestItemMeta>,
+    pub weapons:     HashMap<&'static str, WeaponMeta>,
+    pub armors:      HashMap<&'static str, ArmorMeta>,
+    pub consumables: HashMap<&'static str, ConsumableMeta>,
 }
 
-impl QuestItemRegistry {
-    pub fn lookup(&self, kind: QuestItemKind) -> Option<&QuestItemMeta> {
-        self.items.get(kind.0)
+impl ItemRegistry {
+    pub fn quest_item(&self, kind: QuestItemKind) -> Option<&QuestItemMeta> {
+        self.quest_items.get(kind.0)
+    }
+    pub fn weapon(&self, kind: WeaponKind) -> Option<&WeaponMeta> {
+        self.weapons.get(kind.0)
+    }
+    pub fn armor(&self, kind: ArmorKind) -> Option<&ArmorMeta> {
+        self.armors.get(kind.0)
+    }
+    pub fn consumable(&self, kind: ConsumableKind) -> Option<&ConsumableMeta> {
+        self.consumables.get(kind.0)
     }
 
-    pub fn lookup_id(&self, id: &str) -> Option<&QuestItemMeta> {
-        self.items.get(id)
+    /// 등록된 quest item ID 의 leak 된 &'static str 반환 (item_id_to_kind 에서 사용)
+    pub fn intern_quest_item(&self, id: &str) -> Option<&'static str> {
+        self.quest_items.get_key_value(id).map(|(k, _)| *k)
     }
-
-    pub fn contains(&self, id: &str) -> bool {
-        self.items.contains_key(id)
+    pub fn intern_weapon(&self, id: &str) -> Option<&'static str> {
+        self.weapons.get_key_value(id).map(|(k, _)| *k)
     }
-
-    /// 같은 ID 의 leak 된 &'static str 을 반환한다 (registry 에 등록된 경우)
-    pub fn intern(&self, id: &str) -> Option<&'static str> {
-        self.items.get_key_value(id).map(|(k, _)| *k)
+    pub fn intern_armor(&self, id: &str) -> Option<&'static str> {
+        self.armors.get_key_value(id).map(|(k, _)| *k)
+    }
+    pub fn intern_consumable(&self, id: &str) -> Option<&'static str> {
+        self.consumables.get_key_value(id).map(|(k, _)| *k)
     }
 }
+
+/// 하위 호환 — 기존 QuestItemRegistry 사용처가 점진 이주할 수 있도록 type alias 유지
+pub type QuestItemRegistry = ItemRegistry;
 
 /// item 시스템 Startup 단계 ordering
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -220,78 +221,273 @@ fn load_quest_items_system(mut registry: ResMut<QuestItemRegistry>) {
         map.insert(id, meta);
     }
     info!("quest item 로드: {} 종", map.len());
-    registry.items = map;
+    registry.quest_items = map;
 }
 
-/// 테스트용 — registry 를 inline 으로 구성한다
+/// 테스트용 — 4 카테고리 모두 inline 으로 적재한 registry 를 구성한다
 #[cfg(test)]
-pub fn build_test_registry() -> QuestItemRegistry {
-    let path = "assets/items/quest_items.ron";
-    let text = std::fs::read_to_string(path).expect("quest_items.ron 읽기 실패");
-    let defs: Vec<QuestItemDef> = ron::de::from_str(&text).expect("quest_items.ron 파싱 실패");
-    let mut map: HashMap<&'static str, QuestItemMeta> = HashMap::new();
+pub fn build_test_registry() -> ItemRegistry {
+    let mut r = ItemRegistry::default();
+    // quest items
+    let text = std::fs::read_to_string("assets/items/quest_items.ron").expect("quest_items.ron");
+    let defs: Vec<QuestItemDef> = ron::de::from_str(&text).expect("quest_items.ron 파싱");
     for def in defs {
         let id: &'static str = Box::leak(def.id.into_boxed_str());
-        let meta = QuestItemMeta {
+        r.quest_items.insert(id, QuestItemMeta {
             display_name:    Box::leak(def.display_name.into_boxed_str()),
             glyph_ascii:     Box::leak(def.glyph_ascii.into_boxed_str()),
             glyph_unicode:   Box::leak(def.glyph_unicode.into_boxed_str()),
             glyph_game_icon: Box::leak(def.glyph_game_icon.into_boxed_str()),
             pickup_message:  Box::leak(def.pickup_message.into_boxed_str()),
             image_path:      Box::leak(def.image_path.into_boxed_str()),
-        };
-        map.insert(id, meta);
+        });
     }
-    QuestItemRegistry { items: map }
+    // weapons
+    let text = std::fs::read_to_string("assets/items/weapons.ron").expect("weapons.ron");
+    let defs: Vec<WeaponDef> = ron::de::from_str(&text).expect("weapons.ron 파싱");
+    for def in defs {
+        let id: &'static str = Box::leak(def.id.into_boxed_str());
+        let element = def.element.map(|e| -> &'static str { Box::leak(e.into_boxed_str()) });
+        r.weapons.insert(id, WeaponMeta {
+            display_name:    Box::leak(def.display_name.into_boxed_str()),
+            glyph_ascii:     Box::leak(def.glyph_ascii.into_boxed_str()),
+            glyph_unicode:   Box::leak(def.glyph_unicode.into_boxed_str()),
+            glyph_game_icon: Box::leak(def.glyph_game_icon.into_boxed_str()),
+            pickup_message:  Box::leak(def.pickup_message.into_boxed_str()),
+            attack_power: def.attack_power, element,
+        });
+    }
+    // armors
+    let text = std::fs::read_to_string("assets/items/armors.ron").expect("armors.ron");
+    let defs: Vec<ArmorDef> = ron::de::from_str(&text).expect("armors.ron 파싱");
+    for def in defs {
+        let id: &'static str = Box::leak(def.id.into_boxed_str());
+        r.armors.insert(id, ArmorMeta {
+            display_name:    Box::leak(def.display_name.into_boxed_str()),
+            glyph_ascii:     Box::leak(def.glyph_ascii.into_boxed_str()),
+            glyph_unicode:   Box::leak(def.glyph_unicode.into_boxed_str()),
+            glyph_game_icon: Box::leak(def.glyph_game_icon.into_boxed_str()),
+            pickup_message:  Box::leak(def.pickup_message.into_boxed_str()),
+            defense_bonus: def.defense_bonus,
+        });
+    }
+    // consumables
+    let text = std::fs::read_to_string("assets/items/consumables.ron").expect("consumables.ron");
+    let defs: Vec<ConsumableDef> = ron::de::from_str(&text).expect("consumables.ron 파싱");
+    for def in defs {
+        let id: &'static str = Box::leak(def.id.into_boxed_str());
+        r.consumables.insert(id, ConsumableMeta {
+            display_name:    Box::leak(def.display_name.into_boxed_str()),
+            glyph_ascii:     Box::leak(def.glyph_ascii.into_boxed_str()),
+            glyph_unicode:   Box::leak(def.glyph_unicode.into_boxed_str()),
+            glyph_game_icon: Box::leak(def.glyph_game_icon.into_boxed_str()),
+            pickup_message:  Box::leak(def.pickup_message.into_boxed_str()),
+            effect: def.effect,
+        });
+    }
+    r
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
-pub enum WeaponKind {
-    Sword,
-    Spear,
-    Bow,
-}
+// ── Weapon / Armor / Consumable: ID 기반 newtype + Registry 패턴 ──────────────
+// QuestItemKind 와 동일한 Resource 패턴으로 통일.
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct WeaponKind(pub &'static str);
 
 impl WeaponKind {
-    pub fn display_name(self) -> &'static str {
-        match self {
-            WeaponKind::Sword => "검",
-            WeaponKind::Spear => "창",
-            WeaponKind::Bow   => "활",
-        }
+    pub fn id(self) -> &'static str { self.0 }
+
+    /// 호환 편의: 자주 쓰이는 검/창/활 상수 (ID 기반)
+    pub const SWORD: WeaponKind = WeaponKind("sword");
+    pub const SPEAR: WeaponKind = WeaponKind("spear");
+    pub const BOW:   WeaponKind = WeaponKind("bow");
+}
+
+impl serde::Serialize for WeaponKind {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> { s.serialize_str(self.0) }
+}
+impl<'de> serde::Deserialize<'de> for WeaponKind {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Ok(WeaponKind(Box::leak(s.into_boxed_str())))
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
-pub enum ArmorKind {
-    LeatherArmor,
-}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ArmorKind(pub &'static str);
 
 impl ArmorKind {
-    pub fn display_name(self) -> &'static str {
-        match self {
-            ArmorKind::LeatherArmor => "가죽 갑옷",
-        }
+    pub fn id(self) -> &'static str { self.0 }
+    pub const LEATHER_ARMOR: ArmorKind = ArmorKind("leather_armor");
+}
+
+impl serde::Serialize for ArmorKind {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> { s.serialize_str(self.0) }
+}
+impl<'de> serde::Deserialize<'de> for ArmorKind {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Ok(ArmorKind(Box::leak(s.into_boxed_str())))
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
-pub enum ConsumableKind {
-    HealthPotion,
-}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ConsumableKind(pub &'static str);
 
 impl ConsumableKind {
-    pub fn display_name(self) -> &'static str {
-        match self {
-            ConsumableKind::HealthPotion => "체력 물약",
-        }
-    }
+    pub fn id(self) -> &'static str { self.0 }
+    pub const HEALTH_POTION: ConsumableKind = ConsumableKind("health_potion");
+}
 
-    pub fn heal_amount(self) -> i32 {
-        match self {
-            ConsumableKind::HealthPotion => POTION_HEAL,
-        }
+impl serde::Serialize for ConsumableKind {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> { s.serialize_str(self.0) }
+}
+impl<'de> serde::Deserialize<'de> for ConsumableKind {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Ok(ConsumableKind(Box::leak(s.into_boxed_str())))
     }
+}
+
+// ── 메타데이터 (RON 로드용) ────────────────────────────────────────────────
+#[derive(Debug, Deserialize, Clone)]
+pub struct WeaponDef {
+    pub id: String,
+    pub display_name: String,
+    pub glyph_ascii: String,
+    pub glyph_unicode: String,
+    pub glyph_game_icon: String,
+    pub pickup_message: String,
+    pub attack_power: i32,
+    pub element: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ArmorDef {
+    pub id: String,
+    pub display_name: String,
+    pub glyph_ascii: String,
+    pub glyph_unicode: String,
+    pub glyph_game_icon: String,
+    pub pickup_message: String,
+    pub defense_bonus: i32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub enum ConsumableEffect {
+    Heal(i32),
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ConsumableDef {
+    pub id: String,
+    pub display_name: String,
+    pub glyph_ascii: String,
+    pub glyph_unicode: String,
+    pub glyph_game_icon: String,
+    pub pickup_message: String,
+    pub effect: ConsumableEffect,
+}
+
+// ── leak 된 메타 (런타임 사용) ─────────────────────────────────────────────
+#[derive(Debug, Clone)]
+pub struct WeaponMeta {
+    pub display_name: &'static str,
+    pub glyph_ascii: &'static str,
+    pub glyph_unicode: &'static str,
+    pub glyph_game_icon: &'static str,
+    pub pickup_message: &'static str,
+    pub attack_power: i32,
+    pub element: Option<&'static str>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArmorMeta {
+    pub display_name: &'static str,
+    pub glyph_ascii: &'static str,
+    pub glyph_unicode: &'static str,
+    pub glyph_game_icon: &'static str,
+    pub pickup_message: &'static str,
+    pub defense_bonus: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConsumableMeta {
+    pub display_name: &'static str,
+    pub glyph_ascii: &'static str,
+    pub glyph_unicode: &'static str,
+    pub glyph_game_icon: &'static str,
+    pub pickup_message: &'static str,
+    pub effect: ConsumableEffect,
+}
+
+// ── 로드 시스템 ────────────────────────────────────────────────────────────
+fn load_weapons_system(mut registry: ResMut<ItemRegistry>) {
+    let path = "assets/items/weapons.ron";
+    let text = std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
+    let defs: Vec<WeaponDef> = ron::de::from_str(&text)
+        .unwrap_or_else(|e| panic!("[치명적] {} RON 파싱 실패: {}", path, e));
+    let mut map = HashMap::new();
+    for def in defs {
+        let id: &'static str = Box::leak(def.id.into_boxed_str());
+        let element = def.element.map(|e| -> &'static str { Box::leak(e.into_boxed_str()) });
+        map.insert(id, WeaponMeta {
+            display_name:    Box::leak(def.display_name.into_boxed_str()),
+            glyph_ascii:     Box::leak(def.glyph_ascii.into_boxed_str()),
+            glyph_unicode:   Box::leak(def.glyph_unicode.into_boxed_str()),
+            glyph_game_icon: Box::leak(def.glyph_game_icon.into_boxed_str()),
+            pickup_message:  Box::leak(def.pickup_message.into_boxed_str()),
+            attack_power: def.attack_power,
+            element,
+        });
+    }
+    info!("weapon 로드: {} 종", map.len());
+    registry.weapons = map;
+}
+
+fn load_armors_system(mut registry: ResMut<ItemRegistry>) {
+    let path = "assets/items/armors.ron";
+    let text = std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
+    let defs: Vec<ArmorDef> = ron::de::from_str(&text)
+        .unwrap_or_else(|e| panic!("[치명적] {} RON 파싱 실패: {}", path, e));
+    let mut map = HashMap::new();
+    for def in defs {
+        let id: &'static str = Box::leak(def.id.into_boxed_str());
+        map.insert(id, ArmorMeta {
+            display_name:    Box::leak(def.display_name.into_boxed_str()),
+            glyph_ascii:     Box::leak(def.glyph_ascii.into_boxed_str()),
+            glyph_unicode:   Box::leak(def.glyph_unicode.into_boxed_str()),
+            glyph_game_icon: Box::leak(def.glyph_game_icon.into_boxed_str()),
+            pickup_message:  Box::leak(def.pickup_message.into_boxed_str()),
+            defense_bonus: def.defense_bonus,
+        });
+    }
+    info!("armor 로드: {} 종", map.len());
+    registry.armors = map;
+}
+
+fn load_consumables_system(mut registry: ResMut<ItemRegistry>) {
+    let path = "assets/items/consumables.ron";
+    let text = std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
+    let defs: Vec<ConsumableDef> = ron::de::from_str(&text)
+        .unwrap_or_else(|e| panic!("[치명적] {} RON 파싱 실패: {}", path, e));
+    let mut map = HashMap::new();
+    for def in defs {
+        let id: &'static str = Box::leak(def.id.into_boxed_str());
+        map.insert(id, ConsumableMeta {
+            display_name:    Box::leak(def.display_name.into_boxed_str()),
+            glyph_ascii:     Box::leak(def.glyph_ascii.into_boxed_str()),
+            glyph_unicode:   Box::leak(def.glyph_unicode.into_boxed_str()),
+            glyph_game_icon: Box::leak(def.glyph_game_icon.into_boxed_str()),
+            pickup_message:  Box::leak(def.pickup_message.into_boxed_str()),
+            effect: def.effect,
+        });
+    }
+    info!("consumable 로드: {} 종", map.len());
+    registry.consumables = map;
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
@@ -303,20 +499,12 @@ pub enum ItemKind {
 }
 
 impl ItemKind {
-    pub fn glyph(self, registry: &QuestItemRegistry) -> &'static str {
+    pub fn glyph(self, r: &ItemRegistry) -> &'static str {
         match self {
-            ItemKind::Weapon(w) => match w {
-                WeaponKind::Sword => "/",
-                WeaponKind::Spear => "|",
-                WeaponKind::Bow   => ")",
-            },
-            ItemKind::Armor(a) => match a {
-                ArmorKind::LeatherArmor => "]",
-            },
-            ItemKind::Consumable(c) => match c {
-                ConsumableKind::HealthPotion => "!",
-            },
-            ItemKind::QuestItem(qk) => registry.lookup(qk).map(|m| m.glyph_ascii).unwrap_or("?"),
+            ItemKind::Weapon(w)     => r.weapon(w).map(|m| m.glyph_ascii).unwrap_or("?"),
+            ItemKind::Armor(a)      => r.armor(a).map(|m| m.glyph_ascii).unwrap_or("?"),
+            ItemKind::Consumable(c) => r.consumable(c).map(|m| m.glyph_ascii).unwrap_or("?"),
+            ItemKind::QuestItem(qk) => r.quest_item(qk).map(|m| m.glyph_ascii).unwrap_or("?"),
         }
     }
 
@@ -329,53 +517,61 @@ impl ItemKind {
         }
     }
 
-    pub fn display_name(self, registry: &QuestItemRegistry) -> &'static str {
+    pub fn display_name(self, r: &ItemRegistry) -> &'static str {
         match self {
-            ItemKind::Weapon(w)     => w.display_name(),
-            ItemKind::Armor(a)      => a.display_name(),
-            ItemKind::Consumable(c) => c.display_name(),
-            ItemKind::QuestItem(qk) => registry.lookup(qk).map(|m| m.display_name).unwrap_or("???"),
+            ItemKind::Weapon(w)     => r.weapon(w).map(|m| m.display_name).unwrap_or("???"),
+            ItemKind::Armor(a)      => r.armor(a).map(|m| m.display_name).unwrap_or("???"),
+            ItemKind::Consumable(c) => r.consumable(c).map(|m| m.display_name).unwrap_or("???"),
+            ItemKind::QuestItem(qk) => r.quest_item(qk).map(|m| m.display_name).unwrap_or("???"),
         }
     }
 
-    pub fn pickup_message(self, registry: &QuestItemRegistry) -> &'static str {
+    pub fn pickup_message(self, r: &ItemRegistry) -> &'static str {
         match self {
-            ItemKind::Weapon(w) => match w {
-                WeaponKind::Sword => "검을 획득했다!",
-                WeaponKind::Spear => "창을 획득했다!",
-                WeaponKind::Bow   => "활을 획득했다!",
-            },
-            ItemKind::Armor(a) => match a {
-                ArmorKind::LeatherArmor => "가죽 갑옷을 획득했다!",
-            },
-            ItemKind::Consumable(c) => match c {
-                ConsumableKind::HealthPotion => "체력 물약을 획득했다!",
-            },
-            ItemKind::QuestItem(qk) => registry.lookup(qk).map(|m| m.pickup_message).unwrap_or("아이템을 획득했다!"),
+            ItemKind::Weapon(w)     => r.weapon(w).map(|m| m.pickup_message).unwrap_or("무기를 획득했다!"),
+            ItemKind::Armor(a)      => r.armor(a).map(|m| m.pickup_message).unwrap_or("방어구를 획득했다!"),
+            ItemKind::Consumable(c) => r.consumable(c).map(|m| m.pickup_message).unwrap_or("소모품을 획득했다!"),
+            ItemKind::QuestItem(qk) => r.quest_item(qk).map(|m| m.pickup_message).unwrap_or("아이템을 획득했다!"),
         }
     }
 }
 
-pub fn weapon_attack(kind: WeaponKind) -> i32 {
-    match kind {
-        WeaponKind::Sword => 7,
-        WeaponKind::Spear => 9,
-        WeaponKind::Bow   => 5,
+impl WeaponKind {
+    pub fn display_name(self, r: &ItemRegistry) -> &'static str {
+        r.weapon(self).map(|m| m.display_name).unwrap_or("???")
+    }
+}
+impl ArmorKind {
+    pub fn display_name(self, r: &ItemRegistry) -> &'static str {
+        r.armor(self).map(|m| m.display_name).unwrap_or("???")
+    }
+}
+impl ConsumableKind {
+    pub fn display_name(self, r: &ItemRegistry) -> &'static str {
+        r.consumable(self).map(|m| m.display_name).unwrap_or("???")
+    }
+    pub fn heal_amount(self, r: &ItemRegistry) -> i32 {
+        match r.consumable(self).map(|m| &m.effect) {
+            Some(ConsumableEffect::Heal(n)) => *n,
+            None => 0,
+        }
     }
 }
 
-pub fn armor_defense_bonus(kind: ArmorKind) -> i32 {
-    match kind {
-        ArmorKind::LeatherArmor => 2,
-    }
+pub fn weapon_attack(kind: WeaponKind, r: &ItemRegistry) -> i32 {
+    r.weapon(kind).map(|m| m.attack_power).unwrap_or(0)
 }
 
-pub fn effective_attack(equipment: &PlayerEquipment) -> i32 {
-    equipment.weapon.map(weapon_attack).unwrap_or(PLAYER_ATK)
+pub fn armor_defense_bonus(kind: ArmorKind, r: &ItemRegistry) -> i32 {
+    r.armor(kind).map(|m| m.defense_bonus).unwrap_or(0)
 }
 
-pub fn effective_defense(equipment: &PlayerEquipment) -> i32 {
-    let bonus = equipment.armor.map(armor_defense_bonus).unwrap_or(0);
+pub fn effective_attack(equipment: &PlayerEquipment, r: &ItemRegistry) -> i32 {
+    equipment.weapon.map(|w| weapon_attack(w, r)).unwrap_or(PLAYER_ATK)
+}
+
+pub fn effective_defense(equipment: &PlayerEquipment, r: &ItemRegistry) -> i32 {
+    let bonus = equipment.armor.map(|a| armor_defense_bonus(a, r)).unwrap_or(0);
     PLAYER_DEF + bonus
 }
 
@@ -462,21 +658,21 @@ pub struct ItemDropEvent {
 pub fn monster_drop_table(monster_name: &str) -> &'static [(ItemKind, f32)] {
     match monster_name {
         "고블린" => &[
-            (ItemKind::Consumable(ConsumableKind::HealthPotion), 0.30),
-            (ItemKind::Weapon(WeaponKind::Sword), 0.15),
+            (ItemKind::Consumable(ConsumableKind::HEALTH_POTION), 0.30),
+            (ItemKind::Weapon(WeaponKind::SWORD), 0.15),
         ],
         "오크" => &[
-            (ItemKind::Consumable(ConsumableKind::HealthPotion), 0.40),
-            (ItemKind::Weapon(WeaponKind::Spear), 0.20),
-            (ItemKind::Armor(ArmorKind::LeatherArmor), 0.10),
+            (ItemKind::Consumable(ConsumableKind::HEALTH_POTION), 0.40),
+            (ItemKind::Weapon(WeaponKind::SPEAR), 0.20),
+            (ItemKind::Armor(ArmorKind::LEATHER_ARMOR), 0.10),
         ],
         "트롤" => &[
-            (ItemKind::Consumable(ConsumableKind::HealthPotion), 0.50),
-            (ItemKind::Weapon(WeaponKind::Bow), 0.25),
-            (ItemKind::Armor(ArmorKind::LeatherArmor), 0.20),
+            (ItemKind::Consumable(ConsumableKind::HEALTH_POTION), 0.50),
+            (ItemKind::Weapon(WeaponKind::BOW), 0.25),
+            (ItemKind::Armor(ArmorKind::LEATHER_ARMOR), 0.20),
         ],
         _ => &[
-            (ItemKind::Consumable(ConsumableKind::HealthPotion), 0.25),
+            (ItemKind::Consumable(ConsumableKind::HEALTH_POTION), 0.25),
         ],
     }
 }
@@ -500,6 +696,9 @@ impl Plugin for ItemPlugin {
             .init_resource::<QuestItemRegistry>()
             .add_systems(Startup, (
                 load_quest_items_system.in_set(ItemSystemSet::Load),
+                load_weapons_system.in_set(ItemSystemSet::Load),
+                load_armors_system.in_set(ItemSystemSet::Load),
+                load_consumables_system.in_set(ItemSystemSet::Load),
                 setup_glyph_fonts,
             ))
             .add_systems(Update, (
@@ -618,16 +817,17 @@ fn pickup_items(
 
 fn apply_equipment_stats(
     equipment: Res<PlayerEquipment>,
+    items: Res<ItemRegistry>,
     mut player_query: Query<&mut CombatStats, With<Player>>,
 ) {
     if !equipment.is_changed() { return; }
     let Ok(mut stats) = player_query.get_single_mut() else { return };
-    stats.attack  = effective_attack(&equipment);
-    stats.defense = effective_defense(&equipment);
+    stats.attack  = effective_attack(&equipment, &items);
+    stats.defense = effective_defense(&equipment, &items);
 }
 
-fn quest_item_image_path(kind: QuestItemKind, registry: &QuestItemRegistry) -> &'static str {
-    registry.lookup(kind).map(|m| m.image_path).unwrap_or("scene/open-chest.png")
+fn quest_item_image_path(kind: QuestItemKind, registry: &ItemRegistry) -> &'static str {
+    registry.quest_item(kind).map(|m| m.image_path).unwrap_or("scene/open-chest.png")
 }
 
 fn spawn_quest_item_popup(
@@ -725,77 +925,82 @@ fn handle_despawn_world_item(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::OnceLock;
+    static TEST_QI: OnceLock<ItemRegistry> = OnceLock::new();
+    fn qi() -> &'static ItemRegistry {
+        TEST_QI.get_or_init(|| build_test_registry())
+    }
 
     #[test]
     fn weapon_attack_sword_is_7() {
-        assert_eq!(weapon_attack(WeaponKind::Sword), 7);
+        assert_eq!(weapon_attack(WeaponKind::SWORD, qi()), 7);
     }
 
     #[test]
     fn weapon_attack_spear_is_9() {
-        assert_eq!(weapon_attack(WeaponKind::Spear), 9);
+        assert_eq!(weapon_attack(WeaponKind::SPEAR, qi()), 9);
     }
 
     #[test]
     fn weapon_attack_bow_is_5() {
-        assert_eq!(weapon_attack(WeaponKind::Bow), 5);
+        assert_eq!(weapon_attack(WeaponKind::BOW, qi()), 5);
     }
 
     #[test]
     fn armor_defense_bonus_leather_is_2() {
-        assert_eq!(armor_defense_bonus(ArmorKind::LeatherArmor), 2);
+        assert_eq!(armor_defense_bonus(ArmorKind::LEATHER_ARMOR, qi()), 2);
     }
 
     #[test]
     fn effective_attack_no_weapon_equals_player_default() {
         let eq = PlayerEquipment { weapon: None, armor: None };
-        assert_eq!(effective_attack(&eq), PLAYER_ATK);
+        assert_eq!(effective_attack(&eq, qi()), PLAYER_ATK);
     }
 
     #[test]
     fn effective_attack_with_sword_is_7() {
-        let eq = PlayerEquipment { weapon: Some(WeaponKind::Sword), armor: None };
-        assert_eq!(effective_attack(&eq), 7);
+        let eq = PlayerEquipment { weapon: Some(WeaponKind::SWORD), armor: None };
+        assert_eq!(effective_attack(&eq, qi()), 7);
     }
 
     #[test]
     fn effective_defense_no_armor_equals_player_default() {
         let eq = PlayerEquipment { weapon: None, armor: None };
-        assert_eq!(effective_defense(&eq), PLAYER_DEF);
+        assert_eq!(effective_defense(&eq, qi()), PLAYER_DEF);
     }
 
     #[test]
     fn effective_defense_with_leather_adds_bonus() {
-        let eq = PlayerEquipment { weapon: None, armor: Some(ArmorKind::LeatherArmor) };
-        assert_eq!(effective_defense(&eq), PLAYER_DEF + 2);
+        let eq = PlayerEquipment { weapon: None, armor: Some(ArmorKind::LEATHER_ARMOR) };
+        assert_eq!(effective_defense(&eq, qi()), PLAYER_DEF + 2);
     }
 
     #[test]
     fn goblin_drop_table_has_potion_and_sword() {
         let t = monster_drop_table("고블린");
-        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Consumable(ConsumableKind::HealthPotion))));
-        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Weapon(WeaponKind::Sword))));
+        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Consumable(ConsumableKind::HEALTH_POTION))));
+        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Weapon(WeaponKind::SWORD))));
     }
 
     #[test]
     fn orc_drop_table_has_spear_and_armor() {
         let t = monster_drop_table("오크");
-        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Weapon(WeaponKind::Spear))));
-        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Armor(ArmorKind::LeatherArmor))));
+        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Weapon(WeaponKind::SPEAR))));
+        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Armor(ArmorKind::LEATHER_ARMOR))));
     }
 
     #[test]
     fn troll_drop_table_has_bow_and_armor() {
         let t = monster_drop_table("트롤");
-        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Weapon(WeaponKind::Bow))));
-        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Armor(ArmorKind::LeatherArmor))));
+        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Weapon(WeaponKind::BOW))));
+        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Armor(ArmorKind::LEATHER_ARMOR))));
     }
 
     #[test]
     fn add_consumable_stacks_same_kind() {
         let mut inv = PlayerInventory::default();
-        inv.add_consumable(ConsumableKind::HealthPotion);
-        inv.add_consumable(ConsumableKind::HealthPotion);
+        inv.add_consumable(ConsumableKind::HEALTH_POTION);
+        inv.add_consumable(ConsumableKind::HEALTH_POTION);
         assert_eq!(inv.consumables.len(), 1);
         assert_eq!(inv.consumables[0].1, 2);
     }
@@ -803,29 +1008,29 @@ mod tests {
     #[test]
     fn use_consumable_decrements_count() {
         let mut inv = PlayerInventory::default();
-        inv.add_consumable(ConsumableKind::HealthPotion);
-        inv.add_consumable(ConsumableKind::HealthPotion);
-        assert!(inv.use_consumable(ConsumableKind::HealthPotion));
+        inv.add_consumable(ConsumableKind::HEALTH_POTION);
+        inv.add_consumable(ConsumableKind::HEALTH_POTION);
+        assert!(inv.use_consumable(ConsumableKind::HEALTH_POTION));
         assert_eq!(inv.consumables[0].1, 1);
     }
 
     #[test]
     fn use_consumable_removes_slot_when_count_zero() {
         let mut inv = PlayerInventory::default();
-        inv.add_consumable(ConsumableKind::HealthPotion);
-        inv.use_consumable(ConsumableKind::HealthPotion);
+        inv.add_consumable(ConsumableKind::HEALTH_POTION);
+        inv.use_consumable(ConsumableKind::HEALTH_POTION);
         assert!(inv.consumables.is_empty());
     }
 
     #[test]
     fn use_consumable_returns_false_when_empty() {
         let mut inv = PlayerInventory::default();
-        assert!(!inv.use_consumable(ConsumableKind::HealthPotion));
+        assert!(!inv.use_consumable(ConsumableKind::HEALTH_POTION));
     }
 
     #[test]
     fn consumable_heal_amount_equals_constant() {
-        assert_eq!(ConsumableKind::HealthPotion.heal_amount(), POTION_HEAL);
+        assert_eq!(ConsumableKind::HEALTH_POTION.heal_amount(qi()), POTION_HEAL);
     }
 
     #[test]
@@ -852,36 +1057,30 @@ mod tests {
         assert_eq!(GlyphStyle::from_str("unknown"), None);
     }
 
-    use std::sync::OnceLock;
-    static TEST_QI: OnceLock<QuestItemRegistry> = OnceLock::new();
-    fn qi() -> &'static QuestItemRegistry {
-        TEST_QI.get_or_init(|| build_test_registry())
-    }
-
     fn lookup_display_name(qk: QuestItemKind) -> &'static str {
-        qi().lookup(qk).map(|m| m.display_name).unwrap_or("???")
+        qi().quest_item(qk).map(|m| m.display_name).unwrap_or("???")
     }
 
     #[test]
     fn glyph_for_style_ascii_returns_ascii_chars() {
-        assert_eq!(glyph_for_style(ItemKind::Weapon(WeaponKind::Sword), GlyphStyle::Ascii, qi()), "/");
-        assert_eq!(glyph_for_style(ItemKind::Weapon(WeaponKind::Spear), GlyphStyle::Ascii, qi()), "|");
-        assert_eq!(glyph_for_style(ItemKind::Weapon(WeaponKind::Bow),   GlyphStyle::Ascii, qi()), ")");
+        assert_eq!(glyph_for_style(ItemKind::Weapon(WeaponKind::SWORD), GlyphStyle::Ascii, qi()), "/");
+        assert_eq!(glyph_for_style(ItemKind::Weapon(WeaponKind::SPEAR), GlyphStyle::Ascii, qi()), "|");
+        assert_eq!(glyph_for_style(ItemKind::Weapon(WeaponKind::BOW),   GlyphStyle::Ascii, qi()), ")");
     }
 
     #[test]
     fn glyph_for_style_unicode_returns_symbols() {
-        let s = glyph_for_style(ItemKind::Weapon(WeaponKind::Sword), GlyphStyle::Unicode, qi());
+        let s = glyph_for_style(ItemKind::Weapon(WeaponKind::SWORD), GlyphStyle::Unicode, qi());
         assert_eq!(s, "\u{1F5E1}");
-        let shield = glyph_for_style(ItemKind::Armor(ArmorKind::LeatherArmor), GlyphStyle::Unicode, qi());
+        let shield = glyph_for_style(ItemKind::Armor(ArmorKind::LEATHER_ARMOR), GlyphStyle::Unicode, qi());
         assert_eq!(shield, "\u{1F6E1}");
     }
 
     #[test]
     fn glyph_for_style_game_icon_returns_pua_codepoints() {
-        let s = glyph_for_style(ItemKind::Weapon(WeaponKind::Sword), GlyphStyle::GameIcon, qi());
+        let s = glyph_for_style(ItemKind::Weapon(WeaponKind::SWORD), GlyphStyle::GameIcon, qi());
         assert_eq!(s, "\u{E946}");
-        let potion = glyph_for_style(ItemKind::Consumable(ConsumableKind::HealthPotion), GlyphStyle::GameIcon, qi());
+        let potion = glyph_for_style(ItemKind::Consumable(ConsumableKind::HEALTH_POTION), GlyphStyle::GameIcon, qi());
         assert_eq!(potion, "\u{EA72}");
     }
 
@@ -956,21 +1155,67 @@ mod tests {
     #[test]
     fn quest_items_ron_loads_all_29_items() {
         let registry = qi();
-        assert_eq!(registry.items.len(), 29, "quest_items.ron 에 29 종이 정의되어야 한다");
+        assert_eq!(registry.quest_items.len(), 29, "quest_items.ron 에 29 종이 정의되어야 한다");
     }
 
     #[test]
     fn quest_item_meta_returns_none_for_unknown_id() {
         let unknown = QuestItemKind("does_not_exist");
-        assert!(qi().lookup(unknown).is_none());
+        assert!(qi().quest_item(unknown).is_none());
     }
 
     #[test]
     fn intern_quest_id_returns_same_pointer_for_same_id() {
-        let a = qi().intern("eternal_gem").expect("등록된 ID 여야 한다");
-        let b = qi().intern("eternal_gem").expect("등록된 ID 여야 한다");
+        let a = qi().intern_quest_item("eternal_gem").expect("등록된 ID 여야 한다");
+        let b = qi().intern_quest_item("eternal_gem").expect("등록된 ID 여야 한다");
         // registry 에 등록된 ID 는 동일 &'static str (포인터 일치)
         assert_eq!(a.as_ptr(), b.as_ptr(), "같은 등록된 ID 는 같은 포인터여야 한다");
+    }
+
+    #[test]
+    fn weapons_ron_loads_three_weapons() {
+        assert_eq!(qi().weapons.len(), 3);
+        assert!(qi().weapon(WeaponKind::SWORD).is_some());
+        assert!(qi().weapon(WeaponKind::SPEAR).is_some());
+        assert!(qi().weapon(WeaponKind::BOW).is_some());
+    }
+
+    #[test]
+    fn weapons_have_correct_attack_power() {
+        assert_eq!(qi().weapon(WeaponKind::SWORD).unwrap().attack_power, 7);
+        assert_eq!(qi().weapon(WeaponKind::SPEAR).unwrap().attack_power, 9);
+        assert_eq!(qi().weapon(WeaponKind::BOW).unwrap().attack_power, 5);
+    }
+
+    #[test]
+    fn weapons_have_element_strings() {
+        assert_eq!(qi().weapon(WeaponKind::SWORD).unwrap().element, Some("fire"));
+        assert_eq!(qi().weapon(WeaponKind::SPEAR).unwrap().element, Some("ice"));
+        assert_eq!(qi().weapon(WeaponKind::BOW).unwrap().element, Some("lightning"));
+    }
+
+    #[test]
+    fn armors_ron_loads_leather() {
+        assert_eq!(qi().armors.len(), 1);
+        let leather = qi().armor(ArmorKind::LEATHER_ARMOR).unwrap();
+        assert_eq!(leather.display_name, "가죽 갑옷");
+        assert_eq!(leather.defense_bonus, 2);
+    }
+
+    #[test]
+    fn consumables_ron_loads_health_potion_with_heal_effect() {
+        assert_eq!(qi().consumables.len(), 1);
+        let potion = qi().consumable(ConsumableKind::HEALTH_POTION).unwrap();
+        assert!(matches!(potion.effect, ConsumableEffect::Heal(8)));
+    }
+
+    #[test]
+    fn weapon_kind_serde_roundtrip() {
+        let wk = WeaponKind::SWORD;
+        let s = ron::ser::to_string(&wk).unwrap();
+        assert_eq!(s, "\"sword\"");
+        let parsed: WeaponKind = ron::de::from_str(&s).unwrap();
+        assert_eq!(parsed, wk);
     }
 
     #[test]

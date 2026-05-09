@@ -111,11 +111,13 @@ pub struct ElementalApplyEvent {
     pub element: Element,
 }
 
-pub fn weapon_element(kind: WeaponKind) -> Option<Element> {
-    match kind {
-        WeaponKind::Sword => Some(Element::Fire),
-        WeaponKind::Spear => Some(Element::Ice),
-        WeaponKind::Bow   => Some(Element::Lightning),
+pub fn weapon_element(kind: WeaponKind, items: &crate::modules::item::ItemRegistry) -> Option<Element> {
+    let meta = items.weapon(kind)?;
+    match meta.element? {
+        "fire"      => Some(Element::Fire),
+        "ice"       => Some(Element::Ice),
+        "lightning" => Some(Element::Lightning),
+        _           => None,
     }
 }
 
@@ -319,17 +321,20 @@ mod tests {
 
     #[test]
     fn weapon_sword_gives_fire() {
-        assert_eq!(weapon_element(WeaponKind::Sword), Some(Element::Fire));
+        let r = crate::modules::item::build_test_registry();
+        assert_eq!(weapon_element(WeaponKind::SWORD, &r), Some(Element::Fire));
     }
 
     #[test]
     fn weapon_bow_gives_lightning() {
-        assert_eq!(weapon_element(WeaponKind::Bow), Some(Element::Lightning));
+        let r = crate::modules::item::build_test_registry();
+        assert_eq!(weapon_element(WeaponKind::BOW, &r), Some(Element::Lightning));
     }
 
     #[test]
     fn weapon_spear_gives_ice() {
-        assert_eq!(weapon_element(WeaponKind::Spear), Some(Element::Ice));
+        let r = crate::modules::item::build_test_registry();
+        assert_eq!(weapon_element(WeaponKind::SPEAR, &r), Some(Element::Ice));
     }
 
     #[test]

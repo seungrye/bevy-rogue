@@ -370,11 +370,11 @@ mod tests {
             player_defense: 3,
             player_progress: PlayerProgress { level: 3, xp: 7, next_level_xp: xp_to_next_level_for_test(3), kills: 12 },
             inventory: PlayerInventory {
-                items: vec![InventoryItem { kind: ItemKind::Weapon(WeaponKind::Sword) }],
-                consumables: vec![(ConsumableKind::HealthPotion, 2)],
+                items: vec![InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) }],
+                consumables: vec![(ConsumableKind::HEALTH_POTION, 2)],
                 gold: 75,
             },
-            equipment: PlayerEquipment { weapon: Some(WeaponKind::Sword), armor: None },
+            equipment: PlayerEquipment { weapon: Some(WeaponKind::SWORD), armor: None },
             quest_state: QuestState::default(),
             current_zone: ZoneId::Town,
             zone_revealed: {
@@ -424,8 +424,8 @@ mod tests {
         assert_eq!(restored.player_progress.xp, 7);
         assert_eq!(restored.player_progress.kills, 12);
         assert_eq!(restored.inventory.gold, 75);
-        assert!(matches!(restored.inventory.items[0].kind, ItemKind::Weapon(WeaponKind::Sword)));
-        assert!(matches!(restored.equipment.weapon, Some(WeaponKind::Sword)));
+        assert!(matches!(restored.inventory.items[0].kind, ItemKind::Weapon(WeaponKind::SWORD)));
+        assert!(matches!(restored.equipment.weapon, Some(WeaponKind::SWORD)));
         assert_eq!(restored.current_zone, ZoneId::Town);
         assert!(restored.zone_revealed.contains_key(&ZoneId::Town));
     }

@@ -35,11 +35,11 @@ pub struct ShopCatalogItem {
 }
 
 pub const SHOP_CATALOG: &[ShopCatalogItem] = &[
-    ShopCatalogItem { kind: ItemKind::Consumable(ConsumableKind::HealthPotion), name: "체력 물약", buy_price: 50, sell_price: 25 },
-    ShopCatalogItem { kind: ItemKind::Weapon(WeaponKind::Sword),                name: "검",       buy_price: 100, sell_price: 50 },
-    ShopCatalogItem { kind: ItemKind::Weapon(WeaponKind::Spear),                name: "창",       buy_price: 150, sell_price: 75 },
-    ShopCatalogItem { kind: ItemKind::Weapon(WeaponKind::Bow),                  name: "활",       buy_price: 80,  sell_price: 40 },
-    ShopCatalogItem { kind: ItemKind::Armor(ArmorKind::LeatherArmor),           name: "가죽 갑옷", buy_price: 100, sell_price: 50 },
+    ShopCatalogItem { kind: ItemKind::Consumable(ConsumableKind::HEALTH_POTION), name: "체력 물약", buy_price: 50, sell_price: 25 },
+    ShopCatalogItem { kind: ItemKind::Weapon(WeaponKind::SWORD),                name: "검",       buy_price: 100, sell_price: 50 },
+    ShopCatalogItem { kind: ItemKind::Weapon(WeaponKind::SPEAR),                name: "창",       buy_price: 150, sell_price: 75 },
+    ShopCatalogItem { kind: ItemKind::Weapon(WeaponKind::BOW),                  name: "활",       buy_price: 80,  sell_price: 40 },
+    ShopCatalogItem { kind: ItemKind::Armor(ArmorKind::LEATHER_ARMOR),           name: "가죽 갑옷", buy_price: 100, sell_price: 50 },
 ];
 
 fn catalog_sell_price(kind: ItemKind) -> u32 {
@@ -50,41 +50,33 @@ fn catalog_sell_price(kind: ItemKind) -> u32 {
 }
 
 /// 인벤토리 내 판매 가능 아이템 목록: (ItemKind, 표시명, 가격, count)
-fn build_sell_list(inventory: &PlayerInventory) -> Vec<(ItemKind, String, u32)> {
+fn build_sell_list(inventory: &PlayerInventory, items: &crate::modules::item::ItemRegistry) -> Vec<(ItemKind, String, u32)> {
     let mut list = Vec::new();
     for item in &inventory.items {
         if matches!(item.kind, ItemKind::QuestItem(_)) { continue; }
         let price = catalog_sell_price(item.kind);
-        let name = item_display_name(item.kind).to_string();
+        let name = item_display_name(item.kind, items).to_string();
         list.push((item.kind, name, price));
     }
     for (kind, count) in &inventory.consumables {
         let item_kind = ItemKind::Consumable(*kind);
         let price = catalog_sell_price(item_kind);
         let name = if *count > 1 {
-            format!("{} x{}", item_display_name(item_kind), count)
+            format!("{} x{}", item_display_name(item_kind, items), count)
         } else {
-            item_display_name(item_kind).to_string()
+            item_display_name(item_kind, items).to_string()
         };
         list.push((item_kind, name, price));
     }
     list
 }
 
-fn item_display_name(kind: ItemKind) -> &'static str {
+fn item_display_name(kind: ItemKind, items: &crate::modules::item::ItemRegistry) -> &'static str {
     match kind {
-        ItemKind::Weapon(w) => match w {
-            WeaponKind::Sword => "검",
-            WeaponKind::Spear => "창",
-            WeaponKind::Bow   => "활",
-        },
-        ItemKind::Armor(a) => match a {
-            ArmorKind::LeatherArmor => "가죽 갑옷",
-        },
-        ItemKind::Consumable(c) => match c {
-            ConsumableKind::HealthPotion => "체력 물약",
-        },
-        ItemKind::QuestItem(_) => "퀘스트 아이템",
+        ItemKind::Weapon(w)     => items.weapon(w).map(|m| m.display_name).unwrap_or("???"),
+        ItemKind::Armor(a)      => items.armor(a).map(|m| m.display_name).unwrap_or("???"),
+        ItemKind::Consumable(c) => items.consumable(c).map(|m| m.display_name).unwrap_or("???"),
+        ItemKind::QuestItem(_)  => "퀘스트 아이템",
     }
 }
 
@@ -174,6 +166,7 @@ fn handle_shop_input(
     mut inventory: ResMut<PlayerInventory>,
     mut equipment: ResMut<PlayerEquipment>,
     mut log: EventWriter<LogMessage>,
+    items: Res<crate::modules::item::ItemRegistry>,
 ) {
     if !open.0 { return; }
 
@@ -190,7 +183,7 @@ fn handle_shop_input(
 
     let list_len = match state.mode {
         ShopMode::Buy  => SHOP_CATALOG.len(),
-        ShopMode::Sell => build_sell_list(&inventory).len(),
+        ShopMode::Sell => build_sell_list(&inventory, &items).len(),
     };
 
     if keyboard.just_pressed(KeyCode::ArrowUp) && state.cursor > 0 {
@@ -221,9 +214,9 @@ fn handle_shop_input(
                 log.send(LogMessage(format!("{} 구매 완료. (-{}G, 잔액: {}G)", entry.name, entry.buy_price, inventory.gold)));
             }
             ShopMode::Sell => {
-                let sell_list = build_sell_list(&inventory);
+                let sell_list = build_sell_list(&inventory, &items);
                 let Some(&(kind, _, price)) = sell_list.get(state.cursor) else { return };
-                let name = item_display_name(kind).to_string();
+                let name = item_display_name(kind, &items).to_string();
                 match kind {
                     ItemKind::Consumable(c) => { inventory.use_consumable(c); }
                     _ => {
@@ -239,7 +232,7 @@ fn handle_shop_input(
                     }
                 }
                 inventory.earn_gold(price);
-                if state.cursor > 0 && state.cursor >= build_sell_list(&inventory).len() {
+                if state.cursor > 0 && state.cursor >= build_sell_list(&inventory, &items).len() {
                     state.cursor -= 1;
                 }
                 log.send(LogMessage(format!("{} 판매 완료. (+{}G, 잔액: {}G)", name, price, inventory.gold)));
@@ -253,6 +246,7 @@ fn update_shop_panel(
     state: Res<ShopUiState>,
     inventory: Res<PlayerInventory>,
     shop_font: Res<ShopFont>,
+    items: Res<crate::modules::item::ItemRegistry>,
     mut panel_q: Query<&mut Visibility, With<ShopPanel>>,
     mut content_q: Query<&mut Text, With<ShopPanelContent>>,
 ) {
@@ -292,7 +286,7 @@ fn update_shop_panel(
             }
         }
         ShopMode::Sell => {
-            let sell_list = build_sell_list(&inventory);
+            let sell_list = build_sell_list(&inventory, &items);
             if sell_list.is_empty() {
                 sections.push(make("  판매할 아이템이 없습니다\n".into(), dim));
             } else {
@@ -358,22 +352,28 @@ mod tests {
         assert!(SHOP_CATALOG.iter().any(|i| i.name == "가죽 갑옷"));
     }
 
+    use std::sync::OnceLock;
+    static TEST_QI: OnceLock<crate::modules::item::ItemRegistry> = OnceLock::new();
+    fn qi() -> &'static crate::modules::item::ItemRegistry {
+        TEST_QI.get_or_init(|| crate::modules::item::build_test_registry())
+    }
+
     #[test]
     fn sell_list_excludes_quest_items() {
         use crate::modules::item::{InventoryItem, QuestItemKind};
         let mut inv = make_inventory(0);
-        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::Sword) });
+        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
         inv.items.push(InventoryItem { kind: ItemKind::QuestItem(QuestItemKind("eternal_gem")) });
-        let list = build_sell_list(&inv);
+        let list = build_sell_list(&inv, qi());
         assert_eq!(list.len(), 1);
-        assert!(matches!(list[0].0, ItemKind::Weapon(WeaponKind::Sword)));
+        assert!(matches!(list[0].0, ItemKind::Weapon(WeaponKind::SWORD)));
     }
 
     #[test]
     fn sell_list_shows_consumable_count() {
         let mut inv = make_inventory(0);
-        inv.consumables.push((ConsumableKind::HealthPotion, 3));
-        let list = build_sell_list(&inv);
+        inv.consumables.push((ConsumableKind::HEALTH_POTION, 3));
+        let list = build_sell_list(&inv, qi());
         assert_eq!(list.len(), 1);
         assert!(list[0].1.contains("x3"));
     }

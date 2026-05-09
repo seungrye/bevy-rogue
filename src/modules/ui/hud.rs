@@ -79,6 +79,7 @@ fn update_status_hud(
     inventory: Res<PlayerInventory>,
     equipment: Res<PlayerEquipment>,
     progress: Res<PlayerProgress>,
+    items: Res<crate::modules::item::ItemRegistry>,
     player_q: Query<Ref<CombatStats>, With<Player>>,
     mut text_q: Query<&mut Text, With<StatusHudText>>,
 ) {
@@ -95,7 +96,7 @@ fn update_status_hud(
     }
 
     let Ok(mut text) = text_q.get_single_mut() else { return; };
-    text.sections[0].value = status_hud_text(&world, &turn, map_res.map(), &inventory, &equipment, &progress, &stats);
+    text.sections[0].value = status_hud_text(&world, &turn, map_res.map(), &inventory, &equipment, &progress, &stats, &items);
 }
 
 /// 상단 HUD에 표시할 한 줄 상태 문자열을 만든다.
@@ -110,9 +111,10 @@ fn status_hud_text(
     equipment: &PlayerEquipment,
     progress: &PlayerProgress,
     stats: &CombatStats,
+    items: &crate::modules::item::ItemRegistry,
 ) -> String {
-    let weapon = equipment.weapon.map(|w| w.display_name()).unwrap_or("맨손");
-    let armor = equipment.armor.map(|a| a.display_name()).unwrap_or("방어구 없음");
+    let weapon = equipment.weapon.map(|w| w.display_name(items)).unwrap_or("맨손");
+    let armor = equipment.armor.map(|a| a.display_name(items)).unwrap_or("방어구 없음");
     let algorithm = if map.algorithm.is_empty() { "unknown" } else { &map.algorithm };
     format!(
         "{} | Turn {} | Lv.{} XP {}/{} | HP {}/{} MP {}/{} | ATK {} DEF {} | {}G | {} / {} | {}",
@@ -151,14 +153,15 @@ mod tests {
         map.algorithm = "bsp".to_string();
         let inventory = PlayerInventory { gold: 75, ..Default::default() };
         let equipment = PlayerEquipment {
-            weapon: Some(WeaponKind::Sword),
-            armor: Some(ArmorKind::LeatherArmor),
+            weapon: Some(WeaponKind::SWORD),
+            armor: Some(ArmorKind::LEATHER_ARMOR),
         };
         let stats = CombatStats { hp: 12, max_hp: 30, mp: 4, max_mp: 20, attack: 7, defense: 3 };
 
         let progress = PlayerProgress { level: 2, xp: 9, next_level_xp: 35, kills: 3 };
 
-        let text = status_hud_text(&world, &GlobalTurn(42), &map, &inventory, &equipment, &progress, &stats);
+        let items = crate::modules::item::build_test_registry();
+        let text = status_hud_text(&world, &GlobalTurn(42), &map, &inventory, &equipment, &progress, &stats, &items);
 
         assert!(text.contains("던전 2층"));
         assert!(text.contains("Turn 42"));

@@ -1,0 +1,13 @@
+// 방어구 정의 — 게임 코드와 분리된 데이터
+// 형식: Vec<ArmorDef>
+[
+    ArmorDef(
+        id: "leather_armor",
+        display_name: "가죽 갑옷",
+        glyph_ascii: "]",
+        glyph_unicode: "\u{1F6E1}",
+        glyph_game_icon: "\u{EA96}",
+        pickup_message: "가죽 갑옷을 획득했다!",
+        defense_bonus: 2,
+    ),
+]

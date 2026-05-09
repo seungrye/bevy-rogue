@@ -1,0 +1,14 @@
+// 소모품 정의 — 게임 코드와 분리된 데이터
+// 형식: Vec<ConsumableDef>
+//   effect: 효과 enum — Heal(amount) 등
+[
+    ConsumableDef(
+        id: "health_potion",
+        display_name: "체력 물약",
+        glyph_ascii: "!",
+        glyph_unicode: "\u{2764}",
+        glyph_game_icon: "\u{EA72}",
+        pickup_message: "체력 물약을 획득했다!",
+        effect: Heal(8),
+    ),
+]
