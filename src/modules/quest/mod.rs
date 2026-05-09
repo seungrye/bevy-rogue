@@ -59,6 +59,22 @@ pub enum QuestCondition {
     Not(Box<QuestCondition>),
 }
 
+/// 포털을 어디에 스폰할지 결정한다.
+/// 기본값은 `InsideRoom` — 기존 동작 유지로 호환성 보장.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub enum PortalPlacement {
+    /// 랜덤 방의 floor (기존 StairDown 위치 결정 동작).
+    #[default]
+    InsideRoom,
+    /// 맵 외곽선에서 가장 가까운 floor — 마을·야외 맵 입구로 자연스럽다.
+    Border,
+    /// 맵 전체 floor 중 임의 위치.
+    Random,
+    /// 퀘스트 giver NPC 의 반경 `radius` 타일 안 floor.
+    /// giver 위치를 못 찾으면 `InsideRoom` 으로 fallback 한다.
+    NearGiver { radius: usize },
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub enum QuestAction {
     AdvancePhase(String),
@@ -68,8 +84,14 @@ pub enum QuestAction {
     SetFlag { flag: String, value: String },
     ClearFlag(String),
     KillNpc(String),
-    /// 현재 존에 Named 존으로 이어지는 포탈을 즉시 스폰한다
-    OpenPortal { zone: String, generator: String },
+    /// 현재 존에 Named 존으로 이어지는 포탈을 즉시 스폰한다.
+    /// `placement` 미지정 시 `InsideRoom` (기본).
+    OpenPortal {
+        zone: String,
+        generator: String,
+        #[serde(default)]
+        placement: PortalPlacement,
+    },
     /// Named 존으로 가는 포탈과 그 zone 등록을 모두 닫는다 (퀘스트 종료 시 정리)
     ClosePortal(String),
     /// 아이템을 수량 지정하여 지급
@@ -567,10 +589,12 @@ pub fn execute_actions(
                 kill_npc.send(KillNpcEvent(name.clone()));
                 info!("NPC 사망 이벤트: {}", name);
             }
-            QuestAction::OpenPortal { zone, generator } => {
+            QuestAction::OpenPortal { zone, generator, placement } => {
                 open_portal.send(SpawnQuestPortalEvent {
                     zone: zone.clone(),
                     generator: generator.clone(),
+                    placement: placement.clone(),
+                    quest_id: quest_id.to_string(),
                 });
                 log.send(crate::modules::ui::LogMessage(
                     format!("포탈이 열렸다 — {}.", zone)

@@ -75,11 +75,14 @@ pub struct NamedZoneConfig {
     pub zones: HashMap<String, NamedZoneEntry>,
 }
 
-/// 퀘스트 액션이 발행 → handle_spawn_quest_portal 시스템이 처리
+/// 퀘스트 액션이 발행 → handle_spawn_quest_portal 시스템이 처리.
+/// `placement` 가 NearGiver 인 경우 `quest_id` 로 giver_npc 를 조회한다.
 #[derive(Event)]
 pub struct SpawnQuestPortalEvent {
     pub zone: String,
     pub generator: String,
+    pub placement: crate::modules::quest::PortalPlacement,
+    pub quest_id: String,
 }
 
 /// 특정 Named zone 의 포탈 / 등록 / 영속화 / 미니맵 마커 를 모두 정리한다.
@@ -462,6 +465,8 @@ fn handle_spawn_quest_portal(
     asset_server: Res<AssetServer>,
     mut used_spawn: ResMut<UsedSpawnTiles>,
     mut markers: ResMut<crate::modules::ui::minimap::DiscoveredMarkers>,
+    quest_registry: Res<crate::modules::quest::QuestRegistry>,
+    villager_q: Query<(&Transform, &crate::modules::villager::Villager)>,
 ) {
     for event in ev.read() {
         // 이미 등록된 Named 존은 중복 생성하지 않는다
@@ -475,7 +480,20 @@ fn handle_spawn_quest_portal(
         let mut rng = rand::thread_rng();
         let map = &map_res.0;
         let dir = PortalDirection::StairDown;
-        if let Some((px, py)) = portal_tile(map, &dir, &mut used_spawn.0, &mut rng) {
+
+        // giver NPC 위치 조회 — NearGiver 에서만 사용. 같은 zone 의 첫 매치.
+        let giver_pos = quest_registry.get(&event.quest_id)
+            .and_then(|def| {
+                let giver_name = &def.giver_npc;
+                villager_q.iter()
+                    .find(|(_, v)| &v.name == giver_name)
+                    .map(|(t, _)| world_to_tile_coords(t.translation))
+            });
+
+        let pos = compute_portal_pos(map, &event.placement, giver_pos, &mut used_spawn.0, &mut rng)
+            .or_else(|| portal_tile(map, &dir, &mut used_spawn.0, &mut rng));
+
+        if let Some((px, py)) = pos {
             let coord = tile_to_world_coords(px, py);
             let font = asset_server.load("fonts/FiraMono-Medium.ttf");
             // 퀘스트로 새로 생성된 포털은 즉시 미니맵 마커 등록 — quest 받은 직후
@@ -624,6 +642,100 @@ fn zone_portals(zone: &ZoneId) -> Vec<(PortalDirection, ZoneId)> {
     }
 }
 
+/// 퀘스트 포털 배치 — `PortalPlacement` 에 따라 위치를 결정한다.
+/// 실패 시 `None` — 호출자가 fallback (StairDown) 으로 넘어간다.
+fn compute_portal_pos(
+    map: &Map,
+    placement: &crate::modules::quest::PortalPlacement,
+    giver_pos: Option<(usize, usize)>,
+    used: &mut std::collections::HashSet<(usize, usize)>,
+    rng: &mut impl rand::Rng,
+) -> Option<(usize, usize)> {
+    use crate::modules::quest::PortalPlacement;
+    use crate::modules::map::random_floor_tile_anywhere;
+    match placement {
+        PortalPlacement::InsideRoom => {
+            random_floor_tile_anywhere(&map.rooms, map, used, rng)
+        }
+        PortalPlacement::Random => {
+            random_floor_tile_anywhere(&map.rooms, map, used, rng)
+        }
+        PortalPlacement::Border => border_floor_tile(map, used),
+        PortalPlacement::NearGiver { radius } => {
+            giver_pos
+                .and_then(|(gx, gy)| floor_tile_near(map, gx, gy, *radius, used, rng))
+                .or_else(|| random_floor_tile_anywhere(&map.rooms, map, used, rng))
+        }
+    }
+}
+
+/// 맵 외곽선에서 가장 가까운 Floor — 외곽 ring 부터 안쪽으로 한 ring 씩 스캔.
+/// 마을·야외 맵 입구로 자연스럽도록 한 번 발견하면 즉시 반환한다.
+fn border_floor_tile(
+    map: &Map,
+    used: &mut std::collections::HashSet<(usize, usize)>,
+) -> Option<(usize, usize)> {
+    let max_ring = (map.width.min(map.height)) / 2;
+    for ring in 0..max_ring {
+        // ring=0 은 가장 바깥 한 줄. ring=k 면 (k, k) ~ (w-1-k, h-1-k) 의 외곽선.
+        let x0 = ring;
+        let y0 = ring;
+        let x1 = map.width.saturating_sub(ring + 1);
+        let y1 = map.height.saturating_sub(ring + 1);
+        if x0 > x1 || y0 > y1 { break; }
+        let mut candidates: Vec<(usize, usize)> = Vec::new();
+        for x in x0..=x1 {
+            for &y in &[y0, y1] {
+                if map.get_tile(x, y) == TileKind::Floor && !used.contains(&(x, y)) {
+                    candidates.push((x, y));
+                }
+            }
+        }
+        for y in (y0 + 1)..y1 {
+            for &x in &[x0, x1] {
+                if map.get_tile(x, y) == TileKind::Floor && !used.contains(&(x, y)) {
+                    candidates.push((x, y));
+                }
+            }
+        }
+        if let Some(&(x, y)) = candidates.first() {
+            used.insert((x, y));
+            return Some((x, y));
+        }
+    }
+    None
+}
+
+/// `(cx, cy)` 반경 `radius` 안의 Floor 한 칸 — used 미점유. 후보 중 랜덤 하나.
+fn floor_tile_near(
+    map: &Map,
+    cx: usize,
+    cy: usize,
+    radius: usize,
+    used: &mut std::collections::HashSet<(usize, usize)>,
+    rng: &mut impl rand::Rng,
+) -> Option<(usize, usize)> {
+    use rand::seq::SliceRandom;
+    let r = radius as i32;
+    let mut candidates: Vec<(usize, usize)> = Vec::new();
+    for dy in -r..=r {
+        for dx in -r..=r {
+            if dx == 0 && dy == 0 { continue; }
+            let nx = cx as i32 + dx;
+            let ny = cy as i32 + dy;
+            if nx < 0 || ny < 0 || nx >= map.width as i32 || ny >= map.height as i32 { continue; }
+            let (ux, uy) = (nx as usize, ny as usize);
+            if map.get_tile(ux, uy) == TileKind::Floor && !used.contains(&(ux, uy)) {
+                candidates.push((ux, uy));
+            }
+        }
+    }
+    candidates.shuffle(rng);
+    let &(x, y) = candidates.first()?;
+    used.insert((x, y));
+    Some((x, y))
+}
+
 /// PortalDirection 에 따른 포털 타일 위치를 찾는다.
 /// StairDown/StairUp 은 해당 방의 랜덤 Floor 타일에 배치하며, used 에 기록해 중복을 방지한다.
 fn portal_tile(
@@ -705,6 +817,8 @@ fn arrival_pos(map: &Map, arrive_from: &PortalDirection) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modules::map::Rect;
+    use rand::SeedableRng;
 
     #[test]
     fn zone_id_display_name() {
@@ -768,6 +882,63 @@ mod tests {
     fn named_zone_display_name_uses_zone_name() {
         assert_eq!(ZoneId::Named("사막".to_string()).display_name(), "사막");
         assert_eq!(ZoneId::Named("콰스".to_string()).display_name(), "콰스");
+    }
+
+    #[test]
+    fn border_floor_tile_picks_outermost_floor() {
+        // 외곽 한 칸은 모두 Wall, 두 번째 ring 부터 Floor — 두 번째 ring 에서 발견되어야.
+        let mut map = Map::new(10, 10);
+        for y in 1..9 { for x in 1..9 { map.set_tile(x, y, TileKind::Floor); } }
+        let mut used = std::collections::HashSet::new();
+        let (x, y) = border_floor_tile(&map, &mut used).expect("Floor 발견 실패");
+        // ring=1 외곽선이어야 한다 — 한 변에 닿아 있음.
+        assert!(x == 1 || x == 8 || y == 1 || y == 8, "외곽 ring 이어야: ({}, {})", x, y);
+    }
+
+    #[test]
+    fn border_floor_tile_returns_none_when_no_floor() {
+        let map = Map::new(10, 10);
+        let mut used = std::collections::HashSet::new();
+        assert!(border_floor_tile(&map, &mut used).is_none());
+    }
+
+    #[test]
+    fn compute_portal_pos_inside_room_returns_floor() {
+        use crate::modules::quest::PortalPlacement;
+        let mut map = Map::new(20, 20);
+        for y in 5..10 { for x in 5..10 { map.set_tile(x, y, TileKind::Floor); } }
+        map.rooms.push(Rect::new(5, 5, 5, 5));
+        let mut used = std::collections::HashSet::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0);
+        let (x, y) = compute_portal_pos(&map, &PortalPlacement::InsideRoom, None,
+            &mut used, &mut rng).expect("InsideRoom 실패");
+        assert_eq!(map.get_tile(x, y), TileKind::Floor);
+    }
+
+    #[test]
+    fn compute_portal_pos_near_giver_within_radius() {
+        use crate::modules::quest::PortalPlacement;
+        let mut map = Map::new(20, 20);
+        for y in 0..20 { for x in 0..20 { map.set_tile(x, y, TileKind::Floor); } }
+        let mut used = std::collections::HashSet::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0);
+        let (x, y) = compute_portal_pos(&map, &PortalPlacement::NearGiver { radius: 2 },
+            Some((10, 10)), &mut used, &mut rng).expect("NearGiver 실패");
+        assert!((x as i32 - 10).abs() <= 2 && (y as i32 - 10).abs() <= 2,
+            "반경 2 안이어야: ({}, {})", x, y);
+    }
+
+    #[test]
+    fn compute_portal_pos_near_giver_falls_back_when_no_giver() {
+        use crate::modules::quest::PortalPlacement;
+        let mut map = Map::new(20, 20);
+        for y in 5..10 { for x in 5..10 { map.set_tile(x, y, TileKind::Floor); } }
+        map.rooms.push(Rect::new(5, 5, 5, 5));
+        let mut used = std::collections::HashSet::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0);
+        let (x, y) = compute_portal_pos(&map, &PortalPlacement::NearGiver { radius: 2 },
+            None, &mut used, &mut rng).expect("fallback 실패");
+        assert_eq!(map.get_tile(x, y), TileKind::Floor);
     }
 
     #[test]

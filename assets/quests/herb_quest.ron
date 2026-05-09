@@ -30,7 +30,7 @@ QuestDef(
             ],
             on_interact: [
                 SetFlag(flag: "herb_quest_active", value: "true"),
-                OpenPortal(zone: "herb_glade", generator: "forest"),
+                OpenPortal(zone: "herb_glade", generator: "forest", placement: Border),
                 Log("엘렌: 마을 근처에 포탈이 열렸어요. 조심히 다녀오세요!"),
                 AdvancePhase("travel"),
             ],
