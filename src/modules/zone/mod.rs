@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use crate::modules::{
     map::{
         Map, MapResource, MapGeneratorRegistry, ApplyMapEvent,
@@ -262,11 +262,12 @@ fn handle_zone_transition(
     mut persistence: ResMut<ZonePersistence>,
     named_config: Res<NamedZoneConfig>,
     global_seed: Res<GlobalSeed>,
+    mut used_spawn: ResMut<UsedSpawnTiles>,
 ) {
     for transition in ev.read() {
         // 떠나는 존의 혈흔과 포털 위치를 스냅샷에 저장하고 엔티티 제거
         let from_zone = world.current.clone();
-        let snapshot = persistence.0.entry(from_zone).or_default();
+        let snapshot = persistence.0.entry(from_zone.clone()).or_default();
         snapshot.blood_stains = blood_query.iter().map(|(_, stain, transform)| {
             let (tx, ty) = world_to_tile_coords(transform.translation);
             SavedBloodStain { tile_x: tx, tile_y: ty, alpha: stain.alpha, decay_per_turn: stain.decay_per_turn }
@@ -312,8 +313,15 @@ fn handle_zone_transition(
             new_map
         };
 
-        // 도착 위치 계산
-        let spawn_pos = arrival_pos(&map, &transition.arrive_from);
+        // 도착 zone 의 포털 위치를 미리 생성·저장하여 spawn_portals_after_apply 와 일치시킨다.
+        // 첫 방문이라도 player 가 정확히 return portal 위치에서 spawn 된다.
+        ensure_zone_portals_persisted(&target, &map, &named_config, &mut persistence, &mut used_spawn.0);
+
+        // 도착 위치: 도착 zone 의 saved portal 중 target 이 from_zone 인 것 (return portal)
+        let spawn_pos = persistence.0.get(&target)
+            .and_then(|snap| snap.portals.iter().find(|p| p.target == from_zone))
+            .map(|p| (p.tile_x, p.tile_y))
+            .unwrap_or_else(|| arrival_pos(&map, &transition.arrive_from));
 
         log.send(crate::modules::ui::LogMessage(
             format!("{} 진입.", target.display_name())
@@ -332,8 +340,7 @@ fn handle_zone_transition(
 /// ApplyMapEvent 이후 (맵 타일 재스폰 완료 다음 프레임) 포털을 스폰한다.
 ///
 /// 영속화된 포털 위치가 있으면 그대로 복원해 같은 존 재방문 시 위치 일관성을 보장한다.
-/// 첫 방문 시에만 portal_tile() 로 랜덤 배치한 뒤, 떠날 때 ZonePersistence 에
-/// 위치가 저장된다 (handle_zone_transition).
+/// 첫 방문 시 persistence 가 비어있으면 새로 생성하여 저장한다.
 fn spawn_portals_after_apply(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -341,51 +348,64 @@ fn spawn_portals_after_apply(
     portal_q: Query<(), With<ZonePortal>>,
     map_res: Res<MapResource>,
     named_config: Res<NamedZoneConfig>,
-    persistence: Res<ZonePersistence>,
+    mut persistence: ResMut<ZonePersistence>,
     mut used_spawn: ResMut<UsedSpawnTiles>,
 ) {
     if !map_res.is_changed() { return; }
     if !portal_q.is_empty() { return; }  // 이미 스폰됨
 
-    let font = asset_server.load("fonts/FiraMono-Medium.ttf");
+    // persistence 에 포털이 없으면 새로 생성·저장 (첫 방문 시 startup 경로 포함)
+    ensure_zone_portals_persisted(&world.current, &map_res.0, &named_config, &mut persistence, &mut used_spawn.0);
 
-    // 1) 영속화된 포털이 있으면 그대로 복원 (위치 일관성)
-    let saved_portals = persistence.0.get(&world.current).map(|s| s.portals.as_slice()).unwrap_or(&[]);
-    if !saved_portals.is_empty() {
-        for saved in saved_portals {
+    let font = asset_server.load("fonts/FiraMono-Medium.ttf");
+    if let Some(snapshot) = persistence.0.get(&world.current) {
+        for saved in &snapshot.portals {
             spawn_portal_entity(
                 &mut commands, &font,
                 saved.tile_x, saved.tile_y,
                 saved.arrive_from.clone(), saved.target.clone(),
             );
         }
+    }
+}
+
+/// persistence[zone].portals 가 비어있으면 zone_portals + Named 진입 포털을
+/// portal_tile() 로 배치하여 저장한다. 이미 저장된 경우 no-op.
+///
+/// 호출자: spawn_portals_after_apply, handle_zone_transition (도착 위치 결정 전).
+fn ensure_zone_portals_persisted(
+    zone: &ZoneId,
+    map: &Map,
+    named_config: &NamedZoneConfig,
+    persistence: &mut ZonePersistence,
+    used_spawn: &mut HashSet<(usize, usize)>,
+) {
+    if persistence.0.get(zone).map(|s| !s.portals.is_empty()).unwrap_or(false) {
         return;
     }
 
-    // 2) 첫 방문 — 기본 포털 + Named 진입 포털을 랜덤 배치
-    let mut rng = rand::thread_rng();
-    let map = &map_res.0;
-    let mut portals = zone_portals(&world.current);
-
+    let mut portals = zone_portals(zone);
     // Named 존 안에 있으면 원점으로 돌아가는 포탈을 추가한다
-    if let ZoneId::Named(ref name) = world.current {
+    if let ZoneId::Named(ref name) = zone {
         if let Some(entry) = named_config.zones.get(name) {
             portals.push((PortalDirection::StairUp, entry.origin.clone()));
         }
     }
-
-    // 현재 존이 origin 인 Named 존들의 진입 포탈을 재스폰한다 (존 재방문 시)
+    // 현재 존이 origin 인 Named 존들의 진입 포탈
     for (zone_name, entry) in &named_config.zones {
-        if entry.origin == world.current {
+        if entry.origin == *zone {
             portals.push((PortalDirection::StairDown, ZoneId::Named(zone_name.clone())));
         }
     }
 
+    let mut rng = rand::thread_rng();
+    let mut placed: Vec<SavedPortal> = Vec::new();
     for (dir, target) in portals {
-        if let Some((px, py)) = portal_tile(map, &dir, &mut used_spawn.0, &mut rng) {
-            spawn_portal_entity(&mut commands, &font, px, py, dir, target);
+        if let Some((px, py)) = portal_tile(map, &dir, used_spawn, &mut rng) {
+            placed.push(SavedPortal { tile_x: px, tile_y: py, target, arrive_from: dir });
         }
     }
+    persistence.0.entry(zone.clone()).or_default().portals = placed;
 }
 
 /// ZonePortal 엔티티 한 개를 지정 좌표에 스폰한다 — saved/random 양쪽 경로에서 공유
@@ -698,6 +718,47 @@ mod tests {
     fn named_zone_display_name_uses_zone_name() {
         assert_eq!(ZoneId::Named("사막".to_string()).display_name(), "사막");
         assert_eq!(ZoneId::Named("콰스".to_string()).display_name(), "콰스");
+    }
+
+    #[test]
+    fn ensure_zone_portals_persisted_populates_empty_zone() {
+        // 첫 방문 시 persistence 가 비어있으면 portal 을 생성·저장해야 한다
+        let mut map = Map::new(40, 30);
+        for y in 1..29 { for x in 1..39 { map.set_tile(x, y, TileKind::Floor); } }
+        map.rooms = vec![crate::modules::map::Rect::new(2, 2, 36, 26)];
+
+        let mut persistence = ZonePersistence::default();
+        let named = NamedZoneConfig::default();
+        let mut used = std::collections::HashSet::new();
+        ensure_zone_portals_persisted(&ZoneId::Forest, &map, &named, &mut persistence, &mut used);
+
+        let snap = persistence.0.get(&ZoneId::Forest).expect("snapshot 생성됨");
+        assert!(!snap.portals.is_empty(), "Forest 존은 기본 포털이 있어야 한다");
+    }
+
+    #[test]
+    fn ensure_zone_portals_persisted_is_noop_when_already_populated() {
+        // 이미 저장된 portal 이 있으면 건드리지 않는다 (재방문 시 위치 일관성)
+        let mut map = Map::new(40, 30);
+        for y in 1..29 { for x in 1..39 { map.set_tile(x, y, TileKind::Floor); } }
+        map.rooms = vec![crate::modules::map::Rect::new(2, 2, 36, 26)];
+
+        let mut persistence = ZonePersistence::default();
+        let original = vec![SavedPortal {
+            tile_x: 5, tile_y: 7,
+            target: ZoneId::Town,
+            arrive_from: PortalDirection::StairUp,
+        }];
+        persistence.0.entry(ZoneId::Forest).or_default().portals = original.clone();
+
+        let named = NamedZoneConfig::default();
+        let mut used = std::collections::HashSet::new();
+        ensure_zone_portals_persisted(&ZoneId::Forest, &map, &named, &mut persistence, &mut used);
+
+        let snap = persistence.0.get(&ZoneId::Forest).unwrap();
+        assert_eq!(snap.portals.len(), original.len(), "기존 portal 보존");
+        assert_eq!(snap.portals[0].tile_x, 5);
+        assert_eq!(snap.portals[0].tile_y, 7);
     }
 
     #[test]

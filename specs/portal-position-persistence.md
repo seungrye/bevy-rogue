@@ -21,15 +21,20 @@ despawn 하지만, 포털 위치는 어디에도 저장하지 않는다.
 
 ## 동작 명세
 
-- [ ] `ZoneSnapshot` 에 `portals: Vec<SavedPortal>` 추가
-- [ ] `SavedPortal { tile_x, tile_y, target: ZoneId, arrive_from: PortalDirection }`
-- [ ] `PortalDirection` 에 serde derive 추가
-- [ ] 존을 떠날 때 (handle_zone_transition) 모든 포털의 위치/타깃을
+- [x] `ZoneSnapshot` 에 `portals: Vec<SavedPortal>` 추가
+- [x] `SavedPortal { tile_x, tile_y, target: ZoneId, arrive_from: PortalDirection }`
+- [x] `PortalDirection` 에 serde derive 추가
+- [x] 존을 떠날 때 (handle_zone_transition) 모든 포털의 위치/타깃을
       ZonePersistence 에 저장
-- [ ] 존 진입 시 (spawn_portals_after_apply) ZonePersistence 에 저장된 포털이
+- [x] 존 진입 시 (spawn_portals_after_apply) ZonePersistence 에 저장된 포털이
       있으면 그 위치에 정확히 복원, 없으면 기존처럼 랜덤 생성
-- [ ] 퀘스트 포털(`handle_spawn_quest_portal`)도 첫 생성 후 떠날 때
+- [x] 퀘스트 포털(`handle_spawn_quest_portal`)도 첫 생성 후 떠날 때
       자동 영속화됨 (별도 로직 불필요)
+- [x] **첫 방문 시에도 player 도착 위치를 portal 위치에 일치시킨다.**
+      `handle_zone_transition` 이 도착 위치 결정 직전에
+      `ensure_zone_portals_persisted` 헬퍼로 destination zone 의 portal 을
+      미리 배치·저장하여, persistence 가 비어있는 첫 진입에서도 return portal
+      위치를 알 수 있게 한다.
 
 ## 아키텍처
 

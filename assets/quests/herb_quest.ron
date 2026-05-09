@@ -157,21 +157,7 @@ QuestDef(
                 ClearFlag("got_poisoned"),
                 ClearFlag("herb_knowledge"),
                 ClearFlag("entered_glade"),
-                AdvancePhase("done"),
-            ],
-            auto_advance: [],
-            objective: Some("은방울 뿌리를 엘렌에게 전달하라."),
-        ),
-
-        // ── 4단계: 완료 ─────────────────────────────────────────
-        "done": QuestPhaseDef(
-            dialog: [
-                "덕분에 마을 사람들이 건강을 되찾았어요.",
-                "언제든 다시 찾아오세요. 약초 판매도 하고 있답니다!",
-            ],
-            on_interact: [
-                // KillNpc 시연: 독초술사가 아직 살아있으면 제거
-                // (퀘스트 완료 후 더 이상 필요 없으므로)
+                // 독초술사가 살아있으면 정리 (전환 시점 1회만 — done 페이즈가 진짜 terminal 이 되도록)
                 Branch(
                     condition: Not(HasFlag("herbalist_killed")),
                     if_true: [
@@ -180,17 +166,30 @@ QuestDef(
                     ],
                     if_false: [],
                 ),
-            ],
-            auto_advance: [
-                // PhaseIs 교차 참조: 보석 퀘스트 진행 중이면 힌트 제공
-                AutoAdvance(
+                // gem_quest 진행 중이면 힌트 페이즈로, 아니면 일반 done 으로 분기
+                Branch(
                     condition: PhaseIs(quest: "gem_quest", phase: "active"),
-                    next_phase: "done_with_hint",
-                    actions: [
+                    if_true: [
                         SetFlag(flag: "ellen_gave_hint", value: "true"),
+                        AdvancePhase("done_with_hint"),
+                    ],
+                    if_false: [
+                        AdvancePhase("done"),
                     ],
                 ),
             ],
+            auto_advance: [],
+            objective: Some("은방울 뿌리를 엘렌에게 전달하라."),
+        ),
+
+        // ── 4단계: 완료 (terminal — on_interact / auto_advance 없음) ─────
+        "done": QuestPhaseDef(
+            dialog: [
+                "덕분에 마을 사람들이 건강을 되찾았어요.",
+                "언제든 다시 찾아오세요. 약초 판매도 하고 있답니다!",
+            ],
+            on_interact: [],
+            auto_advance: [],
             objective: Some("퀘스트 완료!"),
         ),
 
