@@ -46,6 +46,7 @@ Startup:
 - [x] `quest/mod.rs::item_id_to_kind` 의 QuestItem 분기 제거 — registry 조회로 대체
 - [x] 전역 `QUEST_ITEMS: OnceLock<HashMap<&'static str, QuestItemMeta>>` 도입
 - [x] 검증: `validate_quest_def` + `item_id_to_kind` 통해 quest item ID 존재 확인
+- [x] 명시적 `validate_quest_item_refs` Startup 시스템 — Phase 1 의 `validate_quest_villager_refs` 와 대칭
 - [x] 모든 quest 파일의 spawns/GiveItem/RemoveItem 의 ID 가 registry 에 존재함을 테스트로 검증
 
 ### 아키텍처 결정

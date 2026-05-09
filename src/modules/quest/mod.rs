@@ -191,8 +191,70 @@ impl Plugin for QuestPlugin {
             .init_resource::<QuestState>()
             .add_event::<KillNpcEvent>()
             .add_event::<DespawnWorldItemEvent>()
-            .add_systems(Startup, load_quests.in_set(QuestSystemSet::Load).after(ItemSystemSet::Load))
+            .add_systems(Startup, (
+                load_quests.in_set(QuestSystemSet::Load).after(ItemSystemSet::Load),
+                validate_quest_item_refs
+                    .after(QuestSystemSet::Load)
+                    .after(ItemSystemSet::Load),
+            ))
             .add_systems(Update, (check_auto_advance, spawn_quest_items));
+    }
+}
+
+/// 모든 퀘스트의 GiveItem/RemoveItem/spawn 등에서 참조하는 quest item ID 가
+/// quest_items registry 에 존재하는지 명시적으로 검증한다.
+/// (validate_quest_def 도 동일 검증을 수행하지만 이 시스템은 명시적 startup 단계 검증)
+fn validate_quest_item_refs(quest_registry: Res<QuestRegistry>) {
+    let mut errors: Vec<String> = Vec::new();
+    for (qid, qdef) in &quest_registry.quests {
+        // spawns
+        for spawn in &qdef.spawns {
+            if item_id_to_kind(&spawn.item).is_none() {
+                errors.push(format!(
+                    "퀘스트 '{}' 의 spawns item_id '{}' 가 인식되지 않습니다",
+                    qid, spawn.item
+                ));
+            }
+        }
+        // 모든 phase 의 action 들을 탐색
+        for (phase_id, phase) in &qdef.phases {
+            for action in phase.on_interact.iter() {
+                check_action_item_ids(action, qid, phase_id, &mut errors);
+            }
+            for auto in &phase.auto_advance {
+                for action in &auto.actions {
+                    check_action_item_ids(action, qid, phase_id, &mut errors);
+                }
+            }
+        }
+    }
+    if !errors.is_empty() {
+        for msg in &errors {
+            error!("[치명적] {}", msg);
+        }
+        std::process::exit(1);
+    }
+}
+
+fn check_action_item_ids(action: &QuestAction, qid: &str, phase_id: &str, errors: &mut Vec<String>) {
+    match action {
+        QuestAction::GiveItem(id)
+        | QuestAction::GiveItems { item: id, .. }
+        | QuestAction::RemoveItem(id)
+        | QuestAction::DespawnWorldItem(id) => {
+            if item_id_to_kind(id).is_none() {
+                errors.push(format!(
+                    "퀘스트 '{}' phase '{}': item_id '{}' 가 인식되지 않습니다",
+                    qid, phase_id, id
+                ));
+            }
+        }
+        QuestAction::Branch { if_true, if_false, .. } => {
+            for a in if_true.iter().chain(if_false.iter()) {
+                check_action_item_ids(a, qid, phase_id, errors);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1138,5 +1200,38 @@ mod tests {
         assert_eq!(item_id_to_kind("demon_sword"),         Some(ItemKind::QuestItem(QuestItemKind("demon_sword"))));
         assert_eq!(item_id_to_kind("elenas_memo"),         Some(ItemKind::QuestItem(QuestItemKind("elenas_memo"))));
         assert_eq!(item_id_to_kind("ancient_ritual_book"), Some(ItemKind::QuestItem(QuestItemKind("ancient_ritual_book"))));
+    }
+
+    #[test]
+    fn check_action_item_ids_detects_unknown_id() {
+        crate::modules::item::load_quest_items();
+        let bad_action = QuestAction::GiveItem("nonexistent_item".to_string());
+        let mut errors = Vec::new();
+        check_action_item_ids(&bad_action, "test_quest", "phase1", &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("nonexistent_item"));
+    }
+
+    #[test]
+    fn check_action_item_ids_passes_known_ids() {
+        crate::modules::item::load_quest_items();
+        let good_action = QuestAction::GiveItem("eternal_gem".to_string());
+        let mut errors = Vec::new();
+        check_action_item_ids(&good_action, "test_quest", "phase1", &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn check_action_item_ids_recurses_into_branches() {
+        crate::modules::item::load_quest_items();
+        let action = QuestAction::Branch {
+            condition: Box::new(QuestCondition::HasFlag("test".into())),
+            if_true: vec![QuestAction::GiveItem("invalid_item_id".into())],
+            if_false: vec![],
+        };
+        let mut errors = Vec::new();
+        check_action_item_ids(&action, "q", "p", &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("invalid_item_id"));
     }
 }
