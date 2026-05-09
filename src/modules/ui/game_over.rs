@@ -156,6 +156,8 @@ struct NewGameParams<'w, 's> {
     blood_q: Query<'w, 's, Entity, With<BloodStain>>,
     item_registry: Res<'w, crate::modules::item::ItemRegistry>,
     start_loadout: Res<'w, crate::modules::item::StartLoadoutRegistry>,
+    ranged: ResMut<'w, crate::modules::ranged::RangedTargeting>,
+    ranged_cursor_q: Query<'w, 's, Entity, With<crate::modules::ranged::RangedCursor>>,
 }
 
 /// Game Over 상태에서 `Esc` 입력을 게임 종료 이벤트로 변환한다.
@@ -233,6 +235,10 @@ fn start_new_run(params: &mut NewGameParams) {
     *params.shop_ui = ShopUiState::default();
     *params.move_hold = MoveHoldState::default();
     params.player_path.0.clear();
+    params.ranged.active = false;
+    for e in params.ranged_cursor_q.iter() {
+        params.commands.entity(e).despawn();
+    }
 
     if let Ok((player_entity, mut stats)) = params.player_q.get_single_mut() {
         stats.hp = PLAYER_HP;

@@ -874,7 +874,9 @@ fn cycle_glyph_style(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut config: ResMut<GlyphConfig>,
     mut log: EventWriter<LogMessage>,
+    defeated_q: Query<(), With<crate::modules::combat::Defeated>>,
 ) {
+    if !defeated_q.is_empty() { return; }
     if keyboard.just_pressed(KeyCode::KeyG) {
         config.style = config.style.next();
         log.send(LogMessage(format!("글리프 스타일: {}", config.style.display_name())));

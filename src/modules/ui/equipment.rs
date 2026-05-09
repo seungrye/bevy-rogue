@@ -80,7 +80,9 @@ fn toggle_equipment_panel(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut panel_open: ResMut<EquipmentPanelOpen>,
     mut ui_state: ResMut<EquipmentUiState>,
+    defeated_q: Query<(), With<crate::modules::combat::Defeated>>,
 ) {
+    if !defeated_q.is_empty() { return; }
     if keyboard.just_pressed(KeyCode::KeyE) {
         panel_open.0 = !panel_open.0;
         if panel_open.0 {

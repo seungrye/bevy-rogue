@@ -341,7 +341,9 @@ fn cycle_map_generator(
     keyboard_input: Res<ButtonInput<KeyCode>>,
     mut registry: ResMut<MapGeneratorRegistry>,
     mut events: EventWriter<RegenerateMapEvent>,
+    defeated_q: Query<(), With<crate::modules::combat::Defeated>>,
 ) {
+    if !defeated_q.is_empty() { return; }
     if keyboard_input.just_pressed(KeyCode::F1) {
         registry.next();
         info!("맵 생성기 전환: {}", registry.current_name());

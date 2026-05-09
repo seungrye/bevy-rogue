@@ -68,7 +68,9 @@ fn toggle_quest_panel(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut panel_open: ResMut<QuestPanelOpen>,
     mut panel_q: Query<&mut Visibility, With<QuestPanel>>,
+    defeated_q: Query<(), With<crate::modules::combat::Defeated>>,
 ) {
+    if !defeated_q.is_empty() { return; }
     if !keyboard.just_pressed(KeyCode::KeyQ) { return; }
     panel_open.0 = !panel_open.0;
     if let Ok(mut vis) = panel_q.get_single_mut() {

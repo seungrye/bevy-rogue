@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use crate::modules::{
+    combat::Defeated,
     item::{EquipmentPanelOpen, PlayerEquipment, WeaponKind, weapon_attack},
     map::{
         MapResource, MAP_WIDTH, MAP_HEIGHT, TILE_SIZE,
@@ -18,6 +19,7 @@ impl Plugin for RangedPlugin {
         app.init_resource::<RangedTargeting>()
             .add_systems(Update, (
                 handle_ranged_input,
+                handle_ranged_mouse,
                 update_ranged_cursor,
             ).chain());
     }
@@ -40,7 +42,7 @@ fn handle_ranged_input(
     equipment_open: Res<EquipmentPanelOpen>,
     shop_open: Res<ShopPanelOpen>,
     help_open: Res<HelpPanelOpen>,
-    player_q: Query<&Transform, With<Player>>,
+    player_q: Query<&Transform, (With<Player>, Without<Defeated>)>,
     monster_tiles: Res<MonsterTiles>,
     map_res: Res<MapResource>,
     asset_server: Res<AssetServer>,
@@ -134,10 +136,84 @@ fn handle_ranged_input(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn handle_ranged_mouse(
+    mut commands: Commands,
+    mut targeting: ResMut<RangedTargeting>,
+    mouse_input: Res<ButtonInput<MouseButton>>,
+    mut cursor_moved: EventReader<bevy::window::CursorMoved>,
+    equipment_open: Res<EquipmentPanelOpen>,
+    shop_open: Res<ShopPanelOpen>,
+    help_open: Res<HelpPanelOpen>,
+    windows: Query<&Window>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<Camera>>,
+    player_q: Query<&Transform, (With<Player>, Without<Defeated>)>,
+    cursor_q: Query<Entity, With<RangedCursor>>,
+    map_res: Res<MapResource>,
+    mut fire_writer: EventWriter<FireProjectileEvent>,
+    mut acted_writer: EventWriter<PlayerActedEvent>,
+    mut log: EventWriter<LogMessage>,
+    items: Res<crate::modules::item::ItemRegistry>,
+) {
+    if !targeting.active { return; }
+    if equipment_open.0 || shop_open.0 || help_open.0 { return; }
+
+    // 우클릭 — 취소.
+    if mouse_input.just_pressed(MouseButton::Right) {
+        targeting.active = false;
+        for e in cursor_q.iter() { commands.entity(e).despawn(); }
+        return;
+    }
+
+    let Ok(window) = windows.get_single() else { return };
+    let Ok((camera, cam_transform)) = camera_q.get_single() else { return };
+    let Ok(player_transform) = player_q.get_single() else { return };
+
+    // 마우스 hover — 커서 갱신.
+    if cursor_moved.read().next().is_some() {
+        if let Some(cursor_pos) = window.cursor_position() {
+            if let Some(world_pos) = camera.viewport_to_world_2d(cam_transform, cursor_pos) {
+                let world_vec3 = Vec3::new(world_pos.x, world_pos.y, 0.0);
+                let (tx, ty) = world_to_tile_coords(world_vec3);
+                if tx < MAP_WIDTH && ty < MAP_HEIGHT {
+                    targeting.cursor = (tx, ty);
+                }
+            }
+        }
+    }
+
+    // 좌클릭 — 발사.
+    if mouse_input.just_pressed(MouseButton::Left) {
+        let (px, py) = world_to_tile_coords(player_transform.translation);
+        let (tx, ty) = targeting.cursor;
+        let map = map_res.map();
+        let dx = tx as i32 - px as i32;
+        let dy = ty as i32 - py as i32;
+        let in_range = dx * dx + dy * dy <= BOW_RANGE * BOW_RANGE;
+        if !in_range {
+            log.send(LogMessage("사거리를 벗어났다.".into()));
+            return;
+        }
+        if !is_line_of_sight_clear(map, px as i32, py as i32, tx as i32, ty as i32) {
+            log.send(LogMessage("장애물에 막혔다.".into()));
+            return;
+        }
+        fire_writer.send(FireProjectileEvent {
+            origin_tile: (px, py),
+            target_tile: (tx, ty),
+            damage: weapon_attack(WeaponKind::BOW, &items),
+            element: Some(crate::modules::elemental::Element::Lightning),
+        });
+        acted_writer.send(PlayerActedEvent);
+        targeting.active = false;
+        for e in cursor_q.iter() { commands.entity(e).despawn(); }
+    }
+}
+
 fn update_ranged_cursor(
     targeting: Res<RangedTargeting>,
     map_res: Res<MapResource>,
-    player_q: Query<&Transform, With<Player>>,
+    player_q: Query<&Transform, (With<Player>, Without<Defeated>)>,
     mut cursor_q: Query<(&mut Transform, &mut Text), (With<RangedCursor>, Without<Player>)>,
 ) {
     if !targeting.active { return; }

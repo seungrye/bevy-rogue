@@ -78,7 +78,9 @@ fn setup_help_overlay(mut commands: Commands, asset_server: Res<AssetServer>) {
 fn toggle_help_overlay(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut open: ResMut<HelpPanelOpen>,
+    defeated_q: Query<(), With<crate::modules::combat::Defeated>>,
 ) {
+    if !defeated_q.is_empty() { return; }
     let shift = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
     let question_mark = shift && keyboard.just_pressed(KeyCode::Slash);
     if keyboard.just_pressed(KeyCode::KeyH) || question_mark {
@@ -119,8 +121,9 @@ fn help_sections(font: &Handle<Font>) -> Vec<TextSection> {
         ("F", "원격 공격 시작 (활 장착 시)"),
         ("Tab / Shift+Tab", "다음/이전 타겟"),
         ("방향키 (원격 중)", "자유 커서 이동"),
-        ("Enter", "발사"),
-        ("Esc (원격 중)", "취소"),
+        ("마우스 이동 (원격 중)", "커서를 마우스 위치로"),
+        ("Enter / 좌클릭", "발사"),
+        ("Esc / 우클릭 (원격 중)", "취소"),
         ("M", "전체화면 미니맵 토글"),
     ]);
     push_group(&mut sections, font, "패널", &[

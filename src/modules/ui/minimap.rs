@@ -284,7 +284,12 @@ fn spawn_full_map_overlay(
         });
 }
 
-fn toggle_full_map(keyboard: Res<ButtonInput<KeyCode>>, mut open: ResMut<FullMapOpen>) {
+fn toggle_full_map(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut open: ResMut<FullMapOpen>,
+    defeated_q: Query<(), With<crate::modules::combat::Defeated>>,
+) {
+    if !defeated_q.is_empty() { return; }
     // M — 전체 미니맵. 작은 미니맵은 항상 표시, M 은 큰 지도 toggle 전용.
     if keyboard.just_pressed(KeyCode::KeyM) {
         open.0 = !open.0;
