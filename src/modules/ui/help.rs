@@ -117,6 +117,7 @@ fn help_sections(font: &Handle<Font>) -> Vec<TextSection> {
     push_group(&mut sections, font, "전투와 탐험", &[
         ("몬스터 방향 이동", "근접 공격"),
         ("M", "미니맵 표시/숨김"),
+        ("L", "전체화면 미니맵 토글"),
         ("Ctrl + +/-", "미니맵 줌 조절"),
     ]);
     push_group(&mut sections, font, "패널", &[

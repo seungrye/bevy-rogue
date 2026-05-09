@@ -121,9 +121,15 @@ impl Plugin for MinimapPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MinimapConfig>()
             .init_resource::<DiscoveredMarkers>()
+            .init_resource::<FullMapOpen>()
             .add_systems(
                 Startup,
-                (setup_minimap, spawn_minimap_overlay.after(setup_minimap)),
+                (
+                    setup_minimap,
+                    spawn_minimap_overlay.after(setup_minimap),
+                    setup_full_map,
+                    spawn_full_map_overlay.after(setup_full_map),
+                ),
             )
             .add_systems(
                 Update,
@@ -132,10 +138,29 @@ impl Plugin for MinimapPlugin {
                     toggle_minimap,
                     update_generator_name,
                     zoom_minimap,
+                    toggle_full_map,
+                    update_full_map_visibility.after(toggle_full_map),
+                    update_full_map_image.after(update_full_map_visibility),
                 ),
             );
     }
 }
+
+// ── 전체화면 미니맵 ──────────────────────────────────────────────────────────
+
+const FULL_MAP_W: u32 = crate::modules::map::MAP_WIDTH as u32;
+const FULL_MAP_H: u32 = crate::modules::map::MAP_HEIGHT as u32;
+/// 화면에서 차지할 크기 — 한 타일이 8px 으로 그려져 80x50 → 640x400
+const FULL_MAP_DISPLAY_SCALE: f32 = 8.0;
+
+#[derive(Resource)]
+pub struct FullMapImage(pub Handle<Image>);
+
+#[derive(Resource, Default)]
+pub struct FullMapOpen(pub bool);
+
+#[derive(Component)]
+pub struct FullMapPanel;
 
 fn toggle_visibility(vis: Visibility) -> Visibility {
     match vis {
@@ -218,6 +243,148 @@ fn spawn_minimap_overlay(
                 },
             ));
         });
+}
+
+fn setup_full_map(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    let extent = Extent3d {
+        width: FULL_MAP_W,
+        height: FULL_MAP_H,
+        ..default()
+    };
+    let mut image = Image::new_fill(
+        extent,
+        TextureDimension::D2,
+        &[0, 0, 0, 0],
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    image.sampler = ImageSampler::nearest();
+    let handle = images.add(image);
+    commands.insert_resource(FullMapImage(handle));
+}
+
+fn spawn_full_map_overlay(
+    mut commands: Commands,
+    full_map: Res<FullMapImage>,
+    asset_server: Res<AssetServer>,
+) {
+    let font = asset_server.load("fonts/NanumSquareNeo-bRg.ttf");
+    let display_w = FULL_MAP_W as f32 * FULL_MAP_DISPLAY_SCALE;
+    let display_h = FULL_MAP_H as f32 * FULL_MAP_DISPLAY_SCALE;
+    commands
+        .spawn((
+            NodeBundle {
+                style: Style {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    top: Val::Px(0.0),
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(8.0),
+                    ..default()
+                },
+                background_color: Color::rgba(0.0, 0.0, 0.0, 0.85).into(),
+                z_index: ZIndex::Global(150),
+                visibility: Visibility::Hidden,
+                ..default()
+            },
+            FullMapPanel,
+        ))
+        .with_children(|parent| {
+            parent.spawn(ImageBundle {
+                style: Style {
+                    width: Val::Px(display_w),
+                    height: Val::Px(display_h),
+                    ..default()
+                },
+                image: full_map.0.clone().into(),
+                ..default()
+            });
+            parent.spawn(TextBundle::from_section(
+                "[L] 닫기",
+                TextStyle { font, font_size: 14.0, color: Color::GRAY },
+            ));
+        });
+}
+
+fn toggle_full_map(keyboard: Res<ButtonInput<KeyCode>>, mut open: ResMut<FullMapOpen>) {
+    // L — Large map. 작은 미니맵 toggle(M) / 패널 내 Tab 과 충돌 회피
+    if keyboard.just_pressed(KeyCode::KeyL) {
+        open.0 = !open.0;
+    }
+}
+
+fn update_full_map_visibility(
+    open: Res<FullMapOpen>,
+    mut panel_q: Query<&mut Visibility, With<FullMapPanel>>,
+) {
+    if !open.is_changed() { return; }
+    let Ok(mut vis) = panel_q.get_single_mut() else { return; };
+    *vis = if open.0 { Visibility::Inherited } else { Visibility::Hidden };
+}
+
+fn update_full_map_image(
+    open: Res<FullMapOpen>,
+    map_res: Res<MapResource>,
+    full_map: Res<FullMapImage>,
+    mut images: ResMut<Assets<Image>>,
+    player_query: Query<&Transform, With<Player>>,
+    world_state: Res<WorldState>,
+    markers: Res<DiscoveredMarkers>,
+) {
+    if !open.0 { return; }
+    let Ok(player_transform) = player_query.get_single() else { return; };
+    let (player_x, player_y) =
+        crate::modules::map::world_to_tile_coords(player_transform.translation);
+    let map = map_res.map();
+    let Some(image) = images.get_mut(&full_map.0) else { return; };
+
+    // 1) 타일 색칠 — 발견된 영역만
+    for y in 0..FULL_MAP_H {
+        for x in 0..FULL_MAP_W {
+            let pixel_idx = (y * FULL_MAP_W + x) as usize * 4;
+            let color = full_map_tile_color(map, x as i32, y as i32, player_x, player_y);
+            image.data[pixel_idx..pixel_idx + 4].copy_from_slice(&color);
+        }
+    }
+
+    // 2) 마커 — 1 픽셀
+    for marker in markers.0.iter().filter(|m| m.zone == world_state.current) {
+        let (mx, my) = (marker.tile_x, marker.tile_y);
+        if mx >= FULL_MAP_W as usize || my >= FULL_MAP_H as usize { continue; }
+        let pixel_idx = (my as u32 * FULL_MAP_W + mx as u32) as usize * 4;
+        image.data[pixel_idx..pixel_idx + 4].copy_from_slice(&marker.kind.color());
+    }
+}
+
+/// 전체화면 미니맵 픽셀 색상 — 발견 안 된 곳은 완전 검정 (투명 X — 패널 자체가 어두움)
+pub(crate) fn full_map_tile_color(map: &Map, x: i32, y: i32, player_x: usize, player_y: usize) -> [u8; 4] {
+    if x < 0 || y < 0 || x >= map.width as i32 || y >= map.height as i32 {
+        return [0, 0, 0, 255];
+    }
+    let ux = x as usize;
+    let uy = y as usize;
+    if ux == player_x && uy == player_y {
+        return C_PLAYER;
+    }
+    let idx = map.index(ux, uy);
+    if !map.tiles[idx].revealed {
+        return [0, 0, 0, 255];  // 미탐험 — 검정
+    }
+    if map.tiles[idx].visible {
+        match map.tiles[idx].kind {
+            TileKind::Wall => C_VISIBLE_WALL,
+            TileKind::Floor => C_VISIBLE_FLOOR,
+        }
+    } else {
+        match map.tiles[idx].kind {
+            TileKind::Wall => C_REVEALED_WALL,
+            TileKind::Floor => C_REVEALED_FLOOR,
+        }
+    }
 }
 
 /// view_radius 를 clamp하여 반환한다 (순수 함수, 테스트 가능)
@@ -720,6 +887,41 @@ mod tests {
         dm.remove_actor("엘렌", MarkerKind::QuestGiver, &ZoneId::Town);
         assert_eq!(dm.0.len(), 1);
         assert_eq!(dm.0[0].actor.as_deref(), Some("장로"));
+    }
+
+    #[test]
+    fn full_map_tile_color_unrevealed_returns_black() {
+        let map = Map::new(10, 10);
+        // revealed 안 된 wall — 검정
+        let c = full_map_tile_color(&map, 3, 3, 5, 5);
+        assert_eq!(c, [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn full_map_tile_color_player_returns_player_color() {
+        let map = Map::new(10, 10);
+        let c = full_map_tile_color(&map, 5, 5, 5, 5);
+        assert_eq!(c, C_PLAYER);
+    }
+
+    #[test]
+    fn full_map_tile_color_revealed_floor_distinct_from_wall() {
+        let mut map = Map::new(10, 10);
+        let f_idx = map.index(3, 3);
+        map.tiles[f_idx].kind = TileKind::Floor;
+        map.tiles[f_idx].revealed = true;
+        let w_idx = map.index(4, 3);
+        map.tiles[w_idx].revealed = true; // wall + revealed
+        let cf = full_map_tile_color(&map, 3, 3, 0, 0);
+        let cw = full_map_tile_color(&map, 4, 3, 0, 0);
+        assert_ne!(cf, cw);
+    }
+
+    #[test]
+    fn full_map_tile_color_oob_returns_black() {
+        let map = Map::new(10, 10);
+        assert_eq!(full_map_tile_color(&map, -1, 5, 0, 0), [0, 0, 0, 255]);
+        assert_eq!(full_map_tile_color(&map, 5, 10, 0, 0), [0, 0, 0, 255]);
     }
 
     #[test]
