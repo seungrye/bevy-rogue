@@ -39,24 +39,49 @@ pub struct MapMarker {
     pub tile_y: usize,
     pub kind: MarkerKind,
     pub zone: ZoneId,
+    /// 동적으로 위치가 갱신될 수 있는 entity (예: NPC) 식별자.
+    /// 같은 actor 의 마커가 이미 있으면 위치만 갱신된다.
+    /// None 이면 정적 마커 (포털, 아이템 등) — add() 가 위치 중복만 검사.
+    #[serde(default)]
+    pub actor: Option<String>,
 }
 
 #[derive(Resource, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DiscoveredMarkers(pub Vec<MapMarker>);
 
 impl DiscoveredMarkers {
+    /// 정적 마커 추가 — 같은 위치/종류/존이 이미 있으면 추가하지 않는다 (idempotent).
     pub fn add(&mut self, tile_x: usize, tile_y: usize, kind: MarkerKind, zone: ZoneId) {
         let already = self
             .0
             .iter()
             .any(|m| m.tile_x == tile_x && m.tile_y == tile_y && m.kind == kind && m.zone == zone);
         if !already {
-            self.0.push(MapMarker {
-                tile_x,
-                tile_y,
-                kind,
-                zone,
-            });
+            self.0.push(MapMarker { tile_x, tile_y, kind, zone, actor: None });
+        }
+    }
+
+    /// 지정 위치/종류/존의 마커를 제거한다 (예: 퀘스트 아이템 획득 시).
+    pub fn remove_at(&mut self, tile_x: usize, tile_y: usize, kind: MarkerKind, zone: &ZoneId) {
+        self.0.retain(|m| !(m.tile_x == tile_x && m.tile_y == tile_y && m.kind == kind && m.zone == *zone));
+    }
+
+    /// 지정 actor 의 마커를 제거한다 (예: 퀘스트 종료/활성 해제 시).
+    pub fn remove_actor(&mut self, actor: &str, kind: MarkerKind, zone: &ZoneId) {
+        self.0.retain(|m| !(m.actor.as_deref() == Some(actor) && m.kind == kind && m.zone == *zone));
+    }
+
+    /// 동적 actor 마커의 위치를 갱신한다.
+    /// 같은 (actor, kind, zone) 가 있으면 위치만 변경, 없으면 새로 추가한다.
+    /// 이동 NPC 가 시야에 들어왔을 때 사용한다.
+    pub fn update_actor_position(&mut self, actor: &str, kind: MarkerKind, zone: ZoneId, tile_x: usize, tile_y: usize) {
+        if let Some(m) = self.0.iter_mut()
+            .find(|m| m.actor.as_deref() == Some(actor) && m.kind == kind && m.zone == zone)
+        {
+            m.tile_x = tile_x;
+            m.tile_y = tile_y;
+        } else {
+            self.0.push(MapMarker { tile_x, tile_y, kind, zone, actor: Some(actor.to_string()) });
         }
     }
 }
@@ -653,6 +678,58 @@ mod tests {
         dm.add(5, 5, MarkerKind::Portal, ZoneId::Town);
         dm.add(5, 5, MarkerKind::Portal, ZoneId::Forest);
         assert_eq!(dm.0.len(), 2);
+    }
+
+    #[test]
+    fn remove_at_only_removes_matching_marker() {
+        let mut dm = DiscoveredMarkers::default();
+        dm.add(5, 5, MarkerKind::QuestTarget, ZoneId::Town);
+        dm.add(5, 5, MarkerKind::QuestGiver, ZoneId::Town);
+        dm.add(7, 7, MarkerKind::QuestTarget, ZoneId::Town);
+        dm.remove_at(5, 5, MarkerKind::QuestTarget, &ZoneId::Town);
+        assert_eq!(dm.0.len(), 2);
+        assert!(!dm.0.iter().any(|m| m.tile_x == 5 && m.tile_y == 5 && m.kind == MarkerKind::QuestTarget));
+        assert!(dm.0.iter().any(|m| m.tile_x == 5 && m.tile_y == 5 && m.kind == MarkerKind::QuestGiver));
+    }
+
+    #[test]
+    fn update_actor_position_moves_existing_marker() {
+        let mut dm = DiscoveredMarkers::default();
+        dm.update_actor_position("엘렌", MarkerKind::QuestGiver, ZoneId::Town, 5, 5);
+        assert_eq!(dm.0.len(), 1);
+        // 같은 actor 의 위치 갱신
+        dm.update_actor_position("엘렌", MarkerKind::QuestGiver, ZoneId::Town, 7, 8);
+        assert_eq!(dm.0.len(), 1, "같은 actor 는 위치만 갱신, 새 마커 추가 안 됨");
+        assert_eq!(dm.0[0].tile_x, 7);
+        assert_eq!(dm.0[0].tile_y, 8);
+    }
+
+    #[test]
+    fn update_actor_position_adds_new_for_different_actor() {
+        let mut dm = DiscoveredMarkers::default();
+        dm.update_actor_position("엘렌", MarkerKind::QuestGiver, ZoneId::Town, 5, 5);
+        dm.update_actor_position("장로", MarkerKind::QuestGiver, ZoneId::Town, 8, 8);
+        assert_eq!(dm.0.len(), 2);
+    }
+
+    #[test]
+    fn remove_actor_removes_only_matching_actor() {
+        let mut dm = DiscoveredMarkers::default();
+        dm.update_actor_position("엘렌", MarkerKind::QuestGiver, ZoneId::Town, 5, 5);
+        dm.update_actor_position("장로", MarkerKind::QuestGiver, ZoneId::Town, 8, 8);
+        dm.remove_actor("엘렌", MarkerKind::QuestGiver, &ZoneId::Town);
+        assert_eq!(dm.0.len(), 1);
+        assert_eq!(dm.0[0].actor.as_deref(), Some("장로"));
+    }
+
+    #[test]
+    fn legacy_map_marker_without_actor_field_parses() {
+        // actor 필드 없는 기존 저장 데이터 호환성 (#[serde(default)])
+        let legacy = r#"(tile_x: 5, tile_y: 7, kind: Portal, zone: Town)"#;
+        let parsed: MapMarker = ron::de::from_str(legacy).expect("legacy 파싱 성공");
+        assert_eq!(parsed.tile_x, 5);
+        assert_eq!(parsed.tile_y, 7);
+        assert!(parsed.actor.is_none());
     }
 
     #[test]

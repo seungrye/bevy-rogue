@@ -786,6 +786,8 @@ fn pickup_items(
     mut log: EventWriter<LogMessage>,
     mut quest_acquired: EventWriter<QuestItemAcquiredEvent>,
     quest_items: Res<QuestItemRegistry>,
+    mut markers: ResMut<crate::modules::ui::minimap::DiscoveredMarkers>,
+    world: Res<crate::modules::zone::WorldState>,
 ) {
     if turn_events.read().next().is_none() { return; }
     let Ok((moving_to, transform)) = player_query.get_single() else { return };
@@ -793,12 +795,12 @@ fn pickup_items(
         .map(|m| world_to_tile_coords(m.target))
         .unwrap_or_else(|| world_to_tile_coords(transform.translation));
 
-    let at_tile: Vec<(Entity, ItemKind)> = item_query.iter()
+    let at_tile: Vec<(Entity, ItemKind, usize, usize)> = item_query.iter()
         .filter(|(_, item)| item.tile_x == px && item.tile_y == py)
-        .map(|(e, item)| (e, item.kind))
+        .map(|(e, item)| (e, item.kind, item.tile_x, item.tile_y))
         .collect();
 
-    for (entity, kind) in at_tile {
+    for (entity, kind, tx, ty) in at_tile {
         match kind {
             ItemKind::Weapon(_) | ItemKind::Armor(_) | ItemKind::QuestItem(_) => {
                 inventory.items.push(InventoryItem { kind });
@@ -809,6 +811,8 @@ fn pickup_items(
         }
         if let ItemKind::QuestItem(qk) = kind {
             quest_acquired.send(QuestItemAcquiredEvent(qk));
+            // 미니맵의 QuestTarget 마커 제거 — 획득한 아이템 위치는 더 이상 표시할 필요 없음
+            markers.remove_at(tx, ty, crate::modules::ui::minimap::MarkerKind::QuestTarget, &world.current);
         }
         log.send(LogMessage(kind.pickup_message(&quest_items).to_string()));
         commands.entity(entity).despawn();

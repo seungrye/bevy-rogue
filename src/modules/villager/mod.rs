@@ -159,21 +159,54 @@ fn handle_kill_npc(
     }
 }
 
-/// 퀘스트 NPC 가 player FOV 안에 들어오면 미니맵에 마커를 추가한다.
-/// 일반 villager 는 무시한다 (quest_id 가 None).
+/// 퀘스트 NPC 미니맵 마커를 quest 상태에 따라 갱신/제거한다.
+///
+/// 마커 표시 조건 (모두 만족):
+/// - villager 의 quest_id 가 등록된 퀘스트
+/// - quest 가 시작됨 (state.phases 에 있고, initial_phase 가 아님)
+/// - quest 가 terminal 페이즈가 아님 (on_interact / auto_advance 가 비어있지 않음)
+/// - NPC 가 player FOV 안에 있음
+///
+/// 위 중 하나라도 깨지면 해당 NPC 의 마커를 제거한다 (시작 전 / 종료 후 / 다른 zone).
 fn discover_quest_npcs_in_fov(
     map_res: Res<crate::modules::map::MapResource>,
     world_state: Res<WorldState>,
+    quest_registry: Res<QuestRegistry>,
+    quest_state: Res<QuestState>,
     villager_query: Query<&Villager>,
     mut markers: ResMut<DiscoveredMarkers>,
 ) {
     let map = map_res.map();
     for v in villager_query.iter() {
-        if v.quest_id.is_none() { continue; }
+        let Some(qid) = &v.quest_id else { continue; };
+        let Some(qdef) = quest_registry.get(qid) else { continue; };
+
+        // quest 시작 전 (phase 없음 또는 initial_phase) → 마커 제거
+        let started = match quest_state.phases.get(qid) {
+            None => false,
+            Some(p) => p != &qdef.initial_phase,
+        };
+        if !started {
+            markers.remove_actor(&v.name, MarkerKind::QuestGiver, &world_state.current);
+            continue;
+        }
+
+        // quest 종료 (terminal phase) → 마커 제거
+        if is_quest_terminal_def(qdef, &quest_state, qid) {
+            markers.remove_actor(&v.name, MarkerKind::QuestGiver, &world_state.current);
+            continue;
+        }
+
+        // FOV 검사: 시야 밖이면 마지막 본 위치 유지 (제거하지 않음)
         if v.tile_x >= map.width || v.tile_y >= map.height { continue; }
         let idx = map.index(v.tile_x, v.tile_y);
         if !map.tiles[idx].visible { continue; }
-        markers.add(v.tile_x, v.tile_y, MarkerKind::QuestGiver, world_state.current.clone());
+
+        // active + FOV 안 — 위치 갱신
+        markers.update_actor_position(
+            &v.name, MarkerKind::QuestGiver, world_state.current.clone(),
+            v.tile_x, v.tile_y,
+        );
     }
 }
 
@@ -305,7 +338,6 @@ fn handle_bump(
     registry: Res<QuestRegistry>,
     mut quest_state: ResMut<QuestState>,
     mut inventory: ResMut<PlayerInventory>,
-    mut markers: ResMut<DiscoveredMarkers>,
     world_state: Res<WorldState>,
     mut kill_npc: EventWriter<KillNpcEvent>,
     mut open_portal: EventWriter<SpawnQuestPortalEvent>,
@@ -320,13 +352,8 @@ fn handle_bump(
             if villager.name == "상인" {
                 shop_open.send(crate::modules::ui::shop::ShopOpenEvent);
             } else if let Some(quest_id) = villager.quest_id.clone() {
-                let phase_before = quest_state.phases.get(&quest_id).cloned();
                 show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut kill_npc, &mut open_portal, &mut despawn_item, &quest_items);
-                let phase_after = quest_state.phases.get(&quest_id).cloned();
-                // 퀘스트가 active 상태로 전환됐을 때 QuestGiver 마커 추가
-                if phase_before.as_deref() != Some("active") && phase_after.as_deref() == Some("active") {
-                    markers.add(villager.tile_x, villager.tile_y, MarkerKind::QuestGiver, world_state.current.clone());
-                }
+                // QuestGiver 마커는 discover_quest_npcs_in_fov 가 quest 상태에 따라 자동 갱신
             } else if !villager.dialogues.is_empty() {
                 let msg = villager.dialogues[villager.dialogue_idx].clone();
                 log_writer.send(LogMessage(msg));
