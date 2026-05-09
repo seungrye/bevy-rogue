@@ -7,7 +7,7 @@ use crate::modules::{
     quest::QuestState,
     zone::{WorldState, ZoneId, ZonePersistence, ZoneSnapshot, NamedZoneConfig, zone_seed},
     ui::minimap::DiscoveredMarkers,
-    combat::CombatStats,
+    combat::{CombatStats, Defeated},
     combat_feedback::BloodStain,
     map::world_to_tile_coords,
 };
@@ -137,7 +137,7 @@ fn auto_save(
     global_turn: Res<GlobalTurn>,
     global_seed: Res<GlobalSeed>,
     map_res: Res<MapResource>,
-    player_q: Query<(&Transform, &CombatStats), With<Player>>,
+    player_q: Query<(&Transform, &CombatStats), (With<Player>, Without<Defeated>)>,
     blood_q: Query<(&BloodStain, &Transform), Without<Player>>,
 ) {
     if events.read().next().is_none() { return; }
@@ -269,8 +269,9 @@ fn load_if_save_exists(
     mut global_seed: ResMut<GlobalSeed>,
     registry: Res<MapGeneratorRegistry>,
     mut named_config: ResMut<NamedZoneConfig>,
-    mut player_q: Query<&mut CombatStats, With<Player>>,
+    mut player_q: Query<(Entity, &mut CombatStats), With<Player>>,
     mut apply_ev: EventWriter<ApplyMapEvent>,
+    mut commands: Commands,
 ) {
     let content = match std::fs::read_to_string(SAVE_PATH) {
         Ok(c) => c,
@@ -302,8 +303,12 @@ fn load_if_save_exists(
     );
 
     // 플레이어 스탯은 SaveData 리소스 필드를 이동하기 전에 복원한다.
-    if let Ok(mut stats) = player_q.get_single_mut() {
+    // HP<=0 으로 저장된 경우 (이전 버그 방어) 즉시 Defeated 부여 — 게임 오버 UI 트리거.
+    if let Ok((player_entity, mut stats)) = player_q.get_single_mut() {
         restore_player_stats(&mut stats, &save);
+        if stats.hp <= 0 {
+            commands.entity(player_entity).insert(Defeated);
+        }
     }
 
     // 리소스 복원
