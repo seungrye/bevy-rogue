@@ -35,6 +35,7 @@ QuestDef(
     title: "안개 속의 발자국",
     giver_npc: "부상당한 병사",
     initial_phase: "dormant",
+    spawn_chance: 1.0,
 
     phases: {
 

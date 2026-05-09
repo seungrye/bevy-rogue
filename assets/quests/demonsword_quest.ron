@@ -3,6 +3,7 @@ QuestDef(
     title: "성기사가 마검을 들다",
     giver_npc: "바스티안",
     initial_phase: "not_started",
+    spawn_chance: 0.7,
 
     phases: {
         "not_started": QuestPhaseDef(

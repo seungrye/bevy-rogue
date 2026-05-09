@@ -324,6 +324,7 @@ mod tests {
                 count: 1,
                 condition: None,
             }],
+            spawn_chance: 1.0,
         };
         let mut reg = QuestRegistry::default();
         reg.quests.insert("gem_quest".into(), def);
@@ -437,6 +438,7 @@ mod tests {
             initial_phase: "active".into(),
             phases,
             spawns: vec![],
+            spawn_chance: 1.0,
         });
         let mut st = QuestState::default();
         st.set_phase("q", "active");
@@ -485,6 +487,7 @@ mod tests {
             initial_phase: "travel".into(),
             phases,
             spawns: vec![],
+            spawn_chance: 1.0,
         };
         let hints = quest_location_hints(&def, "travel", &QuestState::default(), &default_world());
         assert_eq!(hints, vec!["위치: 숲".to_string()]);

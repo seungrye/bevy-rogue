@@ -19,6 +19,7 @@ QuestDef(
     title: "재생의 불꽃",
     giver_npc: "조라",
     initial_phase: "dormant",
+    spawn_chance: 0.6,
 
     phases: {
 

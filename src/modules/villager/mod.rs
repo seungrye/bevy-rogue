@@ -10,7 +10,7 @@ use crate::modules::{
     },
     player::{Player, MovingTo, MoveQueue, PlayerSystemSet, LERP_SPEED},
     ui::{LogMessage, minimap::{DiscoveredMarkers, MarkerKind}},
-    quest::{QuestRegistry, QuestState, KillNpcEvent, DespawnWorldItemEvent, execute_actions, QuestDef, QuestAction, eval_condition},
+    quest::{QuestRegistry, QuestState, QuestSystemSet, KillNpcEvent, DespawnWorldItemEvent, execute_actions, QuestDef, QuestAction, eval_condition},
     item::{PlayerInventory},
     zone::{WorldState, SpawnQuestPortalEvent},
     combat::Speed,
@@ -229,7 +229,7 @@ pub struct VillagerPlugin;
 
 impl Plugin for VillagerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_on_startup.after(draw_map))
+        app.add_systems(Startup, spawn_on_startup.after(draw_map).after(QuestSystemSet::Load))
             .add_systems(PreUpdate, sync_occupied_tiles)
             .add_systems(Update, (
                 respawn_on_regen.after(MapSystemSet::ExecuteRegen),
@@ -275,10 +275,11 @@ fn spawn_on_startup(
     mut commands: Commands,
     map_res: Res<crate::modules::map::MapResource>,
     asset_server: Res<AssetServer>,
+    registry: Res<QuestRegistry>,
 ) {
     let map = map_res.map();
     if map.map_type == MapType::Village {
-        do_spawn(&mut commands, &map.rooms.clone(), &asset_server);
+        do_spawn(&mut commands, &map.rooms.clone(), &asset_server, &registry);
     }
 }
 
@@ -287,23 +288,26 @@ fn respawn_on_regen(
     mut events: EventReader<VillagerRespawnEvent>,
     villager_query: Query<Entity, With<Villager>>,
     asset_server: Res<AssetServer>,
+    registry: Res<QuestRegistry>,
 ) {
     for event in events.read() {
         for entity in villager_query.iter() {
             commands.entity(entity).despawn();
         }
         if event.map_type == MapType::Village {
-            do_spawn(&mut commands, &event.rooms, &asset_server);
+            do_spawn(&mut commands, &event.rooms, &asset_server, &registry);
         }
     }
 }
 
-fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer) {
+fn do_spawn(commands: &mut Commands, rooms: &[Rect], asset_server: &AssetServer, registry: &QuestRegistry) {
     if rooms.is_empty() { return; }
     let font = asset_server.load("fonts/FiraMono-Medium.ttf");
 
-    // 퀘스트 NPC와 일반 NPC를 분리: 퀘스트 NPC는 최대 1명씩만 스폰
-    let quest_npcs: Vec<_> = VILLAGER_DATA.iter().filter(|d| d.3.is_some()).collect();
+    // 퀘스트 NPC와 일반 NPC를 분리: 퀘스트 NPC는 최대 1명씩만 스폰 (비활성 퀘스트 NPC는 제외)
+    let quest_npcs: Vec<_> = VILLAGER_DATA.iter()
+        .filter(|d| d.3.map_or(false, |qid| registry.is_quest_active(qid)))
+        .collect();
     let regular_npcs: Vec<_> = VILLAGER_DATA.iter().filter(|d| d.3.is_none()).collect();
 
     // rooms[0] 은 플레이어 스폰 방 — 건너뜀
@@ -877,6 +881,7 @@ mod tests {
             initial_phase: "not_started".to_string(),
             phases,
             spawns: vec![],
+            spawn_chance: 1.0,
         }
     }
 
@@ -1021,6 +1026,7 @@ mod tests {
             initial_phase: "not_started".to_string(),
             phases,
             spawns: vec![],
+            spawn_chance: 1.0,
         };
         let mut state = QuestState::default();
         state.phases.insert("alchemist_quest".to_string(), "gathering".to_string());

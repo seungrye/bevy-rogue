@@ -1,5 +1,6 @@
 use bevy::prelude::*;
-use std::collections::HashMap;
+use rand::Rng;
+use std::collections::{HashMap, HashSet};
 use serde::Deserialize;
 use crate::modules::{
     item::{PlayerInventory, ItemKind, QuestItemKind, InventoryItem, Item},
@@ -19,7 +20,12 @@ pub struct QuestDef {
     pub phases: HashMap<String, QuestPhaseDef>,
     #[serde(default)]
     pub spawns: Vec<QuestSpawn>,
+    /// 게임 시작 시 이 퀘스트가 활성화될 확률 (0.0 ~ 1.0). 기본값 1.0 (항상 등장).
+    #[serde(default = "default_spawn_chance")]
+    pub spawn_chance: f32,
 }
+
+fn default_spawn_chance() -> f32 { 1.0 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct QuestPhaseDef {
@@ -90,6 +96,12 @@ pub struct QuestSpawn {
 
 fn default_spawn_count() -> u32 { 1 }
 
+/// 퀘스트 시스템의 시작(Startup) 단계 실행 순서를 정의한다
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum QuestSystemSet {
+    Load,
+}
+
 // ── 이벤트 ───────────────────────────────────────────────────────────────────
 
 #[derive(Event)]
@@ -104,11 +116,17 @@ pub struct DespawnWorldItemEvent(pub String);
 #[derive(Resource, Default)]
 pub struct QuestRegistry {
     pub quests: HashMap<String, QuestDef>,
+    /// 이번 런에 활성화된 퀘스트 ID 집합 (spawn_chance 확률로 결정됨)
+    pub active: HashSet<String>,
 }
 
 impl QuestRegistry {
     pub fn get(&self, id: &str) -> Option<&QuestDef> {
         self.quests.get(id)
+    }
+
+    pub fn is_quest_active(&self, quest_id: &str) -> bool {
+        self.active.contains(quest_id)
     }
 
     #[allow(dead_code)]
@@ -173,7 +191,7 @@ impl Plugin for QuestPlugin {
             .init_resource::<QuestState>()
             .add_event::<KillNpcEvent>()
             .add_event::<DespawnWorldItemEvent>()
-            .add_systems(Startup, load_quests)
+            .add_systems(Startup, load_quests.in_set(QuestSystemSet::Load))
             .add_systems(Update, (check_auto_advance, spawn_quest_items));
     }
 }
@@ -228,6 +246,17 @@ fn load_quests(mut registry: ResMut<QuestRegistry>) {
         error!("[치명적] 퀘스트 파일에 오류가 있습니다. 위 오류를 수정한 후 다시 실행하세요.");
         std::process::exit(1);
     }
+
+    // spawn_chance 확률로 이번 런에 활성화할 퀘스트 결정
+    let mut rng = rand::thread_rng();
+    let active: HashSet<String> = registry.quests.iter()
+        .filter(|(_, def)| rng.gen::<f32>() < def.spawn_chance)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in &active {
+        info!("퀘스트 활성화: {}", id);
+    }
+    registry.active = active;
 }
 
 /// QuestDef 의 내부 일관성을 검증하고 오류 메시지 목록을 반환한다
@@ -353,6 +382,7 @@ fn check_auto_advance(
     let mut advances: Vec<(String, String, Vec<QuestAction>)> = Vec::new();
 
     for (quest_id, quest_def) in &registry.quests {
+        if !registry.is_quest_active(quest_id) { continue; }
         let current = match state.phases.get(quest_id) {
             Some(p) => p.clone(),
             None => continue,
@@ -528,6 +558,7 @@ fn spawn_quest_items(
     let mut rng = rand::thread_rng();
 
     for (quest_id, quest_def) in &registry.quests {
+        if !registry.is_quest_active(quest_id) { continue; }
         let current_phase = match state.phases.get(quest_id) {
             Some(p) => p.clone(),
             None => continue,
@@ -662,6 +693,7 @@ mod tests {
                 m
             },
             spawns: vec![],
+            spawn_chance: 1.0,
         };
         r.quests.insert(def.id.clone(), def);
         r
@@ -1064,6 +1096,54 @@ mod tests {
                     path, spawn.item
                 );
             }
+        }
+    }
+
+    #[test]
+    fn quest_registry_is_quest_active() {
+        let mut reg = QuestRegistry::default();
+        reg.active.insert("gem_quest".to_string());
+        assert!(reg.is_quest_active("gem_quest"));
+        assert!(!reg.is_quest_active("herb_quest"));
+    }
+
+    #[test]
+    fn spawn_chance_defaults_to_1_when_omitted_in_ron() {
+        let def: QuestDef = ron::de::from_str(r#"
+            QuestDef(
+                id: "test",
+                title: "test",
+                giver_npc: "npc",
+                initial_phase: "start",
+                phases: { "start": QuestPhaseDef(dialog: []) },
+            )
+        "#).expect("RON 파싱 성공");
+        assert_eq!(def.spawn_chance, 1.0, "spawn_chance 미지정 시 1.0이어야 한다");
+    }
+
+    #[test]
+    fn spawn_chance_parsed_from_ron() {
+        let def: QuestDef = ron::de::from_str(r#"
+            QuestDef(
+                id: "test",
+                title: "test",
+                giver_npc: "npc",
+                initial_phase: "start",
+                spawn_chance: 0.5,
+                phases: { "start": QuestPhaseDef(dialog: []) },
+            )
+        "#).expect("RON 파싱 성공");
+        assert_eq!(def.spawn_chance, 0.5);
+    }
+
+    #[test]
+    fn all_quest_ron_files_have_spawn_chance_in_valid_range() {
+        for (path, def) in load_all_quest_defs() {
+            assert!(
+                (0.0..=1.0).contains(&def.spawn_chance),
+                "{}: spawn_chance {} 가 0.0~1.0 범위를 벗어났다",
+                path, def.spawn_chance
+            );
         }
     }
 

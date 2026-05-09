@@ -19,6 +19,7 @@ QuestDef(
     title: "전쟁의 서막",
     giver_npc: "캣린",
     initial_phase: "dormant",
+    spawn_chance: 0.6,
 
     phases: {
 

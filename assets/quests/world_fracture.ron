@@ -34,6 +34,7 @@ QuestDef(
     title: "봉인의 각성",
     giver_npc: "노인",
     initial_phase: "dormant",
+    spawn_chance: 0.5,
 
     phases: {
 

@@ -19,6 +19,7 @@ QuestDef(
     title: "장벽 너머의 그림자",
     giver_npc: "샘웰",
     initial_phase: "dormant",
+    spawn_chance: 0.6,
 
     phases: {
 

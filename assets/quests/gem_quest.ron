@@ -3,6 +3,7 @@ QuestDef(
     title: "잃어버린 보석",
     giver_npc: "장로",
     initial_phase: "not_started",
+    spawn_chance: 0.8,
 
     phases: {
         "not_started": QuestPhaseDef(
