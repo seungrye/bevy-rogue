@@ -159,10 +159,11 @@ static VILLAGER_DATA: &[(&str, [f32; 3], &[&str], Option<&str>, f32)] = &[
         "저 다음엔 더 빠르게 달릴 거예요. 연습 중이에요!",
         "엄마가 늦게까지 놀면 안 된다고 했는데... 조금만 더 놀래요.",
     ], None, 1.5),
-    ("부상당한 병사", [0.75, 0.60, 0.55], &[], Some("prologue_fog"),    0.3),
-    ("캣린",         [0.70, 0.50, 0.80], &[], Some("stark_quest"),     0.6),
-    ("조라",         [0.40, 0.55, 0.85], &[], Some("targaryen_quest"), 0.6),
-    ("샘웰",         [0.80, 0.70, 0.50], &[], Some("jon_snow_quest"),  0.5),
+    ("부상당한 병사", [0.75, 0.60, 0.55], &[], Some("prologue_fog"),      0.3),
+    ("캣린",         [0.70, 0.50, 0.80], &[], Some("stark_quest"),       0.6),
+    ("조라",         [0.40, 0.55, 0.85], &[], Some("targaryen_quest"),   0.6),
+    ("샘웰",         [0.80, 0.70, 0.50], &[], Some("jon_snow_quest"),    0.5),
+    ("바스티안",     [0.85, 0.75, 0.60], &[], Some("demonsword_quest"),  0.4),
     ("노인",   [0.65, 0.65, 0.75], &[
         "이 마을에는 오랜 비밀이 있다네.",
         "오래전에 이 땅에 큰 전쟁이 있었지.",
@@ -818,6 +819,12 @@ mod tests {
     fn noin_npc_has_world_fracture_quest() {
         let noin = VILLAGER_DATA.iter().find(|d| d.0 == "노인").expect("노인 NPC가 존재해야 한다");
         assert_eq!(noin.3, Some("world_fracture"), "노인은 world_fracture 퀘스트를 가져야 한다");
+    }
+
+    #[test]
+    fn bastian_npc_has_demonsword_quest() {
+        let bastian = VILLAGER_DATA.iter().find(|d| d.0 == "바스티안").expect("바스티안 NPC가 존재해야 한다");
+        assert_eq!(bastian.3, Some("demonsword_quest"), "바스티안은 demonsword_quest를 가져야 한다");
     }
 
     use crate::modules::quest::{QuestDef, QuestPhaseDef, QuestState, QuestAction, AutoAdvance, QuestCondition};

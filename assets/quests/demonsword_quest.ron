@@ -1,0 +1,132 @@
+QuestDef(
+    id: "demonsword_quest",
+    title: "성기사가 마검을 들다",
+    giver_npc: "바스티안",
+    initial_phase: "not_started",
+
+    phases: {
+        "not_started": QuestPhaseDef(
+            dialog: [
+                "오, 이방인이여. 당신을 기다리고 있었소.",
+                "수백 년 전 봉인된 마검이 동쪽 마귀 동굴에 있소.",
+                "봉인이 풀리기 시작했소. 그 검은 세상을 잠식할 것이오.",
+                "동굴에서 마검을 찾으시오. 그리고 엘레나가 남긴 메모도.",
+                "그녀는 봉인 의식의 열쇠를 알고 있었소.",
+            ],
+            on_interact: [
+                Log("바스티안: 동굴로 가는 길이 열렸소. 조심하시오."),
+                AdvancePhase("awaiting_cave"),
+                OpenPortal(zone: "demon_cave", generator: "cellular_automata"),
+            ],
+            auto_advance: [],
+            objective: Some("바스티안의 이야기를 다 들어라."),
+        ),
+
+        "awaiting_cave": QuestPhaseDef(
+            dialog: [
+                "아직 마검을 찾지 못했소? 동굴 깊은 곳에 있을 것이오.",
+                "엘레나의 메모도 찾아보시오. 그녀가 의식서의 행방을 알고 있소.",
+            ],
+            on_interact: [],
+            auto_advance: [
+                AutoAdvance(
+                    condition: And([
+                        HasItem("demon_sword"),
+                        HasItem("elenas_memo"),
+                    ]),
+                    next_phase: "cave_done",
+                ),
+            ],
+            objective: Some("마귀 동굴에서 마검과 엘레나의 메모를 찾아라."),
+        ),
+
+        "cave_done": QuestPhaseDef(
+            dialog: [
+                "마검을 가져왔군요! 어둠의 기운이 느껴지오.",
+                "엘레나의 메모... 고대 의식서가 폐허 요새에 있군요.",
+                "서둘러야 하오. 요새로 가는 길을 열겠소.",
+            ],
+            on_interact: [
+                Log("바스티안: 폐허 요새로 가는 포탈이 열렸소."),
+                OpenPortal(zone: "ruined_fortress", generator: "bsp_indoor"),
+                AdvancePhase("awaiting_fortress"),
+            ],
+            auto_advance: [],
+            objective: Some("바스티안에게 돌아가 보고하라."),
+        ),
+
+        "awaiting_fortress": QuestPhaseDef(
+            dialog: [
+                "요새 깊은 곳 어딘가에 고대 의식서가 숨겨져 있을 것이오.",
+                "그것을 찾아오면 봉인 의식을 시작할 수 있소.",
+            ],
+            on_interact: [],
+            auto_advance: [
+                AutoAdvance(
+                    condition: HasItem("ancient_ritual_book"),
+                    next_phase: "ritual_ready",
+                ),
+            ],
+            objective: Some("폐허 요새에서 고대 의식서를 찾아라."),
+        ),
+
+        "ritual_ready": QuestPhaseDef(
+            dialog: [
+                "드디어... 마검과 의식서를 모두 갖추었군요.",
+                "봉인 의식은 대가가 따르오. 마검의 저주를 봉인하려면...",
+                "시술자의 생명력 일부를 의식서와 함께 바쳐야 하오.",
+                "그래도 하시겠소?",
+            ],
+            on_interact: [
+                Branch(
+                    condition: And([
+                        HasItem("demon_sword"),
+                        HasItem("ancient_ritual_book"),
+                    ]),
+                    if_true: [
+                        RemoveItem("demon_sword"),
+                        RemoveItem("ancient_ritual_book"),
+                        Log("의식서의 문장이 빛나기 시작한다..."),
+                        Log("마검이 격렬히 저항하지만 서서히 빛에 잠식된다."),
+                        Log("성기사는 자신의 생명력을 불어넣어 봉인을 완성했다."),
+                        Log("마검이 영원히 봉인되었다. 세상에 평화가 찾아왔다."),
+                        AdvancePhase("done"),
+                    ],
+                    if_false: [
+                        Log("바스티안: 마검과 고대 의식서 둘 다 필요하오."),
+                    ],
+                ),
+            ],
+            auto_advance: [],
+            objective: Some("바스티안과 함께 봉인 의식을 완수하라."),
+        ),
+
+        "done": QuestPhaseDef(
+            dialog: [
+                "당신의 희생을 잊지 않겠소.",
+                "마검은 영원히 봉인되었소. 감사하오, 성기사여.",
+            ],
+            on_interact: [],
+            auto_advance: [],
+            objective: Some("마검 봉인 완료. 평화가 찾아왔다."),
+        ),
+    },
+
+    spawns: [
+        QuestSpawn(
+            phase: "awaiting_cave",
+            item: "demon_sword",
+            zone: Named("demon_cave"),
+        ),
+        QuestSpawn(
+            phase: "awaiting_cave",
+            item: "elenas_memo",
+            zone: Named("demon_cave"),
+        ),
+        QuestSpawn(
+            phase: "awaiting_fortress",
+            item: "ancient_ritual_book",
+            zone: Named("ruined_fortress"),
+        ),
+    ],
+)

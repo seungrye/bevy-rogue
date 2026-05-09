@@ -618,6 +618,10 @@ pub fn item_id_to_kind(id: &str) -> Option<ItemKind> {
         "silver_bell_root"    => Some(ItemKind::QuestItem(QuestItemKind::SilverBellRoot)),
         "ellen_elixir"        => Some(ItemKind::QuestItem(QuestItemKind::EllenElixir)),
         "poisoned_herb"       => Some(ItemKind::QuestItem(QuestItemKind::PoisonedHerb)),
+        // demonsword_quest
+        "demon_sword"         => Some(ItemKind::QuestItem(QuestItemKind::DemonSword)),
+        "elenas_memo"         => Some(ItemKind::QuestItem(QuestItemKind::ElenasMemo)),
+        "ancient_ritual_book" => Some(ItemKind::QuestItem(QuestItemKind::AncientRitualBook)),
         _ => None,
     }
 }
@@ -1057,5 +1061,12 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn demonsword_item_ids_mapped_correctly() {
+        assert!(matches!(item_id_to_kind("demon_sword"),         Some(ItemKind::QuestItem(QuestItemKind::DemonSword))));
+        assert!(matches!(item_id_to_kind("elenas_memo"),         Some(ItemKind::QuestItem(QuestItemKind::ElenasMemo))));
+        assert!(matches!(item_id_to_kind("ancient_ritual_book"), Some(ItemKind::QuestItem(QuestItemKind::AncientRitualBook))));
     }
 }

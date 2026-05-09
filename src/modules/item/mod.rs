@@ -118,6 +118,9 @@ fn glyph_unicode(kind: ItemKind) -> &'static str {
             QuestItemKind::SilverBellRoot    => "\u{2698}", // ⚘ 꽃
             QuestItemKind::EllenElixir       => "\u{2697}", // ⚗ 증류기
             QuestItemKind::PoisonedHerb      => "\u{2620}", // ☠ 해골
+            QuestItemKind::DemonSword        => "\u{2694}", // ⚔ 교차한 검 (마검)
+            QuestItemKind::ElenasMemo        => "\u{270E}", // ✎ 연필 (메모)
+            QuestItemKind::AncientRitualBook => "\u{2720}", // ✠ 몰타 십자 (의식서)
         },
     }
 }
@@ -159,6 +162,9 @@ fn glyph_game_icon(kind: ItemKind) -> &'static str {
             QuestItemKind::SilverBellRoot    => "\u{2698}", // 대체 글리프: ⚘
             QuestItemKind::EllenElixir       => "\u{2697}", // 대체 글리프: ⚗
             QuestItemKind::PoisonedHerb      => "\u{2620}", // 대체 글리프: ☠
+            QuestItemKind::DemonSword        => "\u{2694}", // 대체 글리프: ⚔
+            QuestItemKind::ElenasMemo        => "\u{270E}", // 대체 글리프: ✎
+            QuestItemKind::AncientRitualBook => "\u{2720}", // 대체 글리프: ✠
         },
     }
 }
@@ -196,6 +202,10 @@ pub enum QuestItemKind {
     SilverBellRoot,
     EllenElixir,
     PoisonedHerb,
+    // 마검 퀘스트 — 성기사가 마검을 들다
+    DemonSword,
+    ElenasMemo,
+    AncientRitualBook,
 }
 
 impl QuestItemKind {
@@ -224,6 +234,9 @@ impl QuestItemKind {
             QuestItemKind::SilverBellRoot    => "은방울 뿌리",
             QuestItemKind::EllenElixir       => "엘렌의 특제 영약",
             QuestItemKind::PoisonedHerb      => "독초",
+            QuestItemKind::DemonSword        => "마검",
+            QuestItemKind::ElenasMemo        => "엘레나의 메모",
+            QuestItemKind::AncientRitualBook => "고대 의식서",
         }
     }
 }
@@ -323,6 +336,9 @@ impl ItemKind {
                 QuestItemKind::SilverBellRoot    => ";",
                 QuestItemKind::EllenElixir       => "&",
                 QuestItemKind::PoisonedHerb      => "?",
+                QuestItemKind::DemonSword        => "D",
+                QuestItemKind::ElenasMemo        => "e",
+                QuestItemKind::AncientRitualBook => "R",
             },
         }
     }
@@ -382,6 +398,9 @@ impl ItemKind {
                 QuestItemKind::SilverBellRoot    => "은방울 뿌리를 채집했다. 맑은 향기가 퍼진다.",
                 QuestItemKind::EllenElixir       => "엘렌의 특제 영약. 온 몸에 활력이 흐른다.",
                 QuestItemKind::PoisonedHerb      => "독초를 발견했다. 조심해야 할 것 같다.",
+                QuestItemKind::DemonSword        => "마검을 집어들었다. 손에서 어둠의 기운이 흐른다...",
+                QuestItemKind::ElenasMemo        => "엘레나의 메모를 발견했다. 폐허 요새에 의식서가 있다고 한다.",
+                QuestItemKind::AncientRitualBook => "고대 의식서를 손에 넣었다. 봉인 의식의 방법이 담겨 있다.",
             },
         }
     }
@@ -675,6 +694,9 @@ fn quest_item_image_path(kind: QuestItemKind) -> &'static str {
         QuestItemKind::SilverBellRoot    => "scene/open-chest.png",
         QuestItemKind::EllenElixir       => "scene/open-chest.png",
         QuestItemKind::PoisonedHerb      => "scene/open-chest.png",
+        QuestItemKind::DemonSword        => "scene/open-chest.png",
+        QuestItemKind::ElenasMemo        => "scene/open-chest.png",
+        QuestItemKind::AncientRitualBook => "scene/open-chest.png",
     }
 }
 
@@ -939,5 +961,34 @@ mod tests {
         assert_eq!(gem.pickup_message(), "영원의 보석을 획득했다!");
         let stone = ItemKind::QuestItem(QuestItemKind::PhilosophersStone);
         assert_eq!(stone.pickup_message(), "현자의 돌을 획득했다!");
+    }
+
+    #[test]
+    fn demonsword_items_have_correct_glyphs_and_names() {
+        assert_eq!(QuestItemKind::DemonSword.display_name(), "마검");
+        assert_eq!(QuestItemKind::ElenasMemo.display_name(), "엘레나의 메모");
+        assert_eq!(QuestItemKind::AncientRitualBook.display_name(), "고대 의식서");
+
+        let sword = ItemKind::QuestItem(QuestItemKind::DemonSword);
+        let memo  = ItemKind::QuestItem(QuestItemKind::ElenasMemo);
+        let book  = ItemKind::QuestItem(QuestItemKind::AncientRitualBook);
+
+        assert_eq!(sword.glyph(), "D");
+        assert_eq!(memo.glyph(),  "e");
+        assert_eq!(book.glyph(),  "R");
+
+        assert!(sword.pickup_message().contains("마검"));
+        assert!(memo.pickup_message().contains("폐허 요새"));
+        assert!(book.pickup_message().contains("봉인 의식"));
+    }
+
+    #[test]
+    fn demonsword_items_unicode_glyphs() {
+        let sword = glyph_for_style(ItemKind::QuestItem(QuestItemKind::DemonSword), GlyphStyle::Unicode);
+        assert_eq!(sword, "\u{2694}");
+        let memo = glyph_for_style(ItemKind::QuestItem(QuestItemKind::ElenasMemo), GlyphStyle::Unicode);
+        assert_eq!(memo, "\u{270E}");
+        let book = glyph_for_style(ItemKind::QuestItem(QuestItemKind::AncientRitualBook), GlyphStyle::Unicode);
+        assert_eq!(book, "\u{2720}");
     }
 }
