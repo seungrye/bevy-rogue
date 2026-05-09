@@ -341,6 +341,7 @@ fn handle_bump(
     world_state: Res<WorldState>,
     mut kill_npc: EventWriter<KillNpcEvent>,
     mut open_portal: EventWriter<SpawnQuestPortalEvent>,
+    mut close_portal: EventWriter<crate::modules::zone::CloseQuestPortalEvent>,
     mut despawn_item: EventWriter<DespawnWorldItemEvent>,
     mut shop_open: EventWriter<crate::modules::ui::shop::ShopOpenEvent>,
     quest_items: Res<crate::modules::item::QuestItemRegistry>,
@@ -352,7 +353,7 @@ fn handle_bump(
             if villager.name == "상인" {
                 shop_open.send(crate::modules::ui::shop::ShopOpenEvent);
             } else if let Some(quest_id) = villager.quest_id.clone() {
-                show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut kill_npc, &mut open_portal, &mut despawn_item, &quest_items);
+                show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut kill_npc, &mut open_portal, &mut close_portal, &mut despawn_item, &quest_items);
                 // QuestGiver 마커는 discover_quest_npcs_in_fov 가 quest 상태에 따라 자동 갱신
             } else if !villager.dialogues.is_empty() {
                 let msg = villager.dialogues[villager.dialogue_idx].clone();
@@ -375,6 +376,7 @@ fn show_quest_dialog(
     world: &WorldState,
     kill_npc: &mut EventWriter<KillNpcEvent>,
     open_portal: &mut EventWriter<SpawnQuestPortalEvent>,
+    close_portal: &mut EventWriter<crate::modules::zone::CloseQuestPortalEvent>,
     despawn_item: &mut EventWriter<DespawnWorldItemEvent>,
     quest_items: &crate::modules::item::QuestItemRegistry,
 ) {
@@ -405,7 +407,7 @@ fn show_quest_dialog(
     // 마지막 줄에서 액션 실행
     if !dialog.is_empty() && idx + 1 >= dialog.len() {
         villager.quest_dialogue_idx = 0;
-        execute_actions(&actions, quest_id, state, inventory, log, world, kill_npc, open_portal, despawn_item, quest_items);
+        execute_actions(&actions, quest_id, state, inventory, log, world, kill_npc, open_portal, close_portal, despawn_item, quest_items);
     } else {
         villager.quest_dialogue_idx = idx + 1;
     }

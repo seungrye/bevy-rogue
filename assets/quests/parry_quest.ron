@@ -53,6 +53,7 @@ QuestDef(
                 RemoveItem("steel_core"),
                 GiveItem("pilot_badge"),
                 Log("그레체의 전속 테스트 파일럿이 되었다. 새로운 여정이 시작된다."),
+                ClosePortal("d_rank_dungeon"),
                 AdvancePhase("done"),
             ],
             auto_advance: [],

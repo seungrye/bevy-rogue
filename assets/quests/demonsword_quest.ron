@@ -91,6 +91,8 @@ QuestDef(
                         Log("마검이 격렬히 저항하지만 서서히 빛에 잠식된다."),
                         Log("성기사는 자신의 생명력을 불어넣어 봉인을 완성했다."),
                         Log("마검이 영원히 봉인되었다. 세상에 평화가 찾아왔다."),
+                        ClosePortal("demon_cave"),
+                        ClosePortal("ruined_fortress"),
                         AdvancePhase("done"),
                     ],
                     if_false: [

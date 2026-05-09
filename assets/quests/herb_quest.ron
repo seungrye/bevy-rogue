@@ -166,6 +166,8 @@ QuestDef(
                     ],
                     if_false: [],
                 ),
+                // herb_glade 포털 정리 — 퀘스트 끝나면 더 이상 필요 없음
+                ClosePortal("herb_glade"),
                 // gem_quest 진행 중이면 힌트 페이즈로, 아니면 일반 done 으로 분기
                 Branch(
                     condition: PhaseIs(quest: "gem_quest", phase: "active"),

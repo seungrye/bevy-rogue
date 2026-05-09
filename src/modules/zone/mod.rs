@@ -82,6 +82,13 @@ pub struct SpawnQuestPortalEvent {
     pub generator: String,
 }
 
+/// 특정 Named zone 의 포탈 / 등록 / 영속화 / 미니맵 마커 를 모두 정리한다.
+/// 퀘스트 종료 시 ClosePortal 액션을 통해 발행된다.
+#[derive(Event)]
+pub struct CloseQuestPortalEvent {
+    pub zone: String,
+}
+
 // ── ZonePersistence ──────────────────────────────────────────────────────────
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -190,9 +197,11 @@ impl Plugin for ZonePlugin {
             .init_resource::<NamedZoneConfig>()
             .add_event::<ZoneTransitionEvent>()
             .add_event::<SpawnQuestPortalEvent>()
+            .add_event::<CloseQuestPortalEvent>()
             .add_systems(Startup, cache_initial_map.after(crate::modules::map::draw_map))
             .add_systems(Update, (
                 handle_spawn_quest_portal,
+                handle_close_quest_portal,
                 check_portal_collision,
                 handle_zone_transition,
                 spawn_portals_after_apply,
@@ -488,6 +497,43 @@ fn handle_spawn_quest_portal(
                 },
             ));
         }
+    }
+}
+
+/// CloseQuestPortalEvent 를 받아 해당 Named zone 의 portal entity, 영속화 데이터,
+/// 등록, 미니맵 마커를 모두 정리한다. 퀘스트 종료 시 ClosePortal 액션을 통해 호출됨.
+fn handle_close_quest_portal(
+    mut ev: EventReader<CloseQuestPortalEvent>,
+    mut named_config: ResMut<NamedZoneConfig>,
+    mut persistence: ResMut<ZonePersistence>,
+    mut commands: Commands,
+    portal_q: Query<(Entity, &Transform, &ZonePortal)>,
+    mut markers: ResMut<crate::modules::ui::minimap::DiscoveredMarkers>,
+    world: Res<WorldState>,
+) {
+    for event in ev.read() {
+        let target = ZoneId::Named(event.zone.clone());
+
+        // 1) 활성 portal entity 제거 + 미니맵 마커 제거
+        for (entity, transform, portal) in portal_q.iter() {
+            if portal.target != target { continue; }
+            let (tx, ty) = world_to_tile_coords(transform.translation);
+            commands.entity(entity).despawn();
+            // 현재 zone 의 그 위치 portal 마커 제거 (모든 MarkerKind 시도)
+            markers.remove_at(tx, ty, crate::modules::ui::minimap::MarkerKind::Portal, &world.current);
+            markers.remove_at(tx, ty, crate::modules::ui::minimap::MarkerKind::StairDown, &world.current);
+            markers.remove_at(tx, ty, crate::modules::ui::minimap::MarkerKind::StairUp, &world.current);
+        }
+
+        // 2) 모든 saved persistence 에서 해당 target portal 제거
+        for snap in persistence.0.values_mut() {
+            snap.portals.retain(|p| p.target != target);
+        }
+
+        // 3) NamedZoneConfig 에서 zone 등록 제거
+        named_config.zones.remove(&event.zone);
+
+        info!("퀘스트 포탈 정리: Named({}) — 모든 진입 경로 닫힘", event.zone);
     }
 }
 

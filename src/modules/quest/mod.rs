@@ -6,7 +6,7 @@ use crate::modules::{
     item::{PlayerInventory, ItemKind, QuestItemKind, InventoryItem, Item, ItemSystemSet},
     map::{MapResource, TILE_SIZE, tile_to_world_coords, UsedSpawnTiles, random_floor_tile_anywhere},
     ui::minimap::{DiscoveredMarkers, MarkerKind},
-    zone::{ZoneId, SpawnQuestPortalEvent},
+    zone::{ZoneId, SpawnQuestPortalEvent, CloseQuestPortalEvent},
 };
 
 // ── RON 데이터 구조 (assets/quests/*.ron) ────────────────────────────────────
@@ -70,6 +70,8 @@ pub enum QuestAction {
     KillNpc(String),
     /// 현재 존에 Named 존으로 이어지는 포탈을 즉시 스폰한다
     OpenPortal { zone: String, generator: String },
+    /// Named 존으로 가는 포탈과 그 zone 등록을 모두 닫는다 (퀘스트 종료 시 정리)
+    ClosePortal(String),
     /// 아이템을 수량 지정하여 지급
     GiveItems { item: String, count: u32 },
     /// 월드에 놓인 아이템 엔티티를 즉시 제거한다 (인벤토리는 건들지 않음)
@@ -511,6 +513,7 @@ pub fn execute_actions(
     world: &crate::modules::zone::WorldState,
     kill_npc: &mut EventWriter<KillNpcEvent>,
     open_portal: &mut EventWriter<SpawnQuestPortalEvent>,
+    close_portal: &mut EventWriter<CloseQuestPortalEvent>,
     despawn_item: &mut EventWriter<DespawnWorldItemEvent>,
     quest_items: &crate::modules::item::QuestItemRegistry,
 ) {
@@ -574,6 +577,13 @@ pub fn execute_actions(
                 ));
                 info!("퀘스트 포탈 열기: {} (생성기: {})", zone, generator);
             }
+            QuestAction::ClosePortal(zone) => {
+                close_portal.send(CloseQuestPortalEvent { zone: zone.clone() });
+                log.send(crate::modules::ui::LogMessage(
+                    format!("포탈이 닫혔다 — {}.", zone)
+                ));
+                info!("퀘스트 포탈 닫기: {}", zone);
+            }
             QuestAction::DespawnWorldItem(item_id) => {
                 despawn_item.send(DespawnWorldItemEvent(item_id.clone()));
                 info!("월드 아이템 제거: {}", item_id);
@@ -584,7 +594,7 @@ pub fn execute_actions(
                 } else {
                     if_false.as_slice()
                 };
-                execute_actions(branch, quest_id, state, inventory, log, world, kill_npc, open_portal, despawn_item, quest_items);
+                execute_actions(branch, quest_id, state, inventory, log, world, kill_npc, open_portal, close_portal, despawn_item, quest_items);
             }
         }
     }
@@ -1019,6 +1029,20 @@ mod tests {
         "#).expect("RON 파싱 성공해야 한다");
         let phase = def.phases.get("start").unwrap();
         assert!(phase.auto_advance[0].actions.is_empty(), "actions 미지정 시 빈 vec이어야 한다");
+    }
+
+    #[test]
+    fn close_portal_action_parses_from_ron() {
+        let def: QuestDef = ron::de::from_str(r#"
+            QuestDef(
+                id: "test", title: "test", giver_npc: "npc", initial_phase: "p1",
+                phases: { "p1": QuestPhaseDef(dialog: [], on_interact: [
+                    ClosePortal("d_rank_dungeon"),
+                ]) },
+            )
+        "#).expect("RON 파싱 성공");
+        let actions = &def.phases.get("p1").unwrap().on_interact;
+        assert!(matches!(&actions[0], QuestAction::ClosePortal(z) if z == "d_rank_dungeon"));
     }
 
     #[test]
