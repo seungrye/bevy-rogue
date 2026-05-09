@@ -877,7 +877,7 @@ mod tests {
         // eternal_gem 보유 → auto_advance 조건 충족 → 다음 페이즈로 넘어갈 수 있다
         let mut inv = empty_inventory();
         inv.items.push(InventoryItem {
-            kind: ItemKind::QuestItem(QuestItemKind::EternalGem),
+            kind: ItemKind::QuestItem(QuestItemKind("eternal_gem")),
         });
         let world = default_world();
         let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, Color::WHITE);

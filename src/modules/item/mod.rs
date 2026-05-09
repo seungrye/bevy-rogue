@@ -1,5 +1,8 @@
 use bevy::prelude::*;
 use rand::Rng;
+use serde::Deserialize;
+use std::collections::HashMap;
+use std::sync::OnceLock;
 use crate::modules::{
     map::{tile_to_world_coords, world_to_tile_coords, TILE_SIZE, PlayerActedEvent},
     player::{Player, MovingTo, PlayerSystemSet, PLAYER_ATK, PLAYER_DEF},
@@ -94,37 +97,7 @@ fn glyph_unicode(kind: ItemKind) -> &'static str {
         ItemKind::Consumable(c) => match c {
             ConsumableKind::HealthPotion => "\u{2764}", // ❤ 굵은 하트
         },
-        ItemKind::QuestItem(q) => match q {
-            QuestItemKind::EternalGem        => "\u{25C6}", // ◆ 검은 마름모
-            QuestItemKind::PhilosophersStone => "\u{2295}", // ⊕ 원 안의 더하기
-            QuestItemKind::DragonScale       => "\u{25B2}", // ▲ 삼각형
-            QuestItemKind::AncientScroll     => "\u{2393}", // ⎓ 두루마리 느낌
-            QuestItemKind::PrologueGreatsword => "\u{2694}", // ⚔ 교차한 검
-            QuestItemKind::PrologueDaggers    => "\u{25B8}", // ▸ 작은 오른쪽 삼각형
-            QuestItemKind::PrologueBowTorch   => "\u{2600}", // ☀ 불/태양
-            QuestItemKind::FamilyCrest        => "\u{269C}", // ⚜ 백합 문장
-            QuestItemKind::IceSword           => "\u{2746}", // ❆ 눈송이
-            QuestItemKind::DragonEgg          => "\u{25CE}", // ◎ 과녁 모양
-            QuestItemKind::GhostWolf          => "\u{25D4}", // ◔ 원호 모양
-            QuestItemKind::LordsOath          => "\u{2709}", // ✉ 봉투
-            QuestItemKind::JaimeSword         => "\u{2020}", // † 단검 기호
-            QuestItemKind::KingsNorthCrown    => "\u{265A}", // ♚ 체스 왕 말
-            QuestItemKind::WarlockKey         => "\u{2318}", // ⌘ 명령/열쇠 느낌
-            QuestItemKind::DragonChain        => "\u{26D3}", // ⛓ 사슬
-            QuestItemKind::EssosSailMap       => "\u{2742}", // ❂ 나침반 느낌
-            QuestItemKind::DragonglassArrows  => "\u{25B6}", // ▶ 채워진 화살표
-            QuestItemKind::RangersNote        => "\u{2767}", // ❧ 장식 하트
-            QuestItemKind::YgrittesBow        => "\u{2640}", // ♀ 이그리트 상징
-            QuestItemKind::SilverBellRoot    => "\u{2698}", // ⚘ 꽃
-            QuestItemKind::EllenElixir       => "\u{2697}", // ⚗ 증류기
-            QuestItemKind::PoisonedHerb      => "\u{2620}", // ☠ 해골
-            QuestItemKind::DemonSword        => "\u{2694}", // ⚔ 교차한 검 (마검)
-            QuestItemKind::ElenasMemo        => "\u{270E}", // ✎ 연필 (메모)
-            QuestItemKind::AncientRitualBook => "\u{2720}", // ✠ 몰타 십자 (의식서)
-            QuestItemKind::PrototypeHammer   => "\u{2692}", // ⚒ 곡괭이 (파암추)
-            QuestItemKind::SteelCore         => "\u{2B22}", // ⬢ 육각형 (강철 심장)
-            QuestItemKind::PilotBadge        => "\u{2605}", // ★ 별 (인증서)
-        },
+        ItemKind::QuestItem(qk) => quest_item_meta(qk).map(|m| m.glyph_unicode).unwrap_or("?"),
     }
 }
 
@@ -141,118 +114,115 @@ fn glyph_game_icon(kind: ItemKind) -> &'static str {
         ItemKind::Consumable(c) => match c {
             ConsumableKind::HealthPotion => "\u{EA72}", // RPG Awesome 물약 아이콘
         },
-        ItemKind::QuestItem(q) => match q {
-            QuestItemKind::EternalGem        => "\u{25C6}", // 대체 글리프: ◆
-            QuestItemKind::PhilosophersStone => "\u{2295}", // 대체 글리프: ⊕
-            QuestItemKind::DragonScale       => "\u{25B2}", // 대체 글리프: ▲
-            QuestItemKind::AncientScroll     => "\u{2393}", // 대체 글리프: ⎓
-            QuestItemKind::PrologueGreatsword => "\u{2694}", // 대체 글리프: ⚔
-            QuestItemKind::PrologueDaggers    => "\u{25B8}", // 대체 글리프: ▸
-            QuestItemKind::PrologueBowTorch   => "\u{2600}", // 대체 글리프: ☀
-            QuestItemKind::FamilyCrest        => "\u{269C}", // 대체 글리프: ⚜
-            QuestItemKind::IceSword           => "\u{2746}", // 대체 글리프: ❆
-            QuestItemKind::DragonEgg          => "\u{25CE}", // 대체 글리프: ◎
-            QuestItemKind::GhostWolf          => "\u{25D4}", // 대체 글리프: ◔
-            QuestItemKind::LordsOath          => "\u{2709}", // 대체 글리프: ✉
-            QuestItemKind::JaimeSword         => "\u{2020}", // 대체 글리프: †
-            QuestItemKind::KingsNorthCrown    => "\u{265A}", // 대체 글리프: ♚
-            QuestItemKind::WarlockKey         => "\u{2318}", // 대체 글리프: ⌘
-            QuestItemKind::DragonChain        => "\u{26D3}", // 대체 글리프: ⛓
-            QuestItemKind::EssosSailMap       => "\u{2742}", // 대체 글리프: ❂
-            QuestItemKind::DragonglassArrows  => "\u{25B6}", // 대체 글리프: ▶
-            QuestItemKind::RangersNote        => "\u{2767}", // 대체 글리프: ❧
-            QuestItemKind::YgrittesBow        => "\u{2640}", // 대체 글리프: ♀
-            QuestItemKind::SilverBellRoot    => "\u{2698}", // 대체 글리프: ⚘
-            QuestItemKind::EllenElixir       => "\u{2697}", // 대체 글리프: ⚗
-            QuestItemKind::PoisonedHerb      => "\u{2620}", // 대체 글리프: ☠
-            QuestItemKind::DemonSword        => "\u{2694}", // 대체 글리프: ⚔
-            QuestItemKind::ElenasMemo        => "\u{270E}", // 대체 글리프: ✎
-            QuestItemKind::AncientRitualBook => "\u{2720}", // 대체 글리프: ✠
-            QuestItemKind::PrototypeHammer   => "\u{2692}", // 대체 글리프: ⚒
-            QuestItemKind::SteelCore         => "\u{2B22}", // 대체 글리프: ⬢
-            QuestItemKind::PilotBadge        => "\u{2605}", // 대체 글리프: ★
-        },
+        ItemKind::QuestItem(qk) => quest_item_meta(qk).map(|m| m.glyph_game_icon).unwrap_or("?"),
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
-pub enum QuestItemKind {
-    // 세계 균열 퀘스트
-    EternalGem,
-    PhilosophersStone,
-    DragonScale,
-    AncientScroll,
-    // 안개 프롤로그 퀘스트 — 무기 선택
-    PrologueGreatsword,
-    PrologueDaggers,
-    PrologueBowTorch,
-    // 안개 프롤로그 퀘스트 — 스토리 아이템
-    FamilyCrest,
-    // 안개 프롤로그 퀘스트 — 각성 보상
-    IceSword,
-    DragonEgg,
-    GhostWolf,
-    // 스타크 퀘스트 — 전쟁의 서막
-    LordsOath,
-    JaimeSword,
-    KingsNorthCrown,
-    // 타르가르옌 퀘스트 — 재생의 불꽃
-    WarlockKey,
-    DragonChain,
-    EssosSailMap,
-    // 존 스노우 퀘스트 — 장벽 너머의 그림자
-    DragonglassArrows,
-    RangersNote,
-    YgrittesBow,
-    // 약초 퀘스트 — 은방울 뿌리 채집
-    SilverBellRoot,
-    EllenElixir,
-    PoisonedHerb,
-    // 마검 퀘스트 — 성기사가 마검을 들다
-    DemonSword,
-    ElenasMemo,
-    AncientRitualBook,
-    // 파리 퀘스트 — 파리 고수와 기계 공학자
-    PrototypeHammer,
-    SteelCore,
-    PilotBadge,
-}
+/// 퀘스트 아이템 ID — 런타임에 RON 에서 로드한 문자열을 leak 하여 &'static 으로 사용
+/// Copy 가 필요한 ItemKind 의 일부로 사용되므로 &'static str 기반.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct QuestItemKind(pub &'static str);
 
 impl QuestItemKind {
+    pub fn id(self) -> &'static str { self.0 }
+
     pub fn display_name(self) -> &'static str {
-        match self {
-            QuestItemKind::EternalGem        => "영원의 보석",
-            QuestItemKind::PhilosophersStone => "현자의 돌",
-            QuestItemKind::DragonScale       => "용비늘",
-            QuestItemKind::AncientScroll     => "고대 주문서",
-            QuestItemKind::PrologueGreatsword => "대검",
-            QuestItemKind::PrologueDaggers    => "단검과 투척물",
-            QuestItemKind::PrologueBowTorch   => "부러진 활과 횃불",
-            QuestItemKind::FamilyCrest        => "가문 문장 유물",
-            QuestItemKind::IceSword           => "아이스",
-            QuestItemKind::DragonEgg          => "용의 알",
-            QuestItemKind::GhostWolf          => "고스트",
-            QuestItemKind::LordsOath          => "충성 서약서",
-            QuestItemKind::JaimeSword         => "제이미의 검",
-            QuestItemKind::KingsNorthCrown    => "북부의 왕관",
-            QuestItemKind::WarlockKey         => "마법사의 열쇠",
-            QuestItemKind::DragonChain        => "드래곤 족쇄",
-            QuestItemKind::EssosSailMap       => "에소스 항로도",
-            QuestItemKind::DragonglassArrows  => "드래곤스톤 화살촉",
-            QuestItemKind::RangersNote        => "죽은 레인저의 메모",
-            QuestItemKind::YgrittesBow        => "이그리트의 활",
-            QuestItemKind::SilverBellRoot    => "은방울 뿌리",
-            QuestItemKind::EllenElixir       => "엘렌의 특제 영약",
-            QuestItemKind::PoisonedHerb      => "독초",
-            QuestItemKind::DemonSword        => "마검",
-            QuestItemKind::ElenasMemo        => "엘레나의 메모",
-            QuestItemKind::AncientRitualBook => "고대 의식서",
-            QuestItemKind::PrototypeHammer   => "시제 6식 파암추",
-            QuestItemKind::SteelCore         => "강철 갑주 심장",
-            QuestItemKind::PilotBadge        => "전속 파일럿 인증서",
-        }
+        quest_item_meta(self).map(|m| m.display_name).unwrap_or("???")
     }
 }
+
+// serde: 단순 문자열로 직렬화/역직렬화 (저장 데이터 호환)
+impl serde::Serialize for QuestItemKind {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.0)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for QuestItemKind {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Ok(QuestItemKind(intern_quest_id(&s)))
+    }
+}
+
+/// RON 에서 불러오는 퀘스트 아이템 메타데이터 (raw)
+#[derive(Debug, Deserialize, Clone)]
+pub struct QuestItemDef {
+    pub id: String,
+    pub display_name: String,
+    pub glyph_ascii: String,
+    pub glyph_unicode: String,
+    pub glyph_game_icon: String,
+    pub pickup_message: String,
+    pub image_path: String,
+}
+
+/// leak 된 &'static 메타데이터 — 메서드들이 무인자로 접근하기 위해 사용
+#[derive(Debug)]
+pub struct QuestItemMeta {
+    pub display_name: &'static str,
+    pub glyph_ascii: &'static str,
+    pub glyph_unicode: &'static str,
+    pub glyph_game_icon: &'static str,
+    pub pickup_message: &'static str,
+    pub image_path: &'static str,
+}
+
+/// 전역 quest item registry — startup 시점에 RON 에서 로드되어 set 됨.
+/// OnceLock 사용 이유: ItemKind 의 각종 메서드 (glyph, display_name 등) 가 무인자로
+/// 데이터에 접근해야 하므로 (호출부에 registry 를 매번 넘기면 변경 폭이 너무 큼).
+static QUEST_ITEMS: OnceLock<HashMap<&'static str, QuestItemMeta>> = OnceLock::new();
+
+/// 같은 ID 의 leak 된 &'static str 을 한 번만 만들어 반환한다 (intern)
+pub fn intern_quest_id(id: &str) -> &'static str {
+    if let Some(map) = QUEST_ITEMS.get() {
+        if let Some((k, _)) = map.get_key_value(id) { return *k; }
+    }
+    // registry 미초기화 또는 등록되지 않은 ID — 안전하게 leak (테스트/검증 경로)
+    Box::leak(id.to_string().into_boxed_str())
+}
+
+pub fn quest_items() -> Option<&'static HashMap<&'static str, QuestItemMeta>> {
+    QUEST_ITEMS.get()
+}
+
+pub fn quest_item_meta(kind: QuestItemKind) -> Option<&'static QuestItemMeta> {
+    QUEST_ITEMS.get()?.get(kind.0)
+}
+
+/// item 시스템 Startup 단계 ordering
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ItemSystemSet {
+    Load,
+}
+
+/// RON 에서 quest item 정의를 읽어 전역 registry 에 적재한다
+pub fn load_quest_items() {
+    let path = "assets/items/quest_items.ron";
+    let text = std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
+    let defs: Vec<QuestItemDef> = ron::de::from_str(&text)
+        .unwrap_or_else(|e| panic!("[치명적] {} RON 파싱 실패: {}", path, e));
+
+    let mut map: HashMap<&'static str, QuestItemMeta> = HashMap::new();
+    for def in defs {
+        let id: &'static str = Box::leak(def.id.into_boxed_str());
+        let meta = QuestItemMeta {
+            display_name:    Box::leak(def.display_name.into_boxed_str()),
+            glyph_ascii:     Box::leak(def.glyph_ascii.into_boxed_str()),
+            glyph_unicode:   Box::leak(def.glyph_unicode.into_boxed_str()),
+            glyph_game_icon: Box::leak(def.glyph_game_icon.into_boxed_str()),
+            pickup_message:  Box::leak(def.pickup_message.into_boxed_str()),
+            image_path:      Box::leak(def.image_path.into_boxed_str()),
+        };
+        map.insert(id, meta);
+    }
+    info!("quest item 로드: {} 종", map.len());
+    // 테스트 환경에서는 여러 번 호출될 수 있으므로 set 결과 무시
+    let _ = QUEST_ITEMS.set(map);
+}
+
+fn load_quest_items_system() { load_quest_items(); }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum WeaponKind {
@@ -325,37 +295,7 @@ impl ItemKind {
             ItemKind::Consumable(c) => match c {
                 ConsumableKind::HealthPotion => "!",
             },
-            ItemKind::QuestItem(q) => match q {
-                QuestItemKind::EternalGem        => "*",
-                QuestItemKind::PhilosophersStone => "%",
-                QuestItemKind::DragonScale       => "§",
-                QuestItemKind::AncientScroll     => "~",
-                QuestItemKind::PrologueGreatsword => "/",
-                QuestItemKind::PrologueDaggers    => ")",
-                QuestItemKind::PrologueBowTorch   => "}",
-                QuestItemKind::FamilyCrest        => "^",
-                QuestItemKind::IceSword           => "!",
-                QuestItemKind::DragonEgg          => "o",
-                QuestItemKind::GhostWolf          => "w",
-                QuestItemKind::LordsOath          => "=",
-                QuestItemKind::JaimeSword         => "|",
-                QuestItemKind::KingsNorthCrown    => "&",
-                QuestItemKind::WarlockKey         => "k",
-                QuestItemKind::DragonChain        => "8",
-                QuestItemKind::EssosSailMap       => "m",
-                QuestItemKind::DragonglassArrows  => ">",
-                QuestItemKind::RangersNote        => "n",
-                QuestItemKind::YgrittesBow        => "q",
-                QuestItemKind::SilverBellRoot    => ";",
-                QuestItemKind::EllenElixir       => "&",
-                QuestItemKind::PoisonedHerb      => "?",
-                QuestItemKind::DemonSword        => "D",
-                QuestItemKind::ElenasMemo        => "e",
-                QuestItemKind::AncientRitualBook => "R",
-                QuestItemKind::PrototypeHammer   => "H",
-                QuestItemKind::SteelCore         => "#",
-                QuestItemKind::PilotBadge        => "P",
-            },
+            ItemKind::QuestItem(qk) => quest_item_meta(qk).map(|m| m.glyph_ascii).unwrap_or("?"),
         }
     }
 
@@ -373,7 +313,7 @@ impl ItemKind {
             ItemKind::Weapon(w)     => w.display_name(),
             ItemKind::Armor(a)      => a.display_name(),
             ItemKind::Consumable(c) => c.display_name(),
-            ItemKind::QuestItem(q)  => q.display_name(),
+            ItemKind::QuestItem(qk) => quest_item_meta(qk).map(|m| m.display_name).unwrap_or("???"),
         }
     }
 
@@ -390,37 +330,7 @@ impl ItemKind {
             ItemKind::Consumable(c) => match c {
                 ConsumableKind::HealthPotion => "체력 물약을 획득했다!",
             },
-            ItemKind::QuestItem(q) => match q {
-                QuestItemKind::EternalGem        => "영원의 보석을 획득했다!",
-                QuestItemKind::PhilosophersStone => "현자의 돌을 획득했다!",
-                QuestItemKind::DragonScale       => "용비늘을 획득했다!",
-                QuestItemKind::AncientScroll     => "고대 주문서를 획득했다!",
-                QuestItemKind::PrologueGreatsword => "대검을 집어들었다. 손에 익숙하게 맞는다.",
-                QuestItemKind::PrologueDaggers    => "단검과 투척물을 집었다. 가볍고 빠르다.",
-                QuestItemKind::PrologueBowTorch   => "부러진 활과 횃불을 집었다. 거리가 곧 생명이다.",
-                QuestItemKind::FamilyCrest        => "오래된 문장 유물을 발견했다. 어디선가 본 것 같다...",
-                QuestItemKind::IceSword           => "아이스 — 스타크 가문의 검이 손 안에서 차갑게 빛난다.",
-                QuestItemKind::DragonEgg          => "용의 알이 손바닥 위에서 뜨겁게 맥박친다.",
-                QuestItemKind::GhostWolf          => "하얀 늑대 고스트가 곁에 나타났다.",
-                QuestItemKind::LordsOath          => "충성 서약서를 받았다. 북부의 힘이 결집되고 있다.",
-                QuestItemKind::JaimeSword         => "제이미 라니스터의 검을 손에 넣었다. 전장의 증거.",
-                QuestItemKind::KingsNorthCrown    => "북부의 왕관. 이제 돌아올 수 없는 길에 섰다.",
-                QuestItemKind::WarlockKey         => "마법사의 열쇠. 차갑고 이상한 냄새가 난다.",
-                QuestItemKind::DragonChain        => "드래곤들을 묶었던 족쇄. 이제 그들은 자유롭다.",
-                QuestItemKind::EssosSailMap       => "에소스 항로도. 정복의 시작점이 표시되어 있다.",
-                QuestItemKind::DragonglassArrows  => "드래곤스톤 화살촉 다발. 와이트를 멈추는 유일한 방법.",
-                QuestItemKind::RangersNote        => "죽은 레인저의 메모. 떨리는 손으로 쓴 마지막 경고.",
-                QuestItemKind::YgrittesBow        => "이그리트의 활. 그녀는 항상 당신보다 빨리 쏜다.",
-                QuestItemKind::SilverBellRoot    => "은방울 뿌리를 채집했다. 맑은 향기가 퍼진다.",
-                QuestItemKind::EllenElixir       => "엘렌의 특제 영약. 온 몸에 활력이 흐른다.",
-                QuestItemKind::PoisonedHerb      => "독초를 발견했다. 조심해야 할 것 같다.",
-                QuestItemKind::DemonSword        => "마검을 집어들었다. 손에서 어둠의 기운이 흐른다...",
-                QuestItemKind::ElenasMemo        => "엘레나의 메모를 발견했다. 폐허 요새에 의식서가 있다고 한다.",
-                QuestItemKind::AncientRitualBook => "고대 의식서를 손에 넣었다. 봉인 의식의 방법이 담겨 있다.",
-                QuestItemKind::PrototypeHammer   => "시제 6식 파암추를 받았다. 내부에 화약식 파일뱅커가 내장되어 있다.",
-                QuestItemKind::SteelCore         => "강철 갑주의 심장을 획득했다. 보스 격파의 확실한 증거다.",
-                QuestItemKind::PilotBadge        => "전속 파일럿 인증서를 받았다. 그레체의 무기 테스터가 되었다.",
-            },
+            ItemKind::QuestItem(qk) => quest_item_meta(qk).map(|m| m.pickup_message).unwrap_or("아이템을 획득했다!"),
         }
     }
 }
@@ -566,7 +476,10 @@ impl Plugin for ItemPlugin {
             .init_resource::<PlayerInventory>()
             .init_resource::<PlayerEquipment>()
             .init_resource::<EquipmentPanelOpen>()
-            .add_systems(Startup, setup_glyph_fonts)
+            .add_systems(Startup, (
+                load_quest_items_system.in_set(ItemSystemSet::Load),
+                setup_glyph_fonts,
+            ))
             .add_systems(Update, (
                 spawn_dropped_items,
                 pickup_items.after(PlayerSystemSet::MovementComplete),
@@ -689,37 +602,7 @@ fn apply_equipment_stats(
 }
 
 fn quest_item_image_path(kind: QuestItemKind) -> &'static str {
-    match kind {
-        QuestItemKind::EternalGem        => "scene/open-chest.png",
-        QuestItemKind::PhilosophersStone => "scene/open-chest.png",
-        QuestItemKind::DragonScale       => "scene/open-chest.png",
-        QuestItemKind::AncientScroll     => "scene/open-chest.png",
-        QuestItemKind::PrologueGreatsword => "scene/open-chest.png",
-        QuestItemKind::PrologueDaggers    => "scene/open-chest.png",
-        QuestItemKind::PrologueBowTorch   => "scene/open-chest.png",
-        QuestItemKind::FamilyCrest        => "scene/open-chest.png",
-        QuestItemKind::IceSword           => "scene/open-chest.png",
-        QuestItemKind::DragonEgg          => "scene/open-chest.png",
-        QuestItemKind::GhostWolf          => "scene/open-chest.png",
-        QuestItemKind::LordsOath          => "scene/open-chest.png",
-        QuestItemKind::JaimeSword         => "scene/open-chest.png",
-        QuestItemKind::KingsNorthCrown    => "scene/open-chest.png",
-        QuestItemKind::WarlockKey         => "scene/open-chest.png",
-        QuestItemKind::DragonChain        => "scene/open-chest.png",
-        QuestItemKind::EssosSailMap       => "scene/open-chest.png",
-        QuestItemKind::DragonglassArrows  => "scene/open-chest.png",
-        QuestItemKind::RangersNote        => "scene/open-chest.png",
-        QuestItemKind::YgrittesBow        => "scene/open-chest.png",
-        QuestItemKind::SilverBellRoot    => "scene/open-chest.png",
-        QuestItemKind::EllenElixir       => "scene/open-chest.png",
-        QuestItemKind::PoisonedHerb      => "scene/open-chest.png",
-        QuestItemKind::DemonSword        => "scene/open-chest.png",
-        QuestItemKind::ElenasMemo        => "scene/open-chest.png",
-        QuestItemKind::AncientRitualBook => "scene/open-chest.png",
-        QuestItemKind::PrototypeHammer   => "scene/open-chest.png",
-        QuestItemKind::SteelCore         => "scene/open-chest.png",
-        QuestItemKind::PilotBadge        => "scene/open-chest.png",
-    }
+    quest_item_meta(kind).map(|m| m.image_path).unwrap_or("scene/open-chest.png")
 }
 
 fn spawn_quest_item_popup(
@@ -970,30 +853,35 @@ mod tests {
         assert_eq!(GlyphStyle::default(), GlyphStyle::Ascii);
     }
 
+    fn ensure_loaded() { load_quest_items(); }
+
     #[test]
     fn quest_item_display_names() {
-        assert_eq!(QuestItemKind::EternalGem.display_name(), "영원의 보석");
-        assert_eq!(QuestItemKind::PhilosophersStone.display_name(), "현자의 돌");
+        ensure_loaded();
+        assert_eq!(QuestItemKind("eternal_gem").display_name(), "영원의 보석");
+        assert_eq!(QuestItemKind("philosophers_stone").display_name(), "현자의 돌");
     }
 
     #[test]
     fn quest_item_glyph_and_pickup_message() {
-        let gem = ItemKind::QuestItem(QuestItemKind::EternalGem);
+        ensure_loaded();
+        let gem = ItemKind::QuestItem(QuestItemKind("eternal_gem"));
         assert_eq!(gem.glyph(), "*");
         assert_eq!(gem.pickup_message(), "영원의 보석을 획득했다!");
-        let stone = ItemKind::QuestItem(QuestItemKind::PhilosophersStone);
+        let stone = ItemKind::QuestItem(QuestItemKind("philosophers_stone"));
         assert_eq!(stone.pickup_message(), "현자의 돌을 획득했다!");
     }
 
     #[test]
     fn demonsword_items_have_correct_glyphs_and_names() {
-        assert_eq!(QuestItemKind::DemonSword.display_name(), "마검");
-        assert_eq!(QuestItemKind::ElenasMemo.display_name(), "엘레나의 메모");
-        assert_eq!(QuestItemKind::AncientRitualBook.display_name(), "고대 의식서");
+        ensure_loaded();
+        assert_eq!(QuestItemKind("demon_sword").display_name(), "마검");
+        assert_eq!(QuestItemKind("elenas_memo").display_name(), "엘레나의 메모");
+        assert_eq!(QuestItemKind("ancient_ritual_book").display_name(), "고대 의식서");
 
-        let sword = ItemKind::QuestItem(QuestItemKind::DemonSword);
-        let memo  = ItemKind::QuestItem(QuestItemKind::ElenasMemo);
-        let book  = ItemKind::QuestItem(QuestItemKind::AncientRitualBook);
+        let sword = ItemKind::QuestItem(QuestItemKind("demon_sword"));
+        let memo  = ItemKind::QuestItem(QuestItemKind("elenas_memo"));
+        let book  = ItemKind::QuestItem(QuestItemKind("ancient_ritual_book"));
 
         assert_eq!(sword.glyph(), "D");
         assert_eq!(memo.glyph(),  "e");
@@ -1006,13 +894,14 @@ mod tests {
 
     #[test]
     fn parry_quest_items_have_correct_glyphs_and_names() {
-        assert_eq!(QuestItemKind::PrototypeHammer.display_name(), "시제 6식 파암추");
-        assert_eq!(QuestItemKind::SteelCore.display_name(),       "강철 갑주 심장");
-        assert_eq!(QuestItemKind::PilotBadge.display_name(),      "전속 파일럿 인증서");
+        ensure_loaded();
+        assert_eq!(QuestItemKind("prototype_hammer").display_name(), "시제 6식 파암추");
+        assert_eq!(QuestItemKind("steel_core").display_name(),       "강철 갑주 심장");
+        assert_eq!(QuestItemKind("pilot_badge").display_name(),      "전속 파일럿 인증서");
 
-        let hammer = ItemKind::QuestItem(QuestItemKind::PrototypeHammer);
-        let core   = ItemKind::QuestItem(QuestItemKind::SteelCore);
-        let badge  = ItemKind::QuestItem(QuestItemKind::PilotBadge);
+        let hammer = ItemKind::QuestItem(QuestItemKind("prototype_hammer"));
+        let core   = ItemKind::QuestItem(QuestItemKind("steel_core"));
+        let badge  = ItemKind::QuestItem(QuestItemKind("pilot_badge"));
 
         assert_eq!(hammer.glyph(), "H");
         assert_eq!(core.glyph(),   "#");
@@ -1025,11 +914,45 @@ mod tests {
 
     #[test]
     fn demonsword_items_unicode_glyphs() {
-        let sword = glyph_for_style(ItemKind::QuestItem(QuestItemKind::DemonSword), GlyphStyle::Unicode);
+        ensure_loaded();
+        let sword = glyph_for_style(ItemKind::QuestItem(QuestItemKind("demon_sword")), GlyphStyle::Unicode);
         assert_eq!(sword, "\u{2694}");
-        let memo = glyph_for_style(ItemKind::QuestItem(QuestItemKind::ElenasMemo), GlyphStyle::Unicode);
+        let memo = glyph_for_style(ItemKind::QuestItem(QuestItemKind("elenas_memo")), GlyphStyle::Unicode);
         assert_eq!(memo, "\u{270E}");
-        let book = glyph_for_style(ItemKind::QuestItem(QuestItemKind::AncientRitualBook), GlyphStyle::Unicode);
+        let book = glyph_for_style(ItemKind::QuestItem(QuestItemKind("ancient_ritual_book")), GlyphStyle::Unicode);
         assert_eq!(book, "\u{2720}");
+    }
+
+    #[test]
+    fn quest_items_ron_loads_all_29_items() {
+        ensure_loaded();
+        let map = quest_items().expect("registry 가 로드되어야 한다");
+        assert_eq!(map.len(), 29, "quest_items.ron 에 29 종이 정의되어야 한다");
+    }
+
+    #[test]
+    fn quest_item_meta_returns_none_for_unknown_id() {
+        ensure_loaded();
+        let unknown = QuestItemKind("does_not_exist");
+        assert!(quest_item_meta(unknown).is_none());
+    }
+
+    #[test]
+    fn intern_quest_id_returns_same_pointer_for_same_id() {
+        ensure_loaded();
+        let a = intern_quest_id("eternal_gem");
+        let b = intern_quest_id("eternal_gem");
+        // registry 에 등록된 ID 는 동일 &'static str (포인터 일치)
+        assert_eq!(a.as_ptr(), b.as_ptr(), "같은 등록된 ID 는 같은 포인터여야 한다");
+    }
+
+    #[test]
+    fn quest_item_kind_serde_roundtrip() {
+        ensure_loaded();
+        let qk = QuestItemKind("eternal_gem");
+        let s = ron::ser::to_string(&qk).unwrap();
+        assert_eq!(s, "\"eternal_gem\"");
+        let parsed: QuestItemKind = ron::de::from_str(&s).unwrap();
+        assert_eq!(parsed, qk);
     }
 }

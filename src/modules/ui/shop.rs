@@ -363,7 +363,7 @@ mod tests {
         use crate::modules::item::{InventoryItem, QuestItemKind};
         let mut inv = make_inventory(0);
         inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::Sword) });
-        inv.items.push(InventoryItem { kind: ItemKind::QuestItem(QuestItemKind::EternalGem) });
+        inv.items.push(InventoryItem { kind: ItemKind::QuestItem(QuestItemKind("eternal_gem")) });
         let list = build_sell_list(&inv);
         assert_eq!(list.len(), 1);
         assert!(matches!(list[0].0, ItemKind::Weapon(WeaponKind::Sword)));
@@ -382,7 +382,7 @@ mod tests {
     fn catalog_sell_price_returns_default_for_unknown() {
         // QuestItem은 카탈로그에 없으므로 기본값 10
         use crate::modules::item::QuestItemKind;
-        let price = catalog_sell_price(ItemKind::QuestItem(QuestItemKind::EternalGem));
+        let price = catalog_sell_price(ItemKind::QuestItem(QuestItemKind("eternal_gem")));
         assert_eq!(price, 10);
     }
 }

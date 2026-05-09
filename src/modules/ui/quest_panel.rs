@@ -387,7 +387,8 @@ mod tests {
     fn active_quest_progress_counts_inventory_items() {
         let (reg, st) = make_registry_and_state("active");
         let mut inventory = default_inventory();
-        inventory.items.push(InventoryItem { kind: ItemKind::QuestItem(QuestItemKind::EternalGem) });
+        crate::modules::item::load_quest_items();
+        inventory.items.push(InventoryItem { kind: ItemKind::QuestItem(QuestItemKind("eternal_gem")) });
         let sections = build_quest_sections(&reg, &st, &inventory, &default_world(), &DiscoveredMarkers::default(), &Handle::default());
         let all_text = all_text(sections);
         assert!(all_text.contains("완료: 영원의 보석 1/1"));

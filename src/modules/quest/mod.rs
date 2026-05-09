@@ -3,7 +3,7 @@ use rand::Rng;
 use std::collections::{HashMap, HashSet};
 use serde::Deserialize;
 use crate::modules::{
-    item::{PlayerInventory, ItemKind, QuestItemKind, InventoryItem, Item},
+    item::{PlayerInventory, ItemKind, QuestItemKind, InventoryItem, Item, ItemSystemSet},
     map::{MapResource, TILE_SIZE, tile_to_world_coords, UsedSpawnTiles, random_floor_tile_in_room},
     ui::minimap::{DiscoveredMarkers, MarkerKind},
     zone::{ZoneId, SpawnQuestPortalEvent},
@@ -191,7 +191,7 @@ impl Plugin for QuestPlugin {
             .init_resource::<QuestState>()
             .add_event::<KillNpcEvent>()
             .add_event::<DespawnWorldItemEvent>()
-            .add_systems(Startup, load_quests.in_set(QuestSystemSet::Load))
+            .add_systems(Startup, load_quests.in_set(QuestSystemSet::Load).after(ItemSystemSet::Load))
             .add_systems(Update, (check_auto_advance, spawn_quest_items));
     }
 }
@@ -616,48 +616,21 @@ fn spawn_quest_items(
 
 pub fn item_id_to_kind(id: &str) -> Option<ItemKind> {
     match id {
-        "eternal_gem"         => Some(ItemKind::QuestItem(QuestItemKind::EternalGem)),
-        "philosophers_stone"  => Some(ItemKind::QuestItem(QuestItemKind::PhilosophersStone)),
-        "dragon_scale"        => Some(ItemKind::QuestItem(QuestItemKind::DragonScale)),
-        "ancient_scroll"      => Some(ItemKind::QuestItem(QuestItemKind::AncientScroll)),
         "sword"               => Some(ItemKind::Weapon(crate::modules::item::WeaponKind::Sword)),
         "spear"               => Some(ItemKind::Weapon(crate::modules::item::WeaponKind::Spear)),
         "bow"                 => Some(ItemKind::Weapon(crate::modules::item::WeaponKind::Bow)),
         "leather_armor"       => Some(ItemKind::Armor(crate::modules::item::ArmorKind::LeatherArmor)),
         "health_potion"       => Some(ItemKind::Consumable(crate::modules::item::ConsumableKind::HealthPotion)),
-        // stark_quest
-        "lords_oath"          => Some(ItemKind::QuestItem(QuestItemKind::LordsOath)),
-        "jaime_sword"         => Some(ItemKind::QuestItem(QuestItemKind::JaimeSword)),
-        "kings_north_crown"   => Some(ItemKind::QuestItem(QuestItemKind::KingsNorthCrown)),
-        // targaryen_quest
-        "warlock_key"         => Some(ItemKind::QuestItem(QuestItemKind::WarlockKey)),
-        "dragon_chain"        => Some(ItemKind::QuestItem(QuestItemKind::DragonChain)),
-        "essos_sail_map"      => Some(ItemKind::QuestItem(QuestItemKind::EssosSailMap)),
-        // jon_snow_quest
-        "dragonglass_arrows"  => Some(ItemKind::QuestItem(QuestItemKind::DragonglassArrows)),
-        "rangers_note"        => Some(ItemKind::QuestItem(QuestItemKind::RangersNote)),
-        "ygritte_bow"         => Some(ItemKind::QuestItem(QuestItemKind::YgrittesBow)),
-        // prologue_fog
-        "prologue_greatsword" => Some(ItemKind::QuestItem(QuestItemKind::PrologueGreatsword)),
-        "prologue_daggers"    => Some(ItemKind::QuestItem(QuestItemKind::PrologueDaggers)),
-        "prologue_bowtorch"   => Some(ItemKind::QuestItem(QuestItemKind::PrologueBowTorch)),
-        "family_crest"        => Some(ItemKind::QuestItem(QuestItemKind::FamilyCrest)),
-        "ice_sword"           => Some(ItemKind::QuestItem(QuestItemKind::IceSword)),
-        "dragon_egg"          => Some(ItemKind::QuestItem(QuestItemKind::DragonEgg)),
-        "ghost_wolf"          => Some(ItemKind::QuestItem(QuestItemKind::GhostWolf)),
-        // herb_quest
-        "silver_bell_root"    => Some(ItemKind::QuestItem(QuestItemKind::SilverBellRoot)),
-        "ellen_elixir"        => Some(ItemKind::QuestItem(QuestItemKind::EllenElixir)),
-        "poisoned_herb"       => Some(ItemKind::QuestItem(QuestItemKind::PoisonedHerb)),
-        // demonsword_quest
-        "demon_sword"         => Some(ItemKind::QuestItem(QuestItemKind::DemonSword)),
-        "elenas_memo"         => Some(ItemKind::QuestItem(QuestItemKind::ElenasMemo)),
-        "ancient_ritual_book" => Some(ItemKind::QuestItem(QuestItemKind::AncientRitualBook)),
-        // parry_quest
-        "prototype_hammer"    => Some(ItemKind::QuestItem(QuestItemKind::PrototypeHammer)),
-        "steel_core"          => Some(ItemKind::QuestItem(QuestItemKind::SteelCore)),
-        "pilot_badge"         => Some(ItemKind::QuestItem(QuestItemKind::PilotBadge)),
-        _ => None,
+        // 그 외는 quest item registry 에서 조회 — 알려진 quest item ID 면 QuestItemKind 반환
+        other => {
+            if crate::modules::item::quest_items()
+                .map(|m| m.contains_key(other)).unwrap_or(false)
+            {
+                Some(ItemKind::QuestItem(QuestItemKind(crate::modules::item::intern_quest_id(other))))
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -709,8 +682,9 @@ mod tests {
 
     #[test]
     fn item_id_to_kind_maps_correctly() {
-        assert!(matches!(item_id_to_kind("eternal_gem"), Some(ItemKind::QuestItem(QuestItemKind::EternalGem))));
-        assert!(matches!(item_id_to_kind("philosophers_stone"), Some(ItemKind::QuestItem(QuestItemKind::PhilosophersStone))));
+        crate::modules::item::load_quest_items();
+        assert_eq!(item_id_to_kind("eternal_gem"),        Some(ItemKind::QuestItem(QuestItemKind("eternal_gem"))));
+        assert_eq!(item_id_to_kind("philosophers_stone"), Some(ItemKind::QuestItem(QuestItemKind("philosophers_stone"))));
         assert!(item_id_to_kind("unknown").is_none());
     }
 
@@ -879,13 +853,14 @@ mod tests {
 
         assert_eq!(state.current_phase("test_q"), Some("normal_done"));
         assert!(log_msgs.contains(&"정통 결말".to_string()));
-        assert!(!inv.items.iter().any(|i| matches!(i.kind, ItemKind::QuestItem(QuestItemKind::DragonScale))));
+        assert!(!inv.items.iter().any(|i| matches!(i.kind, ItemKind::QuestItem(qk) if qk.0 == "dragon_scale")));
     }
 
     #[test]
     fn new_item_ids_mapped_correctly() {
-        assert!(matches!(item_id_to_kind("dragon_scale"), Some(ItemKind::QuestItem(QuestItemKind::DragonScale))));
-        assert!(matches!(item_id_to_kind("ancient_scroll"), Some(ItemKind::QuestItem(QuestItemKind::AncientScroll))));
+        crate::modules::item::load_quest_items();
+        assert_eq!(item_id_to_kind("dragon_scale"),   Some(ItemKind::QuestItem(QuestItemKind("dragon_scale"))));
+        assert_eq!(item_id_to_kind("ancient_scroll"), Some(ItemKind::QuestItem(QuestItemKind("ancient_scroll"))));
     }
 
     #[test]
@@ -1075,6 +1050,7 @@ mod tests {
 
     #[test]
     fn all_quest_files_pass_semantic_validation() {
+        crate::modules::item::load_quest_items();
         for (path, def) in load_all_quest_defs() {
             let errors = validate_quest_def(&def);
             assert!(
@@ -1088,6 +1064,7 @@ mod tests {
 
     #[test]
     fn all_quest_item_ids_are_recognized() {
+        crate::modules::item::load_quest_items();
         for (path, def) in load_all_quest_defs() {
             for spawn in &def.spawns {
                 assert!(
@@ -1149,15 +1126,17 @@ mod tests {
 
     #[test]
     fn parry_quest_item_ids_mapped_correctly() {
-        assert!(matches!(item_id_to_kind("prototype_hammer"), Some(ItemKind::QuestItem(QuestItemKind::PrototypeHammer))));
-        assert!(matches!(item_id_to_kind("steel_core"),       Some(ItemKind::QuestItem(QuestItemKind::SteelCore))));
-        assert!(matches!(item_id_to_kind("pilot_badge"),      Some(ItemKind::QuestItem(QuestItemKind::PilotBadge))));
+        crate::modules::item::load_quest_items();
+        assert_eq!(item_id_to_kind("prototype_hammer"), Some(ItemKind::QuestItem(QuestItemKind("prototype_hammer"))));
+        assert_eq!(item_id_to_kind("steel_core"),       Some(ItemKind::QuestItem(QuestItemKind("steel_core"))));
+        assert_eq!(item_id_to_kind("pilot_badge"),      Some(ItemKind::QuestItem(QuestItemKind("pilot_badge"))));
     }
 
     #[test]
     fn demonsword_item_ids_mapped_correctly() {
-        assert!(matches!(item_id_to_kind("demon_sword"),         Some(ItemKind::QuestItem(QuestItemKind::DemonSword))));
-        assert!(matches!(item_id_to_kind("elenas_memo"),         Some(ItemKind::QuestItem(QuestItemKind::ElenasMemo))));
-        assert!(matches!(item_id_to_kind("ancient_ritual_book"), Some(ItemKind::QuestItem(QuestItemKind::AncientRitualBook))));
+        crate::modules::item::load_quest_items();
+        assert_eq!(item_id_to_kind("demon_sword"),         Some(ItemKind::QuestItem(QuestItemKind("demon_sword"))));
+        assert_eq!(item_id_to_kind("elenas_memo"),         Some(ItemKind::QuestItem(QuestItemKind("elenas_memo"))));
+        assert_eq!(item_id_to_kind("ancient_ritual_book"), Some(ItemKind::QuestItem(QuestItemKind("ancient_ritual_book"))));
     }
 }
