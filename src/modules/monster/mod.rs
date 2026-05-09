@@ -109,8 +109,13 @@ fn respawn_on_regen(
 
         let zone_id = world.current.clone();
 
-        // 처음 방문이면 슬롯 초기화
-        if !persistence.0.contains_key(&zone_id) {
+        // monster_slots 가 비어있으면 첫 방문으로 보고 초기화한다.
+        // (entry 자체는 portal-position-persistence 등 다른 시스템이 먼저
+        //  생성했을 수 있어 contains_key 만으로는 첫 방문을 판정할 수 없다.)
+        let needs_init = persistence.0.get(&zone_id)
+            .map(|s| s.monster_slots.is_empty())
+            .unwrap_or(true);
+        if needs_init {
             persistence.0.entry(zone_id.clone()).or_default().monster_slots =
                 init_zone_monster_slots(&event.rooms);
         }
@@ -581,5 +586,44 @@ mod tests {
             };
             assert!(neighbors.contains(&result), "배회 결과가 유효한 타일이어야 한다");
         }
+    }
+
+    /// monster respawn 의 첫 방문 판정 로직 — entry 가 있어도 monster_slots 가
+    /// 비었으면 init 해야 한다 (portal 이 먼저 entry 를 만든 케이스).
+    #[test]
+    fn monster_init_triggers_when_slots_empty_even_with_entry() {
+        let mut persistence = ZonePersistence::default();
+        let zone = crate::modules::zone::ZoneId::Dungeon(1);
+
+        // portal-position-persistence 가 entry 를 먼저 만들고 portals 만 채운 상태
+        let snap = persistence.0.entry(zone.clone()).or_default();
+        snap.portals = vec![crate::modules::zone::SavedPortal {
+            tile_x: 5, tile_y: 5,
+            target: crate::modules::zone::ZoneId::Town,
+            arrive_from: crate::modules::zone::PortalDirection::StairUp,
+        }];
+        // monster_slots 는 비어있음
+        assert!(snap.monster_slots.is_empty());
+
+        // respawn_on_regen 의 needs_init 로직 재현
+        let needs_init = persistence.0.get(&zone)
+            .map(|s| s.monster_slots.is_empty())
+            .unwrap_or(true);
+        assert!(needs_init, "monster_slots 가 비어있으면 init 해야 한다");
+    }
+
+    #[test]
+    fn monster_init_skipped_when_slots_already_populated() {
+        let mut persistence = ZonePersistence::default();
+        let zone = crate::modules::zone::ZoneId::Dungeon(1);
+        // 이미 monster_slots 채워진 상태 — 두 번째 방문
+        persistence.0.entry(zone.clone()).or_default().monster_slots = vec![
+            MonsterSlot { data_idx: 0, respawn_at_turn: None },
+        ];
+
+        let needs_init = persistence.0.get(&zone)
+            .map(|s| s.monster_slots.is_empty())
+            .unwrap_or(true);
+        assert!(!needs_init, "이미 채워진 slots 는 init 하면 안 된다 (재방문 시 상태 보존)");
     }
 }
