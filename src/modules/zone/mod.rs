@@ -98,11 +98,23 @@ pub struct MonsterSlot {
     pub respawn_at_turn: Option<u64>,
 }
 
+/// 영속화되는 포털 위치 — 같은 존 재방문 시 같은 자리에 복원하기 위함.
+/// 현재 게임 코드는 portal_tile() 로 매번 랜덤 위치를 정해 위치가 바뀌는 버그가 있었다.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct SavedPortal {
+    pub tile_x: usize,
+    pub tile_y: usize,
+    pub target: ZoneId,
+    pub arrive_from: PortalDirection,
+}
+
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ZoneSnapshot {
     pub blood_stains: Vec<SavedBloodStain>,
     pub monster_slots: Vec<MonsterSlot>,
     pub last_visited_turn: u64,
+    #[serde(default)]
+    pub portals: Vec<SavedPortal>,
 }
 
 #[derive(Resource, Default, Clone, serde::Serialize, serde::Deserialize)]
@@ -141,7 +153,7 @@ pub struct ZonePortal {
     pub arrive_from: PortalDirection,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PortalDirection {
     North,   // 맵 북쪽 경계 → 도착 시 남쪽에서 스폰
     South,   // 맵 남쪽 경계 → 도착 시 북쪽에서 스폰
@@ -242,7 +254,7 @@ fn handle_zone_transition(
     map_res: Res<MapResource>,
     mut apply_ev: EventWriter<ApplyMapEvent>,
     registry: Res<MapGeneratorRegistry>,
-    portals: Query<Entity, With<ZonePortal>>,
+    portals: Query<(Entity, &Transform, &ZonePortal)>,
     mut commands: Commands,
     mut log: EventWriter<crate::modules::ui::LogMessage>,
     blood_query: Query<(Entity, &BloodStain, &Transform)>,
@@ -252,12 +264,20 @@ fn handle_zone_transition(
     global_seed: Res<GlobalSeed>,
 ) {
     for transition in ev.read() {
-        // 떠나는 존의 혈흔을 스냅샷에 저장하고 엔티티 제거
+        // 떠나는 존의 혈흔과 포털 위치를 스냅샷에 저장하고 엔티티 제거
         let from_zone = world.current.clone();
         let snapshot = persistence.0.entry(from_zone).or_default();
         snapshot.blood_stains = blood_query.iter().map(|(_, stain, transform)| {
             let (tx, ty) = world_to_tile_coords(transform.translation);
             SavedBloodStain { tile_x: tx, tile_y: ty, alpha: stain.alpha, decay_per_turn: stain.decay_per_turn }
+        }).collect();
+        snapshot.portals = portals.iter().map(|(_, transform, portal)| {
+            let (tx, ty) = world_to_tile_coords(transform.translation);
+            SavedPortal {
+                tile_x: tx, tile_y: ty,
+                target: portal.target.clone(),
+                arrive_from: portal.arrive_from.clone(),
+            }
         }).collect();
         snapshot.last_visited_turn = global_turn.0;
         for (entity, _, _) in blood_query.iter() {
@@ -299,8 +319,8 @@ fn handle_zone_transition(
             format!("{} 진입.", target.display_name())
         ));
 
-        // 기존 포털 제거 (새 맵에 맞게 재스폰됨)
-        for e in portals.iter() { commands.entity(e).despawn(); }
+        // 기존 포털 제거 (새 맵에 맞게 재스폰됨; 위치는 위에서 persistence 에 저장됨)
+        for (entity, _, _) in portals.iter() { commands.entity(entity).despawn(); }
 
         world.maps.insert(target.clone(), map.clone());
         world.current = target;
@@ -309,7 +329,11 @@ fn handle_zone_transition(
     }
 }
 
-/// ApplyMapEvent 이후 (맵 타일 재스폰 완료 다음 프레임) 포털을 스폰한다
+/// ApplyMapEvent 이후 (맵 타일 재스폰 완료 다음 프레임) 포털을 스폰한다.
+///
+/// 영속화된 포털 위치가 있으면 그대로 복원해 같은 존 재방문 시 위치 일관성을 보장한다.
+/// 첫 방문 시에만 portal_tile() 로 랜덤 배치한 뒤, 떠날 때 ZonePersistence 에
+/// 위치가 저장된다 (handle_zone_transition).
 fn spawn_portals_after_apply(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -317,15 +341,30 @@ fn spawn_portals_after_apply(
     portal_q: Query<(), With<ZonePortal>>,
     map_res: Res<MapResource>,
     named_config: Res<NamedZoneConfig>,
+    persistence: Res<ZonePersistence>,
     mut used_spawn: ResMut<UsedSpawnTiles>,
 ) {
     if !map_res.is_changed() { return; }
     if !portal_q.is_empty() { return; }  // 이미 스폰됨
 
-    let mut rng = rand::thread_rng();
-    let map = &map_res.0;
     let font = asset_server.load("fonts/FiraMono-Medium.ttf");
 
+    // 1) 영속화된 포털이 있으면 그대로 복원 (위치 일관성)
+    let saved_portals = persistence.0.get(&world.current).map(|s| s.portals.as_slice()).unwrap_or(&[]);
+    if !saved_portals.is_empty() {
+        for saved in saved_portals {
+            spawn_portal_entity(
+                &mut commands, &font,
+                saved.tile_x, saved.tile_y,
+                saved.arrive_from.clone(), saved.target.clone(),
+            );
+        }
+        return;
+    }
+
+    // 2) 첫 방문 — 기본 포털 + Named 진입 포털을 랜덤 배치
+    let mut rng = rand::thread_rng();
+    let map = &map_res.0;
     let mut portals = zone_portals(&world.current);
 
     // Named 존 안에 있으면 원점으로 돌아가는 포탈을 추가한다
@@ -343,33 +382,45 @@ fn spawn_portals_after_apply(
     }
 
     for (dir, target) in portals {
-        let is_quest_portal = matches!(target, ZoneId::Named(_));
         if let Some((px, py)) = portal_tile(map, &dir, &mut used_spawn.0, &mut rng) {
-            let coord = tile_to_world_coords(px, py);
-            let glyph = dir.glyph();
-            let color = if is_quest_portal {
-                Color::rgb(0.8, 0.2, 0.8)  // 퀘스트 포탈 — 보라색
-            } else {
-                match dir {
-                    PortalDirection::StairDown => Color::YELLOW,
-                    PortalDirection::StairUp   => Color::CYAN,
-                    _                          => Color::rgba(0.5, 1.0, 0.5, 0.7),
-                }
-            };
-            commands.spawn((
-                Text2dBundle {
-                    text: Text::from_section(glyph, TextStyle {
-                        font: font.clone(),
-                        font_size: TILE_SIZE,
-                        color,
-                    }),
-                    transform: Transform::from_xyz(coord.x, coord.y, 1.5),
-                    ..default()
-                },
-                ZonePortal { target, arrive_from: dir },
-            ));
+            spawn_portal_entity(&mut commands, &font, px, py, dir, target);
         }
     }
+}
+
+/// ZonePortal 엔티티 한 개를 지정 좌표에 스폰한다 — saved/random 양쪽 경로에서 공유
+fn spawn_portal_entity(
+    commands: &mut Commands,
+    font: &Handle<Font>,
+    tile_x: usize,
+    tile_y: usize,
+    dir: PortalDirection,
+    target: ZoneId,
+) {
+    let coord = tile_to_world_coords(tile_x, tile_y);
+    let glyph = dir.glyph();
+    let is_quest_portal = matches!(target, ZoneId::Named(_));
+    let color = if is_quest_portal {
+        Color::rgb(0.8, 0.2, 0.8)  // 퀘스트 포탈 — 보라색
+    } else {
+        match dir {
+            PortalDirection::StairDown => Color::YELLOW,
+            PortalDirection::StairUp   => Color::CYAN,
+            _                          => Color::rgba(0.5, 1.0, 0.5, 0.7),
+        }
+    };
+    commands.spawn((
+        Text2dBundle {
+            text: Text::from_section(glyph, TextStyle {
+                font: font.clone(),
+                font_size: TILE_SIZE,
+                color,
+            }),
+            transform: Transform::from_xyz(coord.x, coord.y, 1.5),
+            ..default()
+        },
+        ZonePortal { target, arrive_from: dir },
+    ));
 }
 
 /// SpawnQuestPortalEvent 를 받아 NamedZoneConfig 에 등록하고 현재 맵에 포탈을 스폰한다
@@ -647,5 +698,55 @@ mod tests {
     fn named_zone_display_name_uses_zone_name() {
         assert_eq!(ZoneId::Named("사막".to_string()).display_name(), "사막");
         assert_eq!(ZoneId::Named("콰스".to_string()).display_name(), "콰스");
+    }
+
+    #[test]
+    fn zone_snapshot_default_has_empty_portals() {
+        let s = ZoneSnapshot::default();
+        assert!(s.portals.is_empty());
+    }
+
+    #[test]
+    fn saved_portal_serde_roundtrip() {
+        let p = SavedPortal {
+            tile_x: 12, tile_y: 7,
+            target: ZoneId::Named("herb_glade".into()),
+            arrive_from: PortalDirection::StairDown,
+        };
+        let s = ron::ser::to_string(&p).unwrap();
+        let parsed: SavedPortal = ron::de::from_str(&s).unwrap();
+        assert_eq!(parsed.tile_x, 12);
+        assert_eq!(parsed.tile_y, 7);
+        assert_eq!(parsed.target, ZoneId::Named("herb_glade".into()));
+        assert_eq!(parsed.arrive_from, PortalDirection::StairDown);
+    }
+
+    #[test]
+    fn zone_snapshot_serialization_preserves_portals() {
+        let mut snap = ZoneSnapshot::default();
+        snap.portals.push(SavedPortal {
+            tile_x: 5, tile_y: 9,
+            target: ZoneId::Named("herb_glade".into()),
+            arrive_from: PortalDirection::StairDown,
+        });
+        snap.portals.push(SavedPortal {
+            tile_x: 30, tile_y: 18,
+            target: ZoneId::Forest,
+            arrive_from: PortalDirection::North,
+        });
+        let s = ron::ser::to_string(&snap).unwrap();
+        let parsed: ZoneSnapshot = ron::de::from_str(&s).unwrap();
+        assert_eq!(parsed.portals.len(), 2);
+        assert_eq!(parsed.portals[0].tile_x, 5);
+        assert_eq!(parsed.portals[1].target, ZoneId::Forest);
+    }
+
+    #[test]
+    fn zone_snapshot_deserializes_legacy_format_without_portals() {
+        // 기존 저장 데이터(portals 필드 없음) 호환성 — #[serde(default)] 검증
+        let legacy = r#"(blood_stains: [], monster_slots: [], last_visited_turn: 5)"#;
+        let parsed: ZoneSnapshot = ron::de::from_str(legacy).unwrap();
+        assert_eq!(parsed.last_visited_turn, 5);
+        assert!(parsed.portals.is_empty());
     }
 }
