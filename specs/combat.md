@@ -13,7 +13,7 @@
 
 ### 전투 스탯
 - 플레이어 초기: `PLAYER_HP=30`, `PLAYER_ATK=5`, `PLAYER_DEF=1`,
-  `PLAYER_MP=10`.
+  `PLAYER_MP=20`.
 - 데미지 = `max(1, 공격자.공격력 - 방어자.방어력)`.
 - 몬스터 유형:
 
