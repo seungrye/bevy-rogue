@@ -98,6 +98,10 @@ pub struct SaveData {
     pub inventory: PlayerInventory,
     pub equipment: PlayerEquipment,
     pub quest_state: QuestState,
+    /// 이번 런에 활성화된 퀘스트 ID — spawn_chance 재롤 방지용으로 저장.
+    /// 기존 저장 파일 호환을 위해 #[serde(default)].
+    #[serde(default)]
+    pub active_quests: std::collections::HashSet<String>,
     pub current_zone: ZoneId,
     /// 방문한 존별 탐험 기록 — 비트팩 후 Base64 인코딩 (80×50 → 668 chars/zone)
     pub zone_revealed: HashMap<ZoneId, String>,
@@ -125,6 +129,7 @@ fn auto_save(
     equipment: Res<PlayerEquipment>,
     progress: Res<PlayerProgress>,
     quest_state: Res<QuestState>,
+    quest_registry: Res<crate::modules::quest::QuestRegistry>,
     world_state: Res<WorldState>,
     persistence: Res<ZonePersistence>,
     markers: Res<DiscoveredMarkers>,
@@ -169,6 +174,7 @@ fn auto_save(
         inventory: inventory.clone(),
         equipment: equipment.clone(),
         quest_state: quest_state.clone(),
+        active_quests: quest_registry.active.clone(),
         current_zone: world_state.current.clone(),
         zone_revealed,
         zone_persistence,
@@ -255,6 +261,7 @@ fn load_if_save_exists(
     mut equipment: ResMut<PlayerEquipment>,
     mut progress: ResMut<PlayerProgress>,
     mut quest_state: ResMut<QuestState>,
+    mut quest_registry: ResMut<crate::modules::quest::QuestRegistry>,
     mut world_state: ResMut<WorldState>,
     mut persistence: ResMut<ZonePersistence>,
     mut markers: ResMut<DiscoveredMarkers>,
@@ -304,6 +311,11 @@ fn load_if_save_exists(
     *equipment    = save.equipment;
     *progress     = save.player_progress;
     *quest_state  = save.quest_state;
+    // 활성 퀘스트 복원 — load_quests 가 startup 에 spawn_chance 로 재롤한 값을 덮어쓴다.
+    // saved 가 비어있으면(legacy 저장 데이터) 재롤한 값 그대로 둔다.
+    if !save.active_quests.is_empty() {
+        quest_registry.active = save.active_quests;
+    }
     *persistence  = ZonePersistence(save.zone_persistence);
     *markers      = save.discovered_markers;
     global_turn.0 = save.global_turn;
@@ -376,6 +388,7 @@ mod tests {
             },
             equipment: PlayerEquipment { weapon: Some(WeaponKind::SWORD), armor: None },
             quest_state: QuestState::default(),
+            active_quests: std::collections::HashSet::new(),
             current_zone: ZoneId::Town,
             zone_revealed: {
                 let mut m = HashMap::new();
@@ -406,6 +419,44 @@ mod tests {
         assert_eq!(encoded.len(), 668);
         // 원본 bool vec보다 약 6배 작음 (4000 vs 668)
         assert!(encoded.len() < tiles.len() / 5);
+    }
+
+    #[test]
+    fn active_quests_serde_roundtrip() {
+        let mut save = make_minimal_save();
+        save.active_quests.insert("herb_quest".to_string());
+        save.active_quests.insert("gem_quest".to_string());
+        let ron_str = ron::ser::to_string_pretty(&save, ron::ser::PrettyConfig::default()).unwrap();
+        let restored: SaveData = ron::from_str(&ron_str).unwrap();
+        assert_eq!(restored.active_quests.len(), 2);
+        assert!(restored.active_quests.contains("herb_quest"));
+        assert!(restored.active_quests.contains("gem_quest"));
+    }
+
+    #[test]
+    fn save_data_legacy_format_without_active_quests_parses() {
+        // 기존 저장 파일(active_quests 필드 없음) 호환성 — #[serde(default)]
+        let legacy = r#"(
+            version: 1,
+            global_seed: 1,
+            global_turn: 0,
+            player_tile: (0, 0),
+            player_hp: 10, player_max_hp: 10, player_mp: 0, player_max_mp: 0,
+            player_attack: 1, player_defense: 1,
+            inventory: (items: [], consumables: [], gold: 0),
+            equipment: (weapon: None, armor: None),
+            quest_state: (phases: {}, spawned: [], flags: {}),
+            current_zone: Town,
+            zone_revealed: {},
+            zone_persistence: {},
+            discovered_markers: ([]),
+            named_zones: (zones: {}),
+        )"#;
+        let parsed: Result<SaveData, _> = ron::from_str(legacy);
+        // 호환성 — version mismatch 는 ok (다른 테스트), 단지 파싱은 성공해야 함
+        assert!(parsed.is_ok(), "legacy 저장 데이터 파싱 실패: {:?}", parsed.err());
+        let s = parsed.unwrap();
+        assert!(s.active_quests.is_empty());
     }
 
     #[test]
