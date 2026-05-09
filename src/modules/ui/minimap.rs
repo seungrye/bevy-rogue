@@ -135,7 +135,6 @@ impl Plugin for MinimapPlugin {
                 Update,
                 (
                     update_minimap,
-                    toggle_minimap,
                     update_generator_name,
                     zoom_minimap,
                     toggle_full_map,
@@ -161,13 +160,6 @@ pub struct FullMapOpen(pub bool);
 
 #[derive(Component)]
 pub struct FullMapPanel;
-
-fn toggle_visibility(vis: Visibility) -> Visibility {
-    match vis {
-        Visibility::Hidden => Visibility::Inherited,
-        _ => Visibility::Hidden,
-    }
-}
 
 pub(crate) fn setup_minimap(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     let extent = Extent3d {
@@ -304,15 +296,15 @@ fn spawn_full_map_overlay(
                 ..default()
             });
             parent.spawn(TextBundle::from_section(
-                "[L] 닫기",
+                "[M] 닫기",
                 TextStyle { font, font_size: 14.0, color: Color::GRAY },
             ));
         });
 }
 
 fn toggle_full_map(keyboard: Res<ButtonInput<KeyCode>>, mut open: ResMut<FullMapOpen>) {
-    // L — Large map. 작은 미니맵 toggle(M) / 패널 내 Tab 과 충돌 회피
-    if keyboard.just_pressed(KeyCode::KeyL) {
+    // M — 전체 미니맵. 작은 미니맵은 항상 표시, M 은 큰 지도 toggle 전용.
+    if keyboard.just_pressed(KeyCode::KeyM) {
         open.0 = !open.0;
     }
 }
@@ -421,17 +413,6 @@ fn update_generator_name(
     if registry.is_changed() {
         if let Ok(mut text) = q.get_single_mut() {
             text.sections[0].value = registry.current_name().to_string();
-        }
-    }
-}
-
-fn toggle_minimap(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    mut q: Query<&mut Visibility, With<MinimapOverlay>>,
-) {
-    if keyboard.just_pressed(KeyCode::KeyM) {
-        if let Ok(mut vis) = q.get_single_mut() {
-            *vis = toggle_visibility(*vis);
         }
     }
 }
@@ -801,21 +782,12 @@ mod tests {
     }
 
     #[test]
-    fn toggle_visible_to_hidden() {
-        assert_eq!(toggle_visibility(Visibility::Inherited), Visibility::Hidden);
-        assert_eq!(toggle_visibility(Visibility::Visible), Visibility::Hidden);
-    }
-
-    #[test]
-    fn toggle_hidden_to_visible() {
-        assert_eq!(toggle_visibility(Visibility::Hidden), Visibility::Inherited);
-    }
-
-    #[test]
-    fn double_toggle_restores_visible() {
-        let original = Visibility::Inherited;
-        let after_two_toggles = toggle_visibility(toggle_visibility(original));
-        assert_eq!(after_two_toggles, Visibility::Inherited);
+    fn full_map_open_toggle() {
+        let mut open = FullMapOpen(false);
+        open.0 = !open.0;
+        assert!(open.0);
+        open.0 = !open.0;
+        assert!(!open.0);
     }
 
     #[test]
