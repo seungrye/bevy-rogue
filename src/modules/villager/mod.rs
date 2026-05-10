@@ -380,19 +380,15 @@ fn show_quest_dialog(
     despawn_item: &mut EventWriter<DespawnWorldItemEvent>,
     quest_items: &crate::modules::item::QuestItemRegistry,
 ) {
-    // 퀘스트가 초기화되지 않았으면 initial_phase 로 초기화
-    if !state.phases.contains_key(quest_id) {
-        if let Some(def) = registry.get(quest_id) {
-            state.set_phase(quest_id, &def.initial_phase.clone());
-        }
-    }
-
-    let phase_id = match state.phases.get(quest_id) {
-        Some(p) => p.clone(),
-        None => return,
-    };
-
     let Some(quest_def) = registry.get(quest_id) else { return };
+
+    // state.phases 에 등록되지 않은 첫 만남이면 initial_phase 의 dialog 만
+    // 보여준다 — 인사말 한 줄에 패널 등록되는 어색함 방지. 마지막 대화 줄
+    // + Interact 시점에 한꺼번에 set_phase + on_interact 실행.
+    let phase_id = state.phases.get(quest_id)
+        .cloned()
+        .unwrap_or_else(|| quest_def.initial_phase.clone());
+
     let Some(phase) = quest_def.phases.get(&phase_id) else { return };
 
     let dialog = phase.dialog.clone();
@@ -407,6 +403,10 @@ fn show_quest_dialog(
     // 마지막 줄에서 액션 실행
     if !dialog.is_empty() && idx + 1 >= dialog.len() {
         villager.quest_dialogue_idx = 0;
+        // 첫 phase 등록 (아직 안 됐으면) — 마지막 대화 후 Interact 시점.
+        if !state.phases.contains_key(quest_id) {
+            state.set_phase(quest_id, &quest_def.initial_phase.clone());
+        }
         execute_actions(&actions, quest_id, state, inventory, log, world, kill_npc, open_portal, close_portal, despawn_item, quest_items);
     } else {
         villager.quest_dialogue_idx = idx + 1;
