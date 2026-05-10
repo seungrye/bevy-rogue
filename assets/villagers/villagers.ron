@@ -1,26 +1,28 @@
 // 마을 NPC 정의 — 게임 코드와 분리된 데이터
 // 형식: Vec<VillagerDef>
-//   name: 표시 이름 (퀘스트 RON 의 giver_npc 와 일치해야 함)
+//   id: unique 식별자 (snake_case 영문). 퀘스트의 giver_npc / KillNpc /
+//       코드의 NPC 매칭이 모두 이 값을 사용. specs/villager.md 참조.
+//   name: UI/dialog 표시용 한글 이름 (unique 보장 X).
 //   color: (r, g, b) 0.0~1.0
 //   dialogs: 일반 대사 (퀘스트 NPC 는 빈 배열)
-//   quest_id: 퀘스트 NPC 인 경우 퀘스트 ID, 일반 NPC 는 None
 //   speed: 이동 속도 배율
 [
     VillagerDef(
+        id: "elder",
         name: "장로",
         color: (0.9, 0.8, 0.5),
         dialogs: [],
-        quest_id: Some("gem_quest"),
         speed: 0.5,
     ),
     VillagerDef(
+        id: "alchemist",
         name: "연금술사",
         color: (0.4, 0.9, 0.8),
         dialogs: [],
-        quest_id: Some("alchemist_quest"),
         speed: 0.75,
     ),
     VillagerDef(
+        id: "burgomaster",
         name: "촌장",
         color: (1.0, 0.85, 0.0),
         dialogs: [
@@ -57,10 +59,10 @@
             "마을 대장간이 오래돼서 새로 지을 계획이라네.",
             "다음 계절 전에 창고 지붕을 손봐야 할 것 같아.",
         ],
-        quest_id: None,
         speed: 1.0,
     ),
     VillagerDef(
+        id: "merchant",
         name: "상인",
         color: (0.3, 0.9, 0.3),
         dialogs: [
@@ -97,10 +99,10 @@
             "신뢰가 장사의 전부라오. 저는 절대 속이지 않소.",
             "오랜 단골분이 소개해 주신다면 특별 가격 드리지요.",
         ],
-        quest_id: None,
         speed: 1.0,
     ),
     VillagerDef(
+        id: "farmer",
         name: "농부",
         color: (0.8, 0.6, 0.3),
         dialogs: [
@@ -137,10 +139,10 @@
             "수확이 끝나면 논에 불을 질러야 다음 해 땅이 비옥해지지.",
             "농부 손은 거칠어도, 이 손에 이 마을이 달려 있다네.",
         ],
-        quest_id: None,
         speed: 0.75,
     ),
     VillagerDef(
+        id: "child",
         name: "아이",
         color: (1.0, 1.0, 1.0),
         dialogs: [
@@ -177,59 +179,59 @@
             "저 다음엔 더 빠르게 달릴 거예요. 연습 중이에요!",
             "엄마가 늦게까지 놀면 안 된다고 했는데... 조금만 더 놀래요.",
         ],
-        quest_id: None,
         speed: 1.5,
     ),
     VillagerDef(
+        id: "wounded_soldier",
         name: "부상당한 병사",
         color: (0.75, 0.60, 0.55),
         dialogs: [],
-        quest_id: Some("prologue_fog"),
         speed: 0.3,
     ),
     VillagerDef(
+        id: "catelyn",
         name: "캣린",
         color: (0.70, 0.50, 0.80),
         dialogs: [],
-        quest_id: Some("stark_quest"),
         speed: 0.6,
     ),
     VillagerDef(
+        id: "jorah",
         name: "조라",
         color: (0.40, 0.55, 0.85),
         dialogs: [],
-        quest_id: Some("targaryen_quest"),
         speed: 0.6,
     ),
     VillagerDef(
+        id: "samwell",
         name: "샘웰",
         color: (0.80, 0.70, 0.50),
         dialogs: [],
-        quest_id: Some("jon_snow_quest"),
         speed: 0.5,
     ),
     VillagerDef(
+        id: "bastian",
         name: "바스티안",
         color: (0.85, 0.75, 0.60),
         dialogs: [],
-        quest_id: Some("demonsword_quest"),
         speed: 0.4,
     ),
     VillagerDef(
+        id: "grace",
         name: "그레체",
         color: (0.55, 0.70, 0.90),
         dialogs: [],
-        quest_id: Some("parry_quest"),
         speed: 0.6,
     ),
     VillagerDef(
+        id: "ellen",
         name: "엘렌",
         color: (0.55, 0.85, 0.55),
         dialogs: [],
-        quest_id: Some("herb_quest"),
         speed: 0.5,
     ),
     VillagerDef(
+        id: "old_man",
         name: "노인",
         color: (0.65, 0.65, 0.75),
         dialogs: [
@@ -266,7 +268,6 @@
             "비가 오기 전 바람이 달라지듯, 재앙 전에도 징조가 있지.",
             "내가 떠난 뒤에도 이 비밀을 기억해줄 이가 필요해.",
         ],
-        quest_id: Some("world_fracture"),
         speed: 0.5,
     ),
 ]

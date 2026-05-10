@@ -14,7 +14,7 @@
 QuestDef(
     id: "gem_quest",
     title: "잃어버린 보석",
-    giver_npc: "장로",
+    giver_npc: "elder",  // villagers.ron 의 VillagerDef.id
     initial_phase: "not_started",
     spawn_chance: 0.8,
 
@@ -74,7 +74,7 @@ QuestDef(
 | `Log("message")` | 로그 메시지 |
 | `SetFlag { flag, value }` | 플래그 설정 |
 | `ClearFlag("flag")` | 플래그 해제 |
-| `KillNpc("name")` | NPC 월드 제거 (`KillNpcEvent` → `handle_kill_npc`) |
+| `KillNpc("id")` | NPC 월드 제거 (`KillNpcEvent` → `handle_kill_npc`). 인자는 villager `id` (한글 name 아님 — unique 보장) |
 | `OpenPortal { zone, generator, placement }` | Named 존 포털 스폰 |
 | `ClosePortal("zone")` | Named 존 포털 / 등록 / 마커 정리 |
 | `DespawnWorldItem("item_id")` | 월드 아이템 제거 (인벤토리 영향 X) |

@@ -19,7 +19,7 @@
 QuestDef(
     id: "alchemist_quest",
     title: "연금술사의 비전",
-    giver_npc: "연금술사",
+    giver_npc: "alchemist",
     initial_phase: "not_started",
     spawn_chance: 0.7,
 

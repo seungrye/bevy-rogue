@@ -13,7 +13,7 @@
 QuestDef(
     id: "herb_quest",
     title: "은방울 뿌리 채집",
-    giver_npc: "엘렌",
+    giver_npc: "ellen",
     initial_phase: "not_started",
     spawn_chance: 0.8,
 
@@ -161,7 +161,7 @@ QuestDef(
                 Branch(
                     condition: Not(HasFlag("herbalist_killed")),
                     if_true: [
-                        KillNpc("독초술사"),
+                        KillNpc("poison_herbalist"),
                         Log("숲속 공터의 독초술사가 사라졌다."),
                     ],
                     if_false: [],

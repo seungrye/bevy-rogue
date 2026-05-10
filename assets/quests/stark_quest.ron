@@ -17,7 +17,7 @@
 QuestDef(
     id: "stark_quest",
     title: "전쟁의 서막",
-    giver_npc: "캣린",
+    giver_npc: "catelyn",
     initial_phase: "dormant",
     spawn_chance: 0.6,
 

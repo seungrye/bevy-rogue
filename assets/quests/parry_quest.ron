@@ -1,7 +1,7 @@
 QuestDef(
     id: "parry_quest",
     title: "파리 고수와 기계 공학자",
-    giver_npc: "그레체",
+    giver_npc: "grace",
     initial_phase: "not_started",
     spawn_chance: 0.75,
 

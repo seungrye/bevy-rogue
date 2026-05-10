@@ -87,20 +87,20 @@
 ```ron
 [
     VillagerDef(
+        id: "elder",
         name: "장로",
         color: (0.9, 0.8, 0.5),
         dialogs: [],
-        quest_id: Some("gem_quest"),
         speed: 0.5,
     ),
     VillagerDef(
+        id: "burgomaster",
         name: "촌장",
         color: (1.0, 0.9, 0.4),
         dialogs: [
             "어서 오시오, 모험가여.",
             "마을은 평화롭소.",
         ],
-        quest_id: None,
         speed: 1.0,
     ),
 ]
@@ -108,14 +108,25 @@
 
 | 필드 | 타입 | 설명 |
 |------|------|------|
-| `name` | `String` | 표시 이름. 퀘스트 RON 의 `giver_npc` 와 일치해야 함 |
+| `id` | `String` | unique 식별자 (snake_case 영문). 퀘스트의 `giver_npc` / `KillNpc` / 코드의 NPC 매칭이 모두 이 값을 사용 |
+| `name` | `String` | UI/dialog 표시용 한글 이름. unique 가 아니어도 됨 |
 | `color` | `(f32, f32, f32)` | RGB (0.0~1.0) |
 | `dialogs` | `Vec<String>` | 일반 대사 목록 (퀘스트 NPC 는 빈 배열) |
-| `quest_id` | `Option<String>` | 퀘스트 NPC 의 퀘스트 ID, 일반 NPC 는 `None` |
 | `speed` | `f32` | 이동 속도 배율 (1.0 = 기준) |
 
+퀘스트 연결은 `VillagerDef.quest_id` 필드를 두지 않고 **퀘스트 측의
+`giver_npc` 가 villager `id` 를 가리킨다** (단일 source). 코드는 NPC 가
+어느 퀘스트의 giver 인지 알아야 할 때 `quest_registry` 의 active 퀘스트
+들에서 `giver_npc == villager.id` 인 quest 를 찾는다.
+
 `VillagerRegistry` Resource 가 Startup 에 로드. `validate_quest_villager_refs`
-가 모든 퀘스트의 `giver_npc` 가 registry 에 존재함을 검증.
+가 모든 퀘스트의 `giver_npc` 가 villager `id` 와 매칭됨을 검증.
+
+### NPC `id` 명명 규약
+- snake_case 영문, 한글 발음 또는 영어 의미.
+- 한 RON 파일에서 unique. 같은 `name` (한글) 을 가진 NPC 가 여럿 있어도
+  `id` 로 구분.
+- `KillNpc("id")`, `giver_npc: "id"` 는 모두 이 값.
 
 ## 구현 범위
 

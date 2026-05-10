@@ -1,7 +1,7 @@
 QuestDef(
     id: "demonsword_quest",
     title: "성기사가 마검을 들다",
-    giver_npc: "바스티안",
+    giver_npc: "bastian",
     initial_phase: "not_started",
     spawn_chance: 0.7,
 

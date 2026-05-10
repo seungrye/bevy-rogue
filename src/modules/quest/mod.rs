@@ -157,6 +157,23 @@ impl QuestRegistry {
     pub fn phase<'a>(&'a self, quest_id: &str, phase_id: &str) -> Option<&'a QuestPhaseDef> {
         self.quests.get(quest_id)?.phases.get(phase_id)
     }
+
+    /// `giver_npc == villager_id` 인 퀘스트 (active 무관) 의 (id, def) 반환.
+    /// villager 가 어떤 quest 의 giver 인지 확인할 때 사용 — VillagerDef.quest_id
+    /// 필드를 대체. unique 가정 (한 NPC 가 여러 quest 의 giver 면 첫 매치).
+    pub fn quest_for_giver<'a>(&'a self, villager_id: &str) -> Option<(&'a str, &'a QuestDef)> {
+        self.quests.iter()
+            .find(|(_, q)| q.giver_npc == villager_id)
+            .map(|(id, def)| (id.as_str(), def))
+    }
+
+    /// `giver_npc == villager_id` 이면서 active 인 퀘스트의 id. 활성 퀘스트
+    /// dialog/글리프 분기에 사용.
+    pub fn active_quest_for_giver<'a>(&'a self, villager_id: &str) -> Option<&'a str> {
+        self.quests.iter()
+            .find(|(qid, q)| q.giver_npc == villager_id && self.is_quest_active(qid))
+            .map(|(id, _)| id.as_str())
+    }
 }
 
 #[derive(Resource, Default, Clone, serde::Serialize, serde::Deserialize)]

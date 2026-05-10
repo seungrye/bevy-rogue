@@ -32,7 +32,7 @@
 QuestDef(
     id: "world_fracture",
     title: "봉인의 각성",
-    giver_npc: "노인",
+    giver_npc: "old_man",
     initial_phase: "dormant",
     spawn_chance: 0.5,
 

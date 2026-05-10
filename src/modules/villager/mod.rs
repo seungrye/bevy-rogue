@@ -23,10 +23,13 @@ const Z_VILLAGER: f32 = 0.9;
 /// villager RON 파일에서 불러오는 NPC 정의
 #[derive(Debug, Deserialize, Clone)]
 pub struct VillagerDef {
+    /// unique 식별자 (snake_case 영문). 퀘스트의 `giver_npc` / `KillNpc` /
+    /// 코드의 NPC 매칭이 모두 이 값을 사용. `name` (한글 표시) 은 unique
+    /// 가 아닐 수 있으므로 매칭에 사용하지 않는다.
+    pub id: String,
     pub name: String,
     pub color: [f32; 3],
     pub dialogs: Vec<String>,
-    pub quest_id: Option<String>,
     pub speed: f32,
 }
 
@@ -45,13 +48,15 @@ pub enum VillagerSystemSet {
 
 #[derive(Component)]
 pub struct Villager {
+    /// unique 식별자 — VillagerDef.id 에서 복사. NPC 매칭의 단일 키.
+    pub id: String,
+    /// 표시용 한글 이름. dialog/log 메시지에 사용. unique 보장 X.
     pub name: String,
     pub dialogues: Vec<String>,
     pub dialogue_idx: usize,
     pub tile_x: usize,
     pub tile_y: usize,
     pub just_bumped: bool,
-    pub quest_id: Option<String>,
     pub quest_dialogue_idx: usize,
     pub base_color: Color,
     /// 퀘스트 NPC의 이동 구역 제한. Some이면 해당 Rect 안에서만 이동한다.
@@ -126,10 +131,10 @@ fn validate_quest_villager_refs(
 ) {
     let mut errors: Vec<String> = Vec::new();
     for (qid, qdef) in &quest_registry.quests {
-        let exists = villager_registry.villagers.iter().any(|v| v.name == qdef.giver_npc);
+        let exists = villager_registry.villagers.iter().any(|v| v.id == qdef.giver_npc);
         if !exists {
             errors.push(format!(
-                "퀘스트 '{}' 의 giver_npc '{}' 가 villager registry 에 없습니다",
+                "퀘스트 '{}' 의 giver_npc '{}' 가 villager id 와 매칭 안 됨",
                 qid, qdef.giver_npc
             ));
         }
@@ -148,11 +153,12 @@ fn handle_kill_npc(
     mut commands: Commands,
     mut log: EventWriter<LogMessage>,
 ) {
-    for KillNpcEvent(name) in events.read() {
+    // KillNpcEvent 의 인자는 villager id (unique). name 은 표시용.
+    for KillNpcEvent(npc_id) in events.read() {
         for (entity, villager) in &query {
-            if &villager.name == name {
+            if &villager.id == npc_id {
                 commands.entity(entity).despawn_recursive();
-                log.send(LogMessage(format!("{}이(가) 쓰러졌다...", name)));
+                log.send(LogMessage(format!("{}이(가) 쓰러졌다...", villager.name)));
                 break;
             }
         }
@@ -178,8 +184,8 @@ fn discover_quest_npcs_in_fov(
 ) {
     let map = map_res.map();
     for v in villager_query.iter() {
-        let Some(qid) = &v.quest_id else { continue; };
-        let Some(qdef) = quest_registry.get(qid) else { continue; };
+        // villager 가 어느 quest 의 giver 인지 quest_registry 에서 조회.
+        let Some((qid, qdef)) = quest_registry.quest_for_giver(&v.id) else { continue; };
 
         // quest 시작 전 (phase 없음 또는 initial_phase) → 마커 제거
         let started = match quest_state.phases.get(qid) {
@@ -262,12 +268,13 @@ fn do_spawn(
     if rooms.is_empty() { return; }
     let font = asset_server.load("fonts/FiraMono-Medium.ttf");
 
-    // 퀘스트 NPC와 일반 NPC 를 분리: 퀘스트 NPC 는 활성 퀘스트인 것만 스폰
+    // 퀘스트 NPC와 일반 NPC 를 분리: 퀘스트 NPC 는 활성 퀘스트인 것만 스폰.
+    // VillagerDef.quest_id 를 두지 않고 quest_registry 에서 giver_npc 매칭으로 판정.
     let quest_npcs: Vec<&VillagerDef> = villager_registry.villagers.iter()
-        .filter(|d| d.quest_id.as_deref().map_or(false, |qid| quest_registry.is_quest_active(qid)))
+        .filter(|d| quest_registry.active_quest_for_giver(&d.id).is_some())
         .collect();
     let regular_npcs: Vec<&VillagerDef> = villager_registry.villagers.iter()
-        .filter(|d| d.quest_id.is_none())
+        .filter(|d| quest_registry.quest_for_giver(&d.id).is_none())
         .collect();
 
     // rooms[0] 은 플레이어 스폰 방 — 건너뜀
@@ -295,8 +302,9 @@ fn do_spawn(
             .collect();
 
         let base_color = Color::rgb(data.color[0], data.color[1], data.color[2]);
+        let is_quest_npc = quest_registry.quest_for_giver(&data.id).is_some();
         // 퀘스트 NPC 는 항상 노란 '?' 로 시작 — 수락·진행 시 update_villager_glyph 가 갱신
-        let (glyph, display_color) = if data.quest_id.is_some() {
+        let (glyph, display_color) = if is_quest_npc {
             ("?", Color::rgb(1.0, 0.9, 0.1))
         } else {
             ("v", base_color)
@@ -313,16 +321,16 @@ fn do_spawn(
                 ..default()
             },
             Villager {
+                id: data.id.clone(),
                 name: data.name.clone(),
                 dialogues,
                 dialogue_idx: 0,
                 tile_x: cx,
                 tile_y: cy,
                 just_bumped: false,
-                quest_id: data.quest_id.clone(),
                 quest_dialogue_idx: 0,
                 base_color,
-                home_room: if data.quest_id.is_some() { Some(*room) } else { None },
+                home_room: if is_quest_npc { Some(*room) } else { None },
             },
             Speed::new(data.speed),
             MoveQueue::default(),
@@ -350,9 +358,9 @@ fn handle_bump(
         for mut villager in villager_query.iter_mut() {
             if villager.tile_x != *bx || villager.tile_y != *by { continue; }
 
-            if villager.name == "상인" {
+            if villager.id == "merchant" {
                 shop_open.send(crate::modules::ui::shop::ShopOpenEvent);
-            } else if let Some(quest_id) = villager.quest_id.clone() {
+            } else if let Some(quest_id) = registry.quest_for_giver(&villager.id).map(|(qid, _)| qid.to_string()) {
                 show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut kill_npc, &mut open_portal, &mut close_portal, &mut despawn_item, &quest_items);
                 // QuestGiver 마커는 discover_quest_npcs_in_fov 가 quest 상태에 따라 자동 갱신
             } else if !villager.dialogues.is_empty() {
@@ -529,8 +537,7 @@ fn update_villager_glyph(
 ) {
     if !quest_state.is_changed() && !inventory.is_changed() && added.is_empty() { return; }
     for (villager, mut text) in query.iter_mut() {
-        let Some(ref qid) = villager.quest_id else { continue };
-        let Some(def) = registry.get(qid) else { continue };
+        let Some((qid, def)) = registry.quest_for_giver(&villager.id) else { continue };
         let (glyph, color) = quest_npc_glyph(qid, def, &quest_state, &inventory, &world, villager.base_color, &quest_items);
         text.sections[0].value = glyph.to_string();
         text.sections[0].style.color = color;
@@ -705,13 +712,13 @@ mod tests {
 
     fn make_villager(just_bumped: bool) -> Villager {
         Villager {
+            id: "test_id".to_string(),
             name: "테스트".to_string(),
             dialogues: vec![],
             dialogue_idx: 0,
             tile_x: 0,
             tile_y: 0,
             just_bumped,
-            quest_id: None,
             quest_dialogue_idx: 0,
             base_color: Color::WHITE,
             home_room: None,
@@ -734,18 +741,18 @@ mod tests {
     #[test]
     fn quest_villager_fields_default_correctly() {
         let v = Villager {
+            id: "elder".to_string(),
             name: "장로".to_string(),
             dialogues: vec![],
             dialogue_idx: 0,
             tile_x: 0,
             tile_y: 0,
             just_bumped: false,
-            quest_id: Some("gem_quest".to_string()),
             quest_dialogue_idx: 0,
             base_color: Color::WHITE,
             home_room: None,
         };
-        assert_eq!(v.quest_id.as_deref(), Some("gem_quest"));
+        assert_eq!(v.id, "elder");
         assert_eq!(v.quest_dialogue_idx, 0);
     }
 
@@ -792,63 +799,57 @@ mod tests {
             .expect("villager RON 파싱 성공해야 한다")
     }
 
-    #[test]
-    fn noin_npc_has_world_fracture_quest() {
-        let defs = load_villager_defs();
-        let noin = defs.iter().find(|d| d.name == "노인").expect("노인 NPC가 존재해야 한다");
-        assert_eq!(noin.quest_id.as_deref(), Some("world_fracture"), "노인은 world_fracture 퀘스트를 가져야 한다");
+    /// 퀘스트 RON 의 giver_npc 가 villager id 와 매칭되는지 검사하는 헬퍼.
+    /// (validate_quest_villager_refs 가 런타임에 같은 검사를 하지만 단위
+    /// 테스트로도 보장.)
+    fn assert_giver_resolves(quest_filename: &str, expected_giver_id: &str) {
+        let qtext = std::fs::read_to_string(format!("assets/quests/{quest_filename}.ron"))
+            .expect("quest RON 존재해야 한다");
+        let qdef: crate::modules::quest::QuestDef = ron::de::from_str(&qtext)
+            .expect("quest RON 파싱 성공해야 한다");
+        assert_eq!(qdef.giver_npc, expected_giver_id);
+        let villagers = load_villager_defs();
+        assert!(
+            villagers.iter().any(|v| v.id == expected_giver_id),
+            "villagers.ron 에 id='{}' 가 존재해야 한다",
+            expected_giver_id
+        );
     }
 
     #[test]
-    fn gretchen_npc_has_parry_quest() {
-        let defs = load_villager_defs();
-        let gretchen = defs.iter().find(|d| d.name == "그레체").expect("그레체 NPC가 존재해야 한다");
-        assert_eq!(gretchen.quest_id.as_deref(), Some("parry_quest"), "그레체는 parry_quest를 가져야 한다");
+    fn world_fracture_giver_resolves_to_villager() {
+        assert_giver_resolves("world_fracture", "old_man");
     }
 
     #[test]
-    fn bastian_npc_has_demonsword_quest() {
-        let defs = load_villager_defs();
-        let bastian = defs.iter().find(|d| d.name == "바스티안").expect("바스티안 NPC가 존재해야 한다");
-        assert_eq!(bastian.quest_id.as_deref(), Some("demonsword_quest"), "바스티안은 demonsword_quest를 가져야 한다");
+    fn parry_quest_giver_resolves_to_villager() {
+        assert_giver_resolves("parry_quest", "grace");
     }
 
     #[test]
-    fn discover_quest_npcs_marker_skips_non_quest_villager() {
-        // 퀘스트 NPC만 마커, 일반 NPC 는 마커 없음.
-        // (시스템 내부 로직만 검증 — Bevy App 통합 없이 데이터 검증)
-        let regular = Villager {
-            name: "농부".into(),
-            dialogues: vec![],
-            dialogue_idx: 0,
-            tile_x: 5, tile_y: 5,
-            just_bumped: false,
-            quest_id: None,  // 일반 NPC
-            quest_dialogue_idx: 0,
-            base_color: Color::WHITE,
-            home_room: None,
-        };
-        let quest_npc = Villager {
-            name: "엘렌".into(),
-            dialogues: vec![],
-            dialogue_idx: 0,
-            tile_x: 7, tile_y: 7,
-            just_bumped: false,
-            quest_id: Some("herb_quest".into()),
-            quest_dialogue_idx: 0,
-            base_color: Color::WHITE,
-            home_room: None,
-        };
-        // 시스템 로직 시뮬레이션 — quest_id 있는 NPC 만 마커 추가됨
-        let mut markers = DiscoveredMarkers::default();
-        for v in [&regular, &quest_npc] {
-            if v.quest_id.is_some() {
-                markers.add(v.tile_x, v.tile_y, MarkerKind::QuestGiver, crate::modules::zone::ZoneId::Town);
+    fn demonsword_quest_giver_resolves_to_villager() {
+        assert_giver_resolves("demonsword_quest", "bastian");
+    }
+
+    #[test]
+    fn discover_quest_npcs_marker_uses_quest_for_giver_lookup() {
+        // 퀘스트 NPC만 마커. 새 모델: quest_registry 에서 giver_npc 매칭.
+        // (test 환경에선 quest_registry 가 없으므로 villager id 기반으로 시뮬.)
+        let regular_id = "farmer";  // villagers.ron 에서 어느 quest 의 giver 도 아님
+        let quest_id = "ellen";     // herb_quest.ron 의 giver_npc
+        // helper: quest RON 들에서 giver_npc 후보 set 조회
+        let mut givers = std::collections::HashSet::new();
+        for entry in std::fs::read_dir("assets/quests").unwrap().flatten() {
+            let path = entry.path();
+            if path.extension().map_or(false, |e| e == "ron") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                if let Ok(q) = ron::de::from_str::<crate::modules::quest::QuestDef>(&text) {
+                    givers.insert(q.giver_npc);
+                }
             }
         }
-        assert_eq!(markers.0.len(), 1, "quest_id 있는 NPC 만 마커가 추가돼야 한다");
-        assert_eq!(markers.0[0].tile_x, 7);
-        assert_eq!(markers.0[0].tile_y, 7);
+        assert!(!givers.contains(regular_id), "{} 는 어느 quest 의 giver 도 아니어야", regular_id);
+        assert!(givers.contains(quest_id), "{} 는 quest giver 여야", quest_id);
     }
 
     #[test]
@@ -860,7 +861,7 @@ mod tests {
     #[test]
     fn all_quest_giver_npcs_exist_in_villager_registry() {
         let villager_defs = load_villager_defs();
-        let villager_names: HashSet<String> = villager_defs.iter().map(|d| d.name.clone()).collect();
+        let villager_ids: HashSet<String> = villager_defs.iter().map(|d| d.id.clone()).collect();
 
         let dir = std::fs::read_dir("assets/quests").expect("assets/quests 가 존재해야 한다");
         for entry in dir.flatten() {
@@ -870,8 +871,8 @@ mod tests {
             let qdef: QuestDef = ron::de::from_str(&text)
                 .unwrap_or_else(|e| panic!("{:?} 파싱 실패: {}", path, e));
             assert!(
-                villager_names.contains(&qdef.giver_npc),
-                "퀘스트 {:?} 의 giver_npc '{}' 가 villager registry 에 없습니다",
+                villager_ids.contains(&qdef.giver_npc),
+                "퀘스트 {:?} 의 giver_npc '{}' 가 villager id 와 매칭 안 됨",
                 path, qdef.giver_npc
             );
         }

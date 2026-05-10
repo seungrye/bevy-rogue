@@ -17,7 +17,7 @@
 QuestDef(
     id: "targaryen_quest",
     title: "재생의 불꽃",
-    giver_npc: "조라",
+    giver_npc: "jorah",
     initial_phase: "dormant",
     spawn_chance: 0.6,
 
