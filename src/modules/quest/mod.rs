@@ -162,7 +162,12 @@ impl QuestRegistry {
 #[derive(Resource, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct QuestState {
     pub phases: HashMap<String, String>,            // quest_id → current_phase_id
-    pub spawned: std::collections::HashSet<String>, // "quest_id:item_id" 이미 스폰됨
+    pub spawned: std::collections::HashSet<String>, // "quest_id:item_id" — per-quest idempotency
+    /// zone-단위 dedup: "{zone:?}:{item_id}". 여러 퀘스트가 같은 (zone, item) 에 spawn
+    /// 시도 시 첫 한 퀘스트만 실제 spawn, 나머지는 skip. 직교성 보장.
+    /// `#[serde(default)]` — legacy 세이브 호환.
+    #[serde(default)]
+    pub zone_spawned: std::collections::HashSet<String>,
     pub flags: HashMap<String, String>,             // 자유 플래그 (관계·세계 상태 추적)
 }
 
@@ -182,6 +187,19 @@ impl QuestState {
 
     pub fn mark_spawned(&mut self, quest_id: &str, item_id: &str) {
         self.spawned.insert(format!("{}:{}", quest_id, item_id));
+    }
+
+    /// zone-단위 spawn 키 — `format!("{:?}:{}", zone, item_id)`.
+    fn zone_spawn_key(zone: &crate::modules::zone::ZoneId, item_id: &str) -> String {
+        format!("{:?}:{}", zone, item_id)
+    }
+
+    pub fn is_zone_spawn_done(&self, zone: &crate::modules::zone::ZoneId, item_id: &str) -> bool {
+        self.zone_spawned.contains(&Self::zone_spawn_key(zone, item_id))
+    }
+
+    pub fn mark_zone_spawned(&mut self, zone: &crate::modules::zone::ZoneId, item_id: &str) {
+        self.zone_spawned.insert(Self::zone_spawn_key(zone, item_id));
     }
 
     pub fn set_flag(&mut self, flag: &str, value: &str) {
@@ -683,6 +701,12 @@ fn spawn_quest_items(
             if spawn.phase != current_phase { continue; }
             if spawn.zone != world.current { continue; }
             if state.is_spawn_done(quest_id, &spawn.item) { continue; }
+            // zone-단위 dedup: 다른 퀘스트가 같은 (zone, item) 을 이미 spawn 했으면 skip.
+            // 같은 인스턴스가 두 퀘스트의 HasItem 을 모두 충족.
+            if state.is_zone_spawn_done(&world.current, &spawn.item) {
+                state.mark_spawned(quest_id, &spawn.item);
+                continue;
+            }
 
             // 추가 조건이 있으면 평가
             if let Some(ref cond) = spawn.condition {
@@ -736,6 +760,7 @@ fn spawn_quest_items(
             }
 
             state.mark_spawned(quest_id, &spawn.item);
+            state.mark_zone_spawned(&world.current, &spawn.item);
         }
     }
 }
@@ -828,6 +853,37 @@ mod tests {
         assert!(!state.is_spawn_done("gem_quest", "eternal_gem"));
         state.mark_spawned("gem_quest", "eternal_gem");
         assert!(state.is_spawn_done("gem_quest", "eternal_gem"));
+    }
+
+    #[test]
+    fn zone_spawn_tracking_dedups_across_quests() {
+        use crate::modules::zone::ZoneId;
+        let mut state = QuestState::default();
+        let dungeon2 = ZoneId::Dungeon(2);
+        assert!(!state.is_zone_spawn_done(&dungeon2, "eternal_gem"));
+        // gem_quest 가 먼저 spawn — zone 마크.
+        state.mark_zone_spawned(&dungeon2, "eternal_gem");
+        // world_fracture 가 같은 zone+item 시도 → 이미 spawn 됨으로 인식.
+        assert!(state.is_zone_spawn_done(&dungeon2, "eternal_gem"));
+    }
+
+    #[test]
+    fn zone_spawn_separate_for_different_zones() {
+        use crate::modules::zone::ZoneId;
+        let mut state = QuestState::default();
+        state.mark_zone_spawned(&ZoneId::Dungeon(1), "ancient_scroll");
+        // 같은 item 이라도 다른 zone 은 별도.
+        assert!(state.is_zone_spawn_done(&ZoneId::Dungeon(1), "ancient_scroll"));
+        assert!(!state.is_zone_spawn_done(&ZoneId::Forest, "ancient_scroll"));
+    }
+
+    #[test]
+    fn zone_spawn_separate_for_different_items() {
+        use crate::modules::zone::ZoneId;
+        let mut state = QuestState::default();
+        state.mark_zone_spawned(&ZoneId::Dungeon(2), "eternal_gem");
+        // 같은 zone 이라도 다른 item 은 별도.
+        assert!(!state.is_zone_spawn_done(&ZoneId::Dungeon(2), "dragon_scale"));
     }
 
     fn make_world() -> crate::modules::zone::WorldState {

@@ -96,12 +96,41 @@ QuestDef(
 | `count` | `u32` | `1` | 수량 |
 | `condition` | `Option<QuestCondition>` | `None` | 추가 조건 |
 
-**스폰 격리**: `QuestState.spawned` 는 `"quest_id:item_id"` 키로 구분된다.
-즉 같은 `item` ID 가 여러 퀘스트의 spawns 에 등장하면 각 퀘스트가 **별도
-인스턴스**를 스폰한다 (코드: `src/modules/quest/mod.rs::QuestState`).
-두 퀘스트가 동시 active + 같은 zone 이면 같은 외형의 아이템 2 개가 따로
-떨어져 있을 수 있다 — 의도된 동작 (예: `world_fracture` 가 `gem_quest` /
-`alchemist_quest` 의 아이템을 자체 진행용으로 별도 스폰).
+**스폰 dedup**: `QuestState` 가 두 종류의 idempotency 키를 유지한다:
+- `spawned: HashSet<"quest_id:item_id">` — 같은 퀘스트가 phase 들락날락에
+  도 같은 item 을 한 번만 spawn (per-quest idempotency).
+- `zone_spawned: HashSet<"zone_key:item_id">` — 같은 zone 에 같은 item ID
+  는 한 인스턴스만. 여러 퀘스트가 같은 (zone, item) 에 spawn 을 시도하면
+  먼저 처리된 퀘스트만 실제 spawn 하고 나머지는 skip (cross-quest dedup).
+  `zone_key` 는 `format!("{:?}", zone_id)` (예: `"Dungeon(2)"`,
+  `"Named(\"d_rank_dungeon\")"`).
+
+결과: 같은 item ID 가 여러 퀘스트의 spawns 에 등장해도 zone 마다 한 인스
+턴스만 등장. 픽업하면 모든 퀘스트의 `HasItem` 충족 — **직교성 보장** (각
+퀘스트 RON 은 자기 책임만 명시; 다른 퀘스트의 spawn 을 알 필요 없음).
+새 퀘스트 추가 시 기존 RON 안 건드림.
+
+같은 (zone, item) 에 여러 인스턴스가 의도일 경우엔 한 spawn 의 `count`
+필드를 사용한다 (다른 퀘스트로 분산하지 말 것).
+
+`zone_spawned` 는 `#[serde(default)]` — legacy 세이브 호환.
+
+### `RemoveItem` 작성 가이드
+
+zone-단위 dedup 으로 같은 item 이 여러 퀘스트에 공유되므로, 한 퀘스트의
+`RemoveItem` 이 다른 퀘스트의 진행을 막을 수 있다. 디자인 가이드:
+
+1. **공유 가능성 있는 item** 은 `RemoveItem` 대신 `SetFlag`(예:
+   `gem_delivered_to_elder`) 로 처리하면 인벤토리 유지 + NPC 가 "이미
+   받음" 인식 가능.
+2. **보상 교환** 이 의도라면 `RemoveItem` + 새 item `GiveItem` 패턴 (예:
+   `eternal_gem` → `philosophers_stone`). 원본은 사라지지만 보상이 다른
+   퀘스트의 자원이 될 수 있다 (현재 `gem_quest` 가 이 방식).
+3. **진짜 회수** 가 서사상 의미 있을 때만 `RemoveItem` 단독 (예: 봉인
+   의식에 마검을 바침 — `demonsword_quest`).
+4. 두 퀘스트가 같은 item 을 모두 `RemoveItem` 한다면, player 는 양쪽
+   조건이 모두 충족된 상태에서 NPC 방문 순서를 잡아야 둘 다 클리어 가능
+   — 의도된 trade-off 면 spec 에 명시.
 
 ## 동작 명세
 
@@ -555,18 +584,21 @@ ritual_confirmation ─[auto]→ legendary_ready | normal_ready | incomplete_end
 | `ancient_scroll` | Dungeon(1) | `world_fracture_scroll` |
 | `ancient_scroll` | Forest | `world_fracture_scroll_forest` |
 
-**`gem_quest` / `alchemist_quest` 와의 spawn 중첩**
+**`gem_quest` / `alchemist_quest` 와의 spawn 공유**
 
 `world_fracture` 의 `eternal_gem` / `dragon_scale` / `ancient_scroll` 는
 `gem_quest` / `alchemist_quest` 의 spawn 과 동일 zone 에 등장한다. 시스템
-규칙에 따라 (`QuestSpawn` 절 참조) 각 퀘스트가 별도 인스턴스를 스폰하므로
-두 퀘스트가 동시 active 일 때 같은 던전에 같은 외형의 아이템 2 개가 따로
-떨어져 있을 수 있다.
+의 zone-단위 dedup (`QuestSpawn` 절 참조) 으로 zone 마다 **한 인스턴스만**
+실제로 spawn 되며, 어느 퀘스트가 먼저 처리되든 player 가 그 인스턴스를
+픽업하면 두 퀘스트의 `HasItem` 모두 충족.
 
-이는 의도된 동작:
-- `eternal_gem` 의 경우 `dormant → awakened` 전환이 `gem_quest.done` 에
-  게이팅되어 시간상 분리됨 — 같은 시점에 두 개 보일 일은 없다.
-- `dragon_scale` / `ancient_scroll` 은 게이팅 없이 `alchemist_quest` 와
-  동시 진행 가능. 한 인스턴스는 alchemist 진행용, 다른 인스턴스는
-  world_fracture 의 4 성물 수집용으로 사용된다. 한 번에 둘 다 픽업해
-  인벤토리에 넣고 두 퀘스트 동시 진행 가능.
+이는 직교성 설계:
+- 각 퀘스트 RON 은 자기 spawn 만 명시 — 다른 퀘스트의 존재를 모름.
+- `world_fracture` 단독 실행 (alchemist/gem 비활성) 시에도 자체 spawn 으로
+  진행 가능.
+- 두 퀘스트 모두 활성이면 한 던전에 한 외형, 시각 일관성 유지.
+
+**RemoveItem 충돌 (디자인 trade-off)**: dedup 으로 한 인스턴스만 등장하므
+로 한 퀘스트가 `RemoveItem` 으로 회수하면 다른 퀘스트는 그 시점 이후 진
+행 불가. player 는 양쪽 조건을 모두 충족시킨 상태에서 두 NPC 를 차례로
+방문해야 둘 다 클리어 가능. RemoveItem 사용 가이드는 별도 절 참조.
