@@ -96,6 +96,13 @@ QuestDef(
 | `count` | `u32` | `1` | 수량 |
 | `condition` | `Option<QuestCondition>` | `None` | 추가 조건 |
 
+**스폰 격리**: `QuestState.spawned` 는 `"quest_id:item_id"` 키로 구분된다.
+즉 같은 `item` ID 가 여러 퀘스트의 spawns 에 등장하면 각 퀘스트가 **별도
+인스턴스**를 스폰한다 (코드: `src/modules/quest/mod.rs::QuestState`).
+두 퀘스트가 동시 active + 같은 zone 이면 같은 외형의 아이템 2 개가 따로
+떨어져 있을 수 있다 — 의도된 동작 (예: `world_fracture` 가 `gem_quest` /
+`alchemist_quest` 의 아이템을 자체 진행용으로 별도 스폰).
+
 ## 동작 명세
 
 - 시작 시 `assets/quests/` 모든 `.ron` 로드 → `QuestRegistry` 등록.
@@ -547,3 +554,19 @@ ritual_confirmation ─[auto]→ legendary_ready | normal_ready | incomplete_end
 | `dragon_scale` | Dungeon(2) | `world_fracture_scale` |
 | `ancient_scroll` | Dungeon(1) | `world_fracture_scroll` |
 | `ancient_scroll` | Forest | `world_fracture_scroll_forest` |
+
+**`gem_quest` / `alchemist_quest` 와의 spawn 중첩**
+
+`world_fracture` 의 `eternal_gem` / `dragon_scale` / `ancient_scroll` 는
+`gem_quest` / `alchemist_quest` 의 spawn 과 동일 zone 에 등장한다. 시스템
+규칙에 따라 (`QuestSpawn` 절 참조) 각 퀘스트가 별도 인스턴스를 스폰하므로
+두 퀘스트가 동시 active 일 때 같은 던전에 같은 외형의 아이템 2 개가 따로
+떨어져 있을 수 있다.
+
+이는 의도된 동작:
+- `eternal_gem` 의 경우 `dormant → awakened` 전환이 `gem_quest.done` 에
+  게이팅되어 시간상 분리됨 — 같은 시점에 두 개 보일 일은 없다.
+- `dragon_scale` / `ancient_scroll` 은 게이팅 없이 `alchemist_quest` 와
+  동시 진행 가능. 한 인스턴스는 alchemist 진행용, 다른 인스턴스는
+  world_fracture 의 4 성물 수집용으로 사용된다. 한 번에 둘 다 픽업해
+  인벤토리에 넣고 두 퀘스트 동시 진행 가능.
