@@ -1,3 +1,5 @@
+#![enable(implicit_some)]
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  봉인의 각성 — Giga 비선형 퀘스트
 //
@@ -21,12 +23,15 @@
 //    warrior_ending    : 용비늘 + 고대 주문서 (2성물, alchemist 전설 경로)
 //
 //  ─── 비선형성 ─────────────────────────────────────────────────────────────
-//    auto_advance 11단계 우선순위 체계
-//    on_interact Branch 중첩 (최대 3단계)
+//    Auto transition 11단계 우선순위 체계
+//    Interact transition 순서형 분기 (옛 Branch 중첩 → 평탄화)
 //    gem_quest / alchemist_quest 교차 참조
 //    존 위치 기반 힌트 분기
 //    3개 보유 시 4가지 힌트 경로
 //    대안 경로 2개 (현자/전사) — 4성물 없이도 완료 가능
+//
+//  참고: 옛 포맷의 중첩 Branch (최대 3단계) 는 조건 우선순위대로 나열한
+//    순서형 transitions 로 평탄화됨. 같은 phase·trigger 내에서 첫 매칭만 실행.
 // ═══════════════════════════════════════════════════════════════════════════
 
 QuestDef(
@@ -45,24 +50,6 @@ QuestDef(
                 "마을 장로와 먼저 이야기해보게. 그 일이 끝나면 다시 찾아오게나.",
                 "세상에는 장로의 보석보다 훨씬 중요한 것이 있거든...",
             ],
-            on_interact: [
-                Branch(
-                    condition: PhaseIs(quest: "gem_quest", phase: "done"),
-                    if_true: [
-                        Log("노인: 오! 드디어 장로의 일을 해결했군. 이제 이야기할 수 있겠어."),
-                        AdvancePhase("awakened"),
-                    ],
-                    if_false: [
-                        Log("노인: 장로를 먼저 만나보게. 그 일이 시작의 열쇠야."),
-                    ],
-                ),
-            ],
-            auto_advance: [
-                AutoAdvance(
-                    condition: PhaseIs(quest: "gem_quest", phase: "done"),
-                    next_phase: "awakened",
-                ),
-            ],
             objective: Some("마을 장로의 의뢰를 먼저 완수해야 노인과 제대로 이야기할 수 있을 것 같다."),
         ),
 
@@ -77,33 +64,6 @@ QuestDef(
                 "장로에게서 현자의 돌을 받았겠지? 그것이 핵심 열쇠야.",
                 "하지만 혼자서는 충분하지 않아. 연금술사와도 이야기해봐야 해.",
             ],
-            on_interact: [
-                Branch(
-                    condition: PhaseIs(quest: "alchemist_quest", phase: "not_started"),
-                    if_true: [
-                        Log("노인: 연금술사와 아직 이야기하지 않았군. 그도 이 비밀의 일부를 알고 있어."),
-                        Log("노인: 그가 연구하는 재료들 — 용비늘과 고대 주문서 — 은 봉인에 꼭 필요한 것들이야."),
-                        AdvancePhase("need_alchemist"),
-                    ],
-                    if_false: [
-                        Branch(
-                            condition: Or([
-                                PhaseIs(quest: "alchemist_quest", phase: "normal_done"),
-                                PhaseIs(quest: "alchemist_quest", phase: "legendary_done"),
-                            ]),
-                            if_true: [
-                                Log("노인: 연금술사의 작업도 끝났군! 훌륭해. 이미 많은 준비가 된 셈이야."),
-                                AdvancePhase("prologue_done"),
-                            ],
-                            if_false: [
-                                Log("노인: 연금술사와 이미 접촉했군. 좋아. 그의 작업도 도와주면 봉인이 훨씬 강해질 거야."),
-                                AdvancePhase("prologue_done"),
-                            ],
-                        ),
-                    ],
-                ),
-            ],
-            auto_advance: [],
             objective: Some("노인에게서 봉인의 비밀을 들었다. 네 개의 성물을 모아야 한다."),
         ),
 
@@ -113,24 +73,6 @@ QuestDef(
                 "연금술사를 먼저 만나게. 그는 용비늘과 고대 주문서의 위치를 알고 있어.",
                 "그 두 재료는 봉인에 필수야 — 단순한 의뢰가 아니라 더 큰 그림의 일부라는 걸 그도 이해할 거야.",
                 "연금술사의 작업이 완성되면 다시 내게 오게나.",
-            ],
-            on_interact: [
-                Branch(
-                    condition: Not(PhaseIs(quest: "alchemist_quest", phase: "not_started")),
-                    if_true: [
-                        Log("노인: 연금술사와 이야기를 나눴군. 이제 함께 성물을 모을 수 있어."),
-                        AdvancePhase("prologue_done"),
-                    ],
-                    if_false: [
-                        Log("노인: 아직 연금술사를 만나지 않았군. 마을 어딘가에 있을 거야."),
-                    ],
-                ),
-            ],
-            auto_advance: [
-                AutoAdvance(
-                    condition: Not(PhaseIs(quest: "alchemist_quest", phase: "not_started")),
-                    next_phase: "prologue_done",
-                ),
             ],
             objective: Some("연금술사를 먼저 만나 봉인에 관한 이야기를 들어야 한다."),
         ),
@@ -147,158 +89,14 @@ QuestDef(
                 "그리고 하나 더 — 연금술사의 작업이 '전설적' 수준으로 완성된다면,",
                 "봉인의 강도가 몇 배는 강해질 거야. 그것도 고려해봐.",
             ],
-            on_interact: [AdvancePhase("gathering_all")],
-            auto_advance: [],
             objective: Some("성물 4개를 수집하라: 영원의 보석(던전2), 현자의 돌(장로→교환), 용비늘(던전2), 고대 주문서(던전1)."),
         ),
 
-        // ── 메인 수집 단계 — auto_advance 11단계 우선순위 ────────────────────
+        // ── 메인 수집 단계 — Auto transition 11단계 우선순위 ────────────────────
         "gathering_all": QuestPhaseDef(
             dialog: [
                 "아직 성물이 다 모이지 않았어.",
                 "던전을 탐험하고, 연금술사의 의뢰도 챙기면서 재료를 모아봐.",
-            ],
-            on_interact: [
-                Branch(
-                    condition: And([
-                        HasItem("eternal_gem"),
-                        HasItem("philosophers_stone"),
-                        HasItem("dragon_scale"),
-                        HasItem("ancient_scroll"),
-                    ]),
-                    if_true: [
-                        Log("노인: 네 개가 모두 있군! 이제 의식을 시작할 수 있어."),
-                        AdvancePhase("all_gathered"),
-                    ],
-                    if_false: [
-                        Branch(
-                            condition: Not(HasItem("philosophers_stone")),
-                            if_true: [Log("노인: 현자의 돌이 없군. 장로에게 영원의 보석을 바치면 받을 수 있어.")],
-                            if_false: [
-                                Branch(
-                                    condition: Not(HasItem("eternal_gem")),
-                                    if_true: [Log("노인: 영원의 보석이 없군. 던전 2층을 깊이 탐험해야 해.")],
-                                    if_false: [Log("노인: 좋아. 보석과 현자의 돌은 있군. 나머지를 던전에서 찾아봐.")],
-                                ),
-                            ],
-                        ),
-                    ],
-                ),
-            ],
-            auto_advance: [
-                // 1순위: 4성물 + gem_quest 완료 + alchemist 전설 → 전설 준비
-                AutoAdvance(
-                    condition: And([
-                        HasItem("eternal_gem"),
-                        HasItem("philosophers_stone"),
-                        HasItem("dragon_scale"),
-                        HasItem("ancient_scroll"),
-                        PhaseIs(quest: "gem_quest", phase: "done"),
-                        PhaseIs(quest: "alchemist_quest", phase: "legendary_done"),
-                    ]),
-                    next_phase: "legendary_ready",
-                ),
-                // 2순위: 4성물 + alchemist 일반 완료 → 일반 준비
-                AutoAdvance(
-                    condition: And([
-                        HasItem("eternal_gem"),
-                        HasItem("philosophers_stone"),
-                        HasItem("dragon_scale"),
-                        HasItem("ancient_scroll"),
-                        PhaseIs(quest: "alchemist_quest", phase: "normal_done"),
-                    ]),
-                    next_phase: "normal_ready",
-                ),
-                // 3순위: 4성물 (alchemist 미완료) → 대기 단계
-                AutoAdvance(
-                    condition: And([
-                        HasItem("eternal_gem"),
-                        HasItem("philosophers_stone"),
-                        HasItem("dragon_scale"),
-                        HasItem("ancient_scroll"),
-                    ]),
-                    next_phase: "all_gathered",
-                ),
-                // 4순위: 현자의 길 — 보석+현자의돌 + gem_quest 완료 + alchemist 미시작
-                AutoAdvance(
-                    condition: And([
-                        HasItem("eternal_gem"),
-                        HasItem("philosophers_stone"),
-                        PhaseIs(quest: "gem_quest", phase: "done"),
-                        PhaseIs(quest: "alchemist_quest", phase: "not_started"),
-                        Not(HasItem("dragon_scale")),
-                        Not(HasItem("ancient_scroll")),
-                    ]),
-                    next_phase: "wisdom_path_entry",
-                ),
-                // 5순위: 전사의 길 — 비늘+주문서 + alchemist 전설 + 보석 없음
-                AutoAdvance(
-                    condition: And([
-                        HasItem("dragon_scale"),
-                        HasItem("ancient_scroll"),
-                        PhaseIs(quest: "alchemist_quest", phase: "legendary_done"),
-                        Not(HasItem("eternal_gem")),
-                        Not(HasItem("philosophers_stone")),
-                    ]),
-                    next_phase: "warrior_path_entry",
-                ),
-                // 6순위: 3개 — 현자의돌 없음
-                AutoAdvance(
-                    condition: And([
-                        HasItem("eternal_gem"),
-                        HasItem("dragon_scale"),
-                        HasItem("ancient_scroll"),
-                        Not(HasItem("philosophers_stone")),
-                    ]),
-                    next_phase: "missing_stone_hint",
-                ),
-                // 7순위: 3개 — 주문서 없음
-                AutoAdvance(
-                    condition: And([
-                        HasItem("eternal_gem"),
-                        HasItem("philosophers_stone"),
-                        HasItem("dragon_scale"),
-                        Not(HasItem("ancient_scroll")),
-                    ]),
-                    next_phase: "missing_scroll_hint",
-                ),
-                // 8순위: 3개 — 보석 없음
-                AutoAdvance(
-                    condition: And([
-                        HasItem("philosophers_stone"),
-                        HasItem("dragon_scale"),
-                        HasItem("ancient_scroll"),
-                        Not(HasItem("eternal_gem")),
-                    ]),
-                    next_phase: "missing_gem_hint",
-                ),
-                // 9순위: 3개 — 용비늘 없음
-                AutoAdvance(
-                    condition: And([
-                        HasItem("eternal_gem"),
-                        HasItem("philosophers_stone"),
-                        HasItem("ancient_scroll"),
-                        Not(HasItem("dragon_scale")),
-                    ]),
-                    next_phase: "missing_scale_hint",
-                ),
-                // 10순위: 던전 2층 탐험 중이고 용비늘 없음
-                AutoAdvance(
-                    condition: And([
-                        InZone(Dungeon(2)),
-                        Not(HasItem("dragon_scale")),
-                        HasItem("philosophers_stone"),
-                    ]),
-                    next_phase: "deep_dungeon_hint",
-                ),
-                // 11순위: 현자의 돌 없이 보석만 있음
-                AutoAdvance(
-                    condition: And([
-                        HasItem("eternal_gem"),
-                        Not(HasItem("philosophers_stone")),
-                    ]),
-                    next_phase: "get_stone_hint",
-                ),
             ],
             objective: Some("성물 4개 수집: 영원의 보석(던전2), 현자의 돌(장로→교환), 용비늘(던전2), 고대 주문서(던전1)."),
         ),
@@ -311,13 +109,6 @@ QuestDef(
                 "현자의 돌만 없구나. 장로에게 영원의 보석을 바치면 받을 수 있지.",
                 "이미 영원의 보석을 갖고 있으니 — 장로를 찾아가봐.",
             ],
-            on_interact: [],
-            auto_advance: [
-                AutoAdvance(
-                    condition: HasItem("philosophers_stone"),
-                    next_phase: "gathering_all",
-                ),
-            ],
             objective: Some("현자의 돌이 부족하다. 장로에게 영원의 보석을 바쳐 현자의 돌을 받아야 한다."),
         ),
 
@@ -326,13 +117,6 @@ QuestDef(
                 "세 개나 모았군! 훌륭해.",
                 "고대 주문서만 없구나. 던전 1층 어딘가에 있을 거야.",
                 "연금술사의 의뢰를 따라가면 자연스럽게 찾게 될 거야.",
-            ],
-            on_interact: [],
-            auto_advance: [
-                AutoAdvance(
-                    condition: HasItem("ancient_scroll"),
-                    next_phase: "gathering_all",
-                ),
             ],
             objective: Some("고대 주문서가 부족하다. 던전 1층에서 찾거나 연금술사 의뢰를 진행해야 한다."),
         ),
@@ -344,13 +128,6 @@ QuestDef(
                 "그런데... 잠깐. 현자의 돌은 어떻게 얻었지? 장로에게 영원의 보석을 바쳤나?",
                 "그렇다면 장로가 받은 보석이 어딘가에 다시 나타날 수도 있어. 던전 2층을 다시 확인해봐.",
             ],
-            on_interact: [],
-            auto_advance: [
-                AutoAdvance(
-                    condition: HasItem("eternal_gem"),
-                    next_phase: "gathering_all",
-                ),
-            ],
             objective: Some("영원의 보석이 부족하다. 던전 2층 깊은 곳에서 찾아야 한다."),
         ),
 
@@ -359,13 +136,6 @@ QuestDef(
                 "세 개나 모았군! 거의 다 왔어.",
                 "용비늘만 없구나. 던전 2층의 깊은 방에 있을 거야.",
                 "위험한 몬스터들이 지키고 있을 테니 조심해. 자네라면 할 수 있을 거야.",
-            ],
-            on_interact: [],
-            auto_advance: [
-                AutoAdvance(
-                    condition: HasItem("dragon_scale"),
-                    next_phase: "gathering_all",
-                ),
             ],
             objective: Some("용비늘이 부족하다. 던전 2층 깊은 곳에서 찾아야 한다."),
         ),
@@ -376,17 +146,6 @@ QuestDef(
                 "몬스터들을 물리치면서 방들을 탐험해봐.",
                 "마지막 방에 가장 강한 보상이 있는 법이지.",
             ],
-            on_interact: [],
-            auto_advance: [
-                AutoAdvance(
-                    condition: HasItem("dragon_scale"),
-                    next_phase: "gathering_all",
-                ),
-                AutoAdvance(
-                    condition: Not(InZone(Dungeon(2))),
-                    next_phase: "gathering_all",
-                ),
-            ],
             objective: Some("던전 2층에서 용비늘을 찾아라."),
         ),
 
@@ -395,13 +154,6 @@ QuestDef(
                 "영원의 보석은 찾았군. 이제 장로에게 가져가봐.",
                 "장로는 보석의 대가로 현자의 돌을 줄 거야.",
                 "현자의 돌 없이는 봉인이 완전하지 않아 — 반드시 교환해야 해.",
-            ],
-            on_interact: [],
-            auto_advance: [
-                AutoAdvance(
-                    condition: HasItem("philosophers_stone"),
-                    next_phase: "gathering_all",
-                ),
             ],
             objective: Some("장로에게 영원의 보석을 바쳐 현자의 돌을 받아야 한다."),
         ),
@@ -417,38 +169,6 @@ QuestDef(
                 "어떻게 하겠나 — 지금 당장 불완전한 봉인을 하겠나,",
                 "아니면 완전한 봉인을 위해 더 노력하겠나?",
             ],
-            on_interact: [
-                Branch(
-                    condition: And([HasItem("dragon_scale"), HasItem("ancient_scroll")]),
-                    if_true: [
-                        Log("노인: 이미 나머지도 갖고 있군! 완전한 봉인이 가능해!"),
-                        AdvancePhase("all_gathered"),
-                    ],
-                    if_false: [
-                        Branch(
-                            condition: PhaseIs(quest: "alchemist_quest", phase: "not_started"),
-                            if_true: [
-                                Log("노인: 지금 당장 불완전한 봉인도 선택지야. 아니면 연금술사와 이야기하고 돌아와."),
-                                AdvancePhase("wisdom_ritual_choice"),
-                            ],
-                            if_false: [
-                                Log("노인: 연금술사 의뢰 중이군. 그 과정에서 나머지 성물도 얻을 수 있을 거야. 계속 진행해봐."),
-                                AdvancePhase("gathering_all"),
-                            ],
-                        ),
-                    ],
-                ),
-            ],
-            auto_advance: [
-                AutoAdvance(
-                    condition: And([HasItem("dragon_scale"), HasItem("ancient_scroll")]),
-                    next_phase: "all_gathered",
-                ),
-                AutoAdvance(
-                    condition: Not(PhaseIs(quest: "alchemist_quest", phase: "not_started")),
-                    next_phase: "gathering_all",
-                ),
-            ],
             objective: Some("현자의 길: 영원의 보석+현자의 돌로 10년 봉인, 또는 나머지 성물을 더 모을 수 있다."),
         ),
 
@@ -456,47 +176,13 @@ QuestDef(
         //   이 ritual 은 4 성물을 모두 RemoveItem 한다. zone-단위 dedup 으로
         //   같은 인스턴스가 gem_quest / alchemist_quest 와 공유되므로, 여기서
         //   먼저 회수하면 다른 퀘스트의 RemoveItem (장로/연금술사 ritual) 이
-        //   진행 불가능해진다. player 가 두 라인 모두 클리어하려면 양쪽 조건
-        //   충족 상태에서 *world_fracture 를 먼저 마치거나*, 다른 NPC 와의
-        //   교환을 먼저 끝낸 뒤 재 spawn 을 기다려야 한다 (zone_spawned 가
-        //   set 되어 있어 같은 zone 재진입해도 새 spawn 없음).
+        //   진행 불가능해진다.
         "wisdom_ritual_choice": QuestPhaseDef(
             dialog: [
                 "영원의 보석과 현자의 돌을 봉인에 쓸 준비가 되었나?",
                 "이 두 성물로 10년의 봉인이 가능해.",
                 "그 이후엔 다른 누군가가 이 일을 이어가야 할 거야.",
                 "준비됐다면 이야기해. 언제든 의식을 시작할 수 있어.",
-            ],
-            on_interact: [
-                Branch(
-                    condition: And([HasItem("dragon_scale"), HasItem("ancient_scroll")]),
-                    if_true: [
-                        Log("노인: 나머지 성물도 갖고 있군! 지금 완전한 봉인을 하자!"),
-                        AdvancePhase("all_gathered"),
-                    ],
-                    if_false: [
-                        Branch(
-                            condition: And([HasItem("eternal_gem"), HasItem("philosophers_stone")]),
-                            if_true: [
-                                RemoveItem("eternal_gem"),
-                                RemoveItem("philosophers_stone"),
-                                Log("노인: 의식이 시작된다..."),
-                                Log("노인: 영원의 보석이 빛나고, 현자의 돌이 지식을 방출하고 있어."),
-                                Log("노인: 균열이 잠잠해지고 있어... 10년의 봉인이 새겨졌다."),
-                                AdvancePhase("wisdom_ending"),
-                            ],
-                            if_false: [
-                                Log("노인: 성물이 없으면 의식을 시작할 수 없어. 먼저 모아오게."),
-                            ],
-                        ),
-                    ],
-                ),
-            ],
-            auto_advance: [
-                AutoAdvance(
-                    condition: And([HasItem("dragon_scale"), HasItem("ancient_scroll")]),
-                    next_phase: "all_gathered",
-                ),
             ],
             objective: Some("노인에게 영원의 보석과 현자의 돌을 바쳐 불완전한 봉인을 시작할 수 있다."),
         ),
@@ -512,76 +198,15 @@ QuestDef(
                 "아니면 나머지 두 성물을 모아 완전한 봉인을 선택할 수도 있어.",
                 "어떻게 하겠나?",
             ],
-            on_interact: [
-                Branch(
-                    condition: And([HasItem("eternal_gem"), HasItem("philosophers_stone")]),
-                    if_true: [
-                        Log("노인: 이미 모든 성물을 갖고 있군! 전설적인 봉인이 가능해!"),
-                        AdvancePhase("legendary_ready"),
-                    ],
-                    if_false: [
-                        Branch(
-                            condition: And([HasItem("dragon_scale"), HasItem("ancient_scroll")]),
-                            if_true: [
-                                Log("노인: 전사의 길을 선택한다면 큰 각오가 필요해. 정말 하겠나?"),
-                                AdvancePhase("warrior_ritual_choice"),
-                            ],
-                            if_false: [
-                                Log("노인: 성물이 없으면 아무것도 할 수 없어. 먼저 모아오게."),
-                                AdvancePhase("gathering_all"),
-                            ],
-                        ),
-                    ],
-                ),
-            ],
-            auto_advance: [
-                AutoAdvance(
-                    condition: And([HasItem("eternal_gem"), HasItem("philosophers_stone")]),
-                    next_phase: "legendary_ready",
-                ),
-            ],
             objective: Some("전사의 길: 용비늘+주문서로 25년 봉인, 또는 완전한 성물로 더 강한 봉인 가능."),
         ),
 
         // ⚠ RemoveItem 충돌 주의 — wisdom_ritual_choice 와 동일 (4 성물 회수).
-        // 자세한 내용은 wisdom_ritual_choice 위 주석 참조.
         "warrior_ritual_choice": QuestPhaseDef(
             dialog: [
                 "용비늘의 힘과 고대 주문서의 기술을 봉인에 바칠 준비가 됐나?",
                 "이 봉인은 25년간 지속되지만 — 자네의 정신에 흔적이 남을 거야.",
                 "정말 각오가 됐다면 말해줘.",
-            ],
-            on_interact: [
-                Branch(
-                    condition: And([HasItem("eternal_gem"), HasItem("philosophers_stone")]),
-                    if_true: [
-                        Log("노인: 나머지 성물도 있군! 완전한 봉인으로 가자."),
-                        AdvancePhase("legendary_ready"),
-                    ],
-                    if_false: [
-                        Branch(
-                            condition: And([HasItem("dragon_scale"), HasItem("ancient_scroll")]),
-                            if_true: [
-                                RemoveItem("dragon_scale"),
-                                RemoveItem("ancient_scroll"),
-                                Log("노인: 의식이 시작된다!"),
-                                Log("노인: 용비늘의 힘이 폭발하고... 주문서의 봉인 문양이 공기를 가르고 있어!"),
-                                Log("노인: 균열이 봉쇄되고 있어! 하지만 그 에너지가 자네 몸으로 흘러들어가는 게 보여..."),
-                                Log("노인: 완성됐어. 25년간의 봉인이 자네에게 새겨졌다. 무겁겠지만 — 세상이 살아남았어."),
-                                AdvancePhase("warrior_ending"),
-                            ],
-                            if_false: [
-                                Log("노인: 성물이 없으면 의식을 시작할 수 없어."),
-                            ],
-                        ),
-                    ],
-                ),
-            ],
-            auto_advance: [
-                AutoAdvance(
-                    condition: And([HasItem("eternal_gem"), HasItem("philosophers_stone")]),
-                    next_phase: "legendary_ready",
-                ),
             ],
             objective: Some("노인에게 용비늘과 고대 주문서를 바쳐 전사의 봉인을 시작할 수 있다."),
         ),
@@ -596,99 +221,15 @@ QuestDef(
                 "지금 당장 의식을 강행할 수도 있어 — 50년 정도는 버틸 거야.",
                 "아니면 연금술사의 작업을 기다리면 100년, 전설적 완성이라면 1000년 봉인이 가능해.",
             ],
-            on_interact: [
-                Branch(
-                    condition: Or([
-                        PhaseIs(quest: "alchemist_quest", phase: "normal_done"),
-                        PhaseIs(quest: "alchemist_quest", phase: "legendary_done"),
-                    ]),
-                    if_true: [
-                        Log("노인: 연금술사의 작업이 완성됐어! 이제 완전한 의식이 가능해."),
-                        AdvancePhase("ritual_confirmation"),
-                    ],
-                    if_false: [
-                        Log("노인: 연금술사의 작업을 기다리겠나, 아니면 지금 강행하겠나?"),
-                        AdvancePhase("ritual_now_or_wait"),
-                    ],
-                ),
-            ],
-            auto_advance: [
-                AutoAdvance(
-                    condition: And([
-                        HasItem("eternal_gem"),
-                        HasItem("philosophers_stone"),
-                        HasItem("dragon_scale"),
-                        HasItem("ancient_scroll"),
-                        PhaseIs(quest: "alchemist_quest", phase: "legendary_done"),
-                    ]),
-                    next_phase: "legendary_ready",
-                ),
-                AutoAdvance(
-                    condition: And([
-                        HasItem("eternal_gem"),
-                        HasItem("philosophers_stone"),
-                        HasItem("dragon_scale"),
-                        HasItem("ancient_scroll"),
-                        PhaseIs(quest: "alchemist_quest", phase: "normal_done"),
-                    ]),
-                    next_phase: "normal_ready",
-                ),
-            ],
             objective: Some("성물이 모였다! 연금술사 완료 여부에 따라 봉인 강도가 달라진다. 노인과 이야기해야 한다."),
         ),
 
-        // ⚠ RemoveItem 충돌 주의 — 이후 ritual_legendary / ritual_normal /
-        // ritual_incomplete 모두 4 성물 RemoveItem. wisdom_ritual_choice 위
-        // 주석 참조 (specs/quest.md "RemoveItem 작성 가이드" 패턴 4).
+        // ⚠ RemoveItem 충돌 주의 — 이후 ritual_* 모두 4 성물 RemoveItem.
         "ritual_now_or_wait": QuestPhaseDef(
             dialog: [
                 "연금술사의 작업 없이 의식을 하면 봉인이 약해.",
                 "50년은 버티겠지만 100년은 보장할 수 없어.",
                 "그래도 지금 당장 하겠나?",
-            ],
-            on_interact: [
-                Branch(
-                    condition: Or([
-                        PhaseIs(quest: "alchemist_quest", phase: "normal_done"),
-                        PhaseIs(quest: "alchemist_quest", phase: "legendary_done"),
-                    ]),
-                    if_true: [
-                        Log("노인: 연금술사의 작업이 완성됐어! 완전한 의식이 가능해졌어."),
-                        AdvancePhase("ritual_confirmation"),
-                    ],
-                    if_false: [
-                        Branch(
-                            condition: And([
-                                HasItem("eternal_gem"),
-                                HasItem("philosophers_stone"),
-                                HasItem("dragon_scale"),
-                                HasItem("ancient_scroll"),
-                            ]),
-                            if_true: [
-                                RemoveItem("eternal_gem"),
-                                RemoveItem("philosophers_stone"),
-                                RemoveItem("dragon_scale"),
-                                RemoveItem("ancient_scroll"),
-                                Log("노인: 그래... 시작하지. 50년은 버텨줄 거야. 그 정도면 충분하겠지."),
-                                Log("노인: 균열이 봉인되고 있어..."),
-                                AdvancePhase("incomplete_ending"),
-                            ],
-                            if_false: [
-                                Log("노인: 성물이 없으면 의식을 시작할 수 없어."),
-                            ],
-                        ),
-                    ],
-                ),
-            ],
-            auto_advance: [
-                AutoAdvance(
-                    condition: PhaseIs(quest: "alchemist_quest", phase: "legendary_done"),
-                    next_phase: "legendary_ready",
-                ),
-                AutoAdvance(
-                    condition: PhaseIs(quest: "alchemist_quest", phase: "normal_done"),
-                    next_phase: "normal_ready",
-                ),
             ],
             objective: Some("연금술사가 완료되길 기다리거나, 지금 당장 불완전한 봉인을 강행할 수 있다."),
         ),
@@ -702,45 +243,6 @@ QuestDef(
                 "이 의식은 되돌릴 수 없어. 모든 성물이 사라질 거야.",
                 "연금술사의 작업도 최선을 다했어. 좋은 결과가 될 거야.",
             ],
-            on_interact: [
-                Branch(
-                    condition: And([
-                        HasItem("eternal_gem"),
-                        HasItem("philosophers_stone"),
-                        HasItem("dragon_scale"),
-                        HasItem("ancient_scroll"),
-                    ]),
-                    if_true: [
-                        Branch(
-                            condition: PhaseIs(quest: "alchemist_quest", phase: "legendary_done"),
-                            if_true: [
-                                RemoveItem("eternal_gem"),
-                                RemoveItem("philosophers_stone"),
-                                RemoveItem("dragon_scale"),
-                                RemoveItem("ancient_scroll"),
-                                Log("노인: 의식이 시작된다!"),
-                                Log("노인: 연금술사의 전설적인 에너지가 봉인을 강화하고 있어!"),
-                                Log("노인: 균열이 완전히 봉인되었다! 이 봉인은 1000년은 지속될 거야."),
-                                AdvancePhase("legendary_ending"),
-                            ],
-                            if_false: [
-                                RemoveItem("eternal_gem"),
-                                RemoveItem("philosophers_stone"),
-                                RemoveItem("dragon_scale"),
-                                RemoveItem("ancient_scroll"),
-                                Log("노인: 의식이 시작된다!"),
-                                Log("노인: 균열이 봉인되고 있어... 완성됐어. 100년의 평화가 찾아올 거야."),
-                                AdvancePhase("normal_ending"),
-                            ],
-                        ),
-                    ],
-                    if_false: [
-                        Log("노인: 성물이 부족해. 모두 갖춰야 의식을 시작할 수 있어."),
-                        AdvancePhase("gathering_all"),
-                    ],
-                ),
-            ],
-            auto_advance: [],
             objective: Some("노인에게 네 개의 성물을 모두 바쳐 봉인 의식을 완성해야 한다."),
         ),
 
@@ -752,33 +254,6 @@ QuestDef(
                 "완전한 봉인. 영원한 봉인이 가능해.",
                 "역사에 이름을 남기게 될 거야.",
             ],
-            on_interact: [
-                Branch(
-                    condition: And([
-                        HasItem("eternal_gem"),
-                        HasItem("philosophers_stone"),
-                        HasItem("dragon_scale"),
-                        HasItem("ancient_scroll"),
-                    ]),
-                    if_true: [
-                        RemoveItem("eternal_gem"),
-                        RemoveItem("philosophers_stone"),
-                        RemoveItem("dragon_scale"),
-                        RemoveItem("ancient_scroll"),
-                        Log("노인: 의식을 시작한다!"),
-                        Log("노인: 영원의 보석이 빛난다... 현자의 돌이 지식을 전한다... 용비늘이 힘을 담는다... 주문서가 봉인을 새긴다!"),
-                        Log("노인: 연금술사의 포션 에너지가 모든 것을 완성시키고 있어!!"),
-                        Log("노인: 균열이... 완전히 봉인되었다!! 영원히!!"),
-                        Log("세계가 구원받았다. 이 봉인은 영원히 지속될 것이다."),
-                        AdvancePhase("legendary_ending"),
-                    ],
-                    if_false: [
-                        Log("노인: 성물이 부족해. 모두 갖춰야 해."),
-                        AdvancePhase("gathering_all"),
-                    ],
-                ),
-            ],
-            auto_advance: [],
             objective: Some("🌟 전설적인 조건이 갖춰졌다! 노인에게 성물을 바쳐 영원한 봉인을 완성하라."),
         ),
 
@@ -788,35 +263,10 @@ QuestDef(
                 "100년의 봉인이 가능해. 충분히 훌륭한 결과야.",
                 "준비됐으면 시작하지.",
             ],
-            on_interact: [
-                Branch(
-                    condition: And([
-                        HasItem("eternal_gem"),
-                        HasItem("philosophers_stone"),
-                        HasItem("dragon_scale"),
-                        HasItem("ancient_scroll"),
-                    ]),
-                    if_true: [
-                        RemoveItem("eternal_gem"),
-                        RemoveItem("philosophers_stone"),
-                        RemoveItem("dragon_scale"),
-                        RemoveItem("ancient_scroll"),
-                        Log("노인: 의식이 시작된다!"),
-                        Log("노인: 봉인이 새겨지고 있어... 균열이 막히고 있어!"),
-                        Log("노인: 완성됐어. 100년의 평화가 찾아왔어."),
-                        AdvancePhase("normal_ending"),
-                    ],
-                    if_false: [
-                        Log("노인: 성물이 부족해. 모두 갖춰야 해."),
-                        AdvancePhase("gathering_all"),
-                    ],
-                ),
-            ],
-            auto_advance: [],
             objective: Some("노인에게 네 개의 성물을 바쳐 100년 봉인 의식을 완성하라."),
         ),
 
-        // ── 결말 단계들 ────────────────────────────────────────────────────────
+        // ── 결말 단계들 (terminal) ──────────────────────────────────────────────
 
         "legendary_ending": QuestPhaseDef(
             dialog: [
@@ -827,8 +277,6 @@ QuestDef(
                 "수백 년 뒤의 사람들은 자네 이름을 기억할 거야.",
                 "...고마워. 진심으로.",
             ],
-            on_interact: [],
-            auto_advance: [],
             objective: Some("🌟 전설 결말! 영원한 봉인이 완성되었다. 세계가 구원받았다."),
         ),
 
@@ -840,8 +288,6 @@ QuestDef(
                 "100년 후엔... 다른 영웅이 나타나겠지.",
                 "감사해.",
             ],
-            on_interact: [],
-            auto_advance: [],
             objective: Some("✨ 일반 결말! 100년의 봉인이 완성되었다."),
         ),
 
@@ -853,8 +299,6 @@ QuestDef(
                 "50년 후에 다른 용사가 나타나기를 바라야겠지.",
                 "그래도 — 이 시대는 구했어. 고마워.",
             ],
-            on_interact: [],
-            auto_advance: [],
             objective: Some("⚠️ 불완전 결말! 50년의 봉인이 완성되었다."),
         ),
 
@@ -866,8 +310,6 @@ QuestDef(
                 "이 10년 동안 더 강한 봉인을 준비할 수 있을 거야.",
                 "힘이 아닌 지혜를 선택한 자네에게 경의를 표해.",
             ],
-            on_interact: [],
-            auto_advance: [],
             objective: Some("🔮 현자 결말! 지혜로운 선택으로 10년의 봉인을 완성했다."),
         ),
 
@@ -880,11 +322,379 @@ QuestDef(
                 "자네의 용기와 희생에 경의를 표해.",
                 "이 이야기는 오래 기억될 거야.",
             ],
-            on_interact: [],
-            auto_advance: [],
             objective: Some("⚔️ 전사 결말! 희생으로 25년의 봉인을 완성했다."),
         ),
     },
+
+    transitions: [
+        // ── dormant ──
+        Transition(from: "dormant", trigger: Auto, when: PhaseIs(quest: "gem_quest", phase: "done"), to: "awakened"),
+        Transition(from: "dormant", trigger: Interact,
+            when: PhaseIs(quest: "gem_quest", phase: "done"),
+            actions: [Log("노인: 오! 드디어 장로의 일을 해결했군. 이제 이야기할 수 있겠어.")],
+            to: "awakened"),
+        Transition(from: "dormant", trigger: Interact,
+            actions: [Log("노인: 장로를 먼저 만나보게. 그 일이 시작의 열쇠야.")],
+            to: "dormant"),
+
+        // ── awakened ──
+        Transition(from: "awakened", trigger: Interact,
+            when: PhaseIs(quest: "alchemist_quest", phase: "not_started"),
+            actions: [
+                Log("노인: 연금술사와 아직 이야기하지 않았군. 그도 이 비밀의 일부를 알고 있어."),
+                Log("노인: 그가 연구하는 재료들 — 용비늘과 고대 주문서 — 은 봉인에 꼭 필요한 것들이야."),
+            ],
+            to: "need_alchemist"),
+        Transition(from: "awakened", trigger: Interact,
+            when: Or([
+                PhaseIs(quest: "alchemist_quest", phase: "normal_done"),
+                PhaseIs(quest: "alchemist_quest", phase: "legendary_done"),
+            ]),
+            actions: [Log("노인: 연금술사의 작업도 끝났군! 훌륭해. 이미 많은 준비가 된 셈이야.")],
+            to: "prologue_done"),
+        Transition(from: "awakened", trigger: Interact,
+            actions: [Log("노인: 연금술사와 이미 접촉했군. 좋아. 그의 작업도 도와주면 봉인이 훨씬 강해질 거야.")],
+            to: "prologue_done"),
+
+        // ── need_alchemist ──
+        Transition(from: "need_alchemist", trigger: Auto,
+            when: Not(PhaseIs(quest: "alchemist_quest", phase: "not_started")),
+            to: "prologue_done"),
+        Transition(from: "need_alchemist", trigger: Interact,
+            when: Not(PhaseIs(quest: "alchemist_quest", phase: "not_started")),
+            actions: [Log("노인: 연금술사와 이야기를 나눴군. 이제 함께 성물을 모을 수 있어.")],
+            to: "prologue_done"),
+        Transition(from: "need_alchemist", trigger: Interact,
+            actions: [Log("노인: 아직 연금술사를 만나지 않았군. 마을 어딘가에 있을 거야.")],
+            to: "need_alchemist"),
+
+        // ── prologue_done ──
+        Transition(from: "prologue_done", trigger: Interact, to: "gathering_all"),
+
+        // ── gathering_all: Auto 11단계 우선순위 ──
+        // 1순위: 4성물 + gem_quest 완료 + alchemist 전설
+        Transition(from: "gathering_all", trigger: Auto,
+            when: And([
+                HasItem("eternal_gem"), HasItem("philosophers_stone"),
+                HasItem("dragon_scale"), HasItem("ancient_scroll"),
+                PhaseIs(quest: "gem_quest", phase: "done"),
+                PhaseIs(quest: "alchemist_quest", phase: "legendary_done"),
+            ]),
+            to: "legendary_ready"),
+        // 2순위: 4성물 + alchemist 일반 완료
+        Transition(from: "gathering_all", trigger: Auto,
+            when: And([
+                HasItem("eternal_gem"), HasItem("philosophers_stone"),
+                HasItem("dragon_scale"), HasItem("ancient_scroll"),
+                PhaseIs(quest: "alchemist_quest", phase: "normal_done"),
+            ]),
+            to: "normal_ready"),
+        // 3순위: 4성물 (alchemist 미완료)
+        Transition(from: "gathering_all", trigger: Auto,
+            when: And([
+                HasItem("eternal_gem"), HasItem("philosophers_stone"),
+                HasItem("dragon_scale"), HasItem("ancient_scroll"),
+            ]),
+            to: "all_gathered"),
+        // 4순위: 현자의 길 — 보석+현자의돌 + gem_quest 완료 + alchemist 미시작
+        Transition(from: "gathering_all", trigger: Auto,
+            when: And([
+                HasItem("eternal_gem"), HasItem("philosophers_stone"),
+                PhaseIs(quest: "gem_quest", phase: "done"),
+                PhaseIs(quest: "alchemist_quest", phase: "not_started"),
+                Not(HasItem("dragon_scale")), Not(HasItem("ancient_scroll")),
+            ]),
+            to: "wisdom_path_entry"),
+        // 5순위: 전사의 길 — 비늘+주문서 + alchemist 전설 + 보석 없음
+        Transition(from: "gathering_all", trigger: Auto,
+            when: And([
+                HasItem("dragon_scale"), HasItem("ancient_scroll"),
+                PhaseIs(quest: "alchemist_quest", phase: "legendary_done"),
+                Not(HasItem("eternal_gem")), Not(HasItem("philosophers_stone")),
+            ]),
+            to: "warrior_path_entry"),
+        // 6순위: 3개 — 현자의돌 없음
+        Transition(from: "gathering_all", trigger: Auto,
+            when: And([
+                HasItem("eternal_gem"), HasItem("dragon_scale"), HasItem("ancient_scroll"),
+                Not(HasItem("philosophers_stone")),
+            ]),
+            to: "missing_stone_hint"),
+        // 7순위: 3개 — 주문서 없음
+        Transition(from: "gathering_all", trigger: Auto,
+            when: And([
+                HasItem("eternal_gem"), HasItem("philosophers_stone"), HasItem("dragon_scale"),
+                Not(HasItem("ancient_scroll")),
+            ]),
+            to: "missing_scroll_hint"),
+        // 8순위: 3개 — 보석 없음
+        Transition(from: "gathering_all", trigger: Auto,
+            when: And([
+                HasItem("philosophers_stone"), HasItem("dragon_scale"), HasItem("ancient_scroll"),
+                Not(HasItem("eternal_gem")),
+            ]),
+            to: "missing_gem_hint"),
+        // 9순위: 3개 — 용비늘 없음
+        Transition(from: "gathering_all", trigger: Auto,
+            when: And([
+                HasItem("eternal_gem"), HasItem("philosophers_stone"), HasItem("ancient_scroll"),
+                Not(HasItem("dragon_scale")),
+            ]),
+            to: "missing_scale_hint"),
+        // 10순위: 던전 2층 탐험 중이고 용비늘 없음
+        Transition(from: "gathering_all", trigger: Auto,
+            when: And([
+                InZone(Dungeon(2)), Not(HasItem("dragon_scale")), HasItem("philosophers_stone"),
+            ]),
+            to: "deep_dungeon_hint"),
+        // 11순위: 현자의 돌 없이 보석만 있음
+        Transition(from: "gathering_all", trigger: Auto,
+            when: And([HasItem("eternal_gem"), Not(HasItem("philosophers_stone"))]),
+            to: "get_stone_hint"),
+        // gathering_all: 대화 힌트 (4성물 시 all_gathered, 그 외 self-loop 힌트)
+        Transition(from: "gathering_all", trigger: Interact,
+            when: And([
+                HasItem("eternal_gem"), HasItem("philosophers_stone"),
+                HasItem("dragon_scale"), HasItem("ancient_scroll"),
+            ]),
+            actions: [Log("노인: 네 개가 모두 있군! 이제 의식을 시작할 수 있어.")],
+            to: "all_gathered"),
+        Transition(from: "gathering_all", trigger: Interact,
+            when: Not(HasItem("philosophers_stone")),
+            actions: [Log("노인: 현자의 돌이 없군. 장로에게 영원의 보석을 바치면 받을 수 있어.")],
+            to: "gathering_all"),
+        Transition(from: "gathering_all", trigger: Interact,
+            when: Not(HasItem("eternal_gem")),
+            actions: [Log("노인: 영원의 보석이 없군. 던전 2층을 깊이 탐험해야 해.")],
+            to: "gathering_all"),
+        Transition(from: "gathering_all", trigger: Interact,
+            actions: [Log("노인: 좋아. 보석과 현자의 돌은 있군. 나머지를 던전에서 찾아봐.")],
+            to: "gathering_all"),
+
+        // ── 힌트 단계: 조건 충족 시 gathering_all 로 복귀 (Auto) ──
+        Transition(from: "missing_stone_hint", trigger: Auto, when: HasItem("philosophers_stone"), to: "gathering_all"),
+        Transition(from: "missing_scroll_hint", trigger: Auto, when: HasItem("ancient_scroll"), to: "gathering_all"),
+        Transition(from: "missing_gem_hint", trigger: Auto, when: HasItem("eternal_gem"), to: "gathering_all"),
+        Transition(from: "missing_scale_hint", trigger: Auto, when: HasItem("dragon_scale"), to: "gathering_all"),
+        Transition(from: "deep_dungeon_hint", trigger: Auto, when: HasItem("dragon_scale"), to: "gathering_all"),
+        Transition(from: "deep_dungeon_hint", trigger: Auto, when: Not(InZone(Dungeon(2))), to: "gathering_all"),
+        Transition(from: "get_stone_hint", trigger: Auto, when: HasItem("philosophers_stone"), to: "gathering_all"),
+
+        // ── wisdom_path_entry ──
+        Transition(from: "wisdom_path_entry", trigger: Auto,
+            when: And([HasItem("dragon_scale"), HasItem("ancient_scroll")]),
+            to: "all_gathered"),
+        Transition(from: "wisdom_path_entry", trigger: Auto,
+            when: Not(PhaseIs(quest: "alchemist_quest", phase: "not_started")),
+            to: "gathering_all"),
+        Transition(from: "wisdom_path_entry", trigger: Interact,
+            when: And([HasItem("dragon_scale"), HasItem("ancient_scroll")]),
+            actions: [Log("노인: 이미 나머지도 갖고 있군! 완전한 봉인이 가능해!")],
+            to: "all_gathered"),
+        Transition(from: "wisdom_path_entry", trigger: Interact,
+            when: PhaseIs(quest: "alchemist_quest", phase: "not_started"),
+            actions: [Log("노인: 지금 당장 불완전한 봉인도 선택지야. 아니면 연금술사와 이야기하고 돌아와.")],
+            to: "wisdom_ritual_choice"),
+        Transition(from: "wisdom_path_entry", trigger: Interact,
+            actions: [Log("노인: 연금술사 의뢰 중이군. 그 과정에서 나머지 성물도 얻을 수 있을 거야. 계속 진행해봐.")],
+            to: "gathering_all"),
+
+        // ── wisdom_ritual_choice ──
+        Transition(from: "wisdom_ritual_choice", trigger: Auto,
+            when: And([HasItem("dragon_scale"), HasItem("ancient_scroll")]),
+            to: "all_gathered"),
+        Transition(from: "wisdom_ritual_choice", trigger: Interact,
+            when: And([HasItem("dragon_scale"), HasItem("ancient_scroll")]),
+            actions: [Log("노인: 나머지 성물도 갖고 있군! 지금 완전한 봉인을 하자!")],
+            to: "all_gathered"),
+        Transition(from: "wisdom_ritual_choice", trigger: Interact,
+            when: And([HasItem("eternal_gem"), HasItem("philosophers_stone")]),
+            actions: [
+                RemoveItem("eternal_gem"),
+                RemoveItem("philosophers_stone"),
+                Log("노인: 의식이 시작된다..."),
+                Log("노인: 영원의 보석이 빛나고, 현자의 돌이 지식을 방출하고 있어."),
+                Log("노인: 균열이 잠잠해지고 있어... 10년의 봉인이 새겨졌다."),
+            ],
+            to: "wisdom_ending"),
+        Transition(from: "wisdom_ritual_choice", trigger: Interact,
+            actions: [Log("노인: 성물이 없으면 의식을 시작할 수 없어. 먼저 모아오게.")],
+            to: "wisdom_ritual_choice"),
+
+        // ── warrior_path_entry ──
+        Transition(from: "warrior_path_entry", trigger: Auto,
+            when: And([HasItem("eternal_gem"), HasItem("philosophers_stone")]),
+            to: "legendary_ready"),
+        Transition(from: "warrior_path_entry", trigger: Interact,
+            when: And([HasItem("eternal_gem"), HasItem("philosophers_stone")]),
+            actions: [Log("노인: 이미 모든 성물을 갖고 있군! 전설적인 봉인이 가능해!")],
+            to: "legendary_ready"),
+        Transition(from: "warrior_path_entry", trigger: Interact,
+            when: And([HasItem("dragon_scale"), HasItem("ancient_scroll")]),
+            actions: [Log("노인: 전사의 길을 선택한다면 큰 각오가 필요해. 정말 하겠나?")],
+            to: "warrior_ritual_choice"),
+        Transition(from: "warrior_path_entry", trigger: Interact,
+            actions: [Log("노인: 성물이 없으면 아무것도 할 수 없어. 먼저 모아오게.")],
+            to: "gathering_all"),
+
+        // ── warrior_ritual_choice ──
+        Transition(from: "warrior_ritual_choice", trigger: Auto,
+            when: And([HasItem("eternal_gem"), HasItem("philosophers_stone")]),
+            to: "legendary_ready"),
+        Transition(from: "warrior_ritual_choice", trigger: Interact,
+            when: And([HasItem("eternal_gem"), HasItem("philosophers_stone")]),
+            actions: [Log("노인: 나머지 성물도 있군! 완전한 봉인으로 가자.")],
+            to: "legendary_ready"),
+        Transition(from: "warrior_ritual_choice", trigger: Interact,
+            when: And([HasItem("dragon_scale"), HasItem("ancient_scroll")]),
+            actions: [
+                RemoveItem("dragon_scale"),
+                RemoveItem("ancient_scroll"),
+                Log("노인: 의식이 시작된다!"),
+                Log("노인: 용비늘의 힘이 폭발하고... 주문서의 봉인 문양이 공기를 가르고 있어!"),
+                Log("노인: 균열이 봉쇄되고 있어! 하지만 그 에너지가 자네 몸으로 흘러들어가는 게 보여..."),
+                Log("노인: 완성됐어. 25년간의 봉인이 자네에게 새겨졌다. 무겁겠지만 — 세상이 살아남았어."),
+            ],
+            to: "warrior_ending"),
+        Transition(from: "warrior_ritual_choice", trigger: Interact,
+            actions: [Log("노인: 성물이 없으면 의식을 시작할 수 없어.")],
+            to: "warrior_ritual_choice"),
+
+        // ── all_gathered ──
+        Transition(from: "all_gathered", trigger: Auto,
+            when: And([
+                HasItem("eternal_gem"), HasItem("philosophers_stone"),
+                HasItem("dragon_scale"), HasItem("ancient_scroll"),
+                PhaseIs(quest: "alchemist_quest", phase: "legendary_done"),
+            ]),
+            to: "legendary_ready"),
+        Transition(from: "all_gathered", trigger: Auto,
+            when: And([
+                HasItem("eternal_gem"), HasItem("philosophers_stone"),
+                HasItem("dragon_scale"), HasItem("ancient_scroll"),
+                PhaseIs(quest: "alchemist_quest", phase: "normal_done"),
+            ]),
+            to: "normal_ready"),
+        Transition(from: "all_gathered", trigger: Interact,
+            when: Or([
+                PhaseIs(quest: "alchemist_quest", phase: "normal_done"),
+                PhaseIs(quest: "alchemist_quest", phase: "legendary_done"),
+            ]),
+            actions: [Log("노인: 연금술사의 작업이 완성됐어! 이제 완전한 의식이 가능해.")],
+            to: "ritual_confirmation"),
+        Transition(from: "all_gathered", trigger: Interact,
+            actions: [Log("노인: 연금술사의 작업을 기다리겠나, 아니면 지금 강행하겠나?")],
+            to: "ritual_now_or_wait"),
+
+        // ── ritual_now_or_wait ──
+        Transition(from: "ritual_now_or_wait", trigger: Auto,
+            when: PhaseIs(quest: "alchemist_quest", phase: "legendary_done"),
+            to: "legendary_ready"),
+        Transition(from: "ritual_now_or_wait", trigger: Auto,
+            when: PhaseIs(quest: "alchemist_quest", phase: "normal_done"),
+            to: "normal_ready"),
+        Transition(from: "ritual_now_or_wait", trigger: Interact,
+            when: Or([
+                PhaseIs(quest: "alchemist_quest", phase: "normal_done"),
+                PhaseIs(quest: "alchemist_quest", phase: "legendary_done"),
+            ]),
+            actions: [Log("노인: 연금술사의 작업이 완성됐어! 완전한 의식이 가능해졌어.")],
+            to: "ritual_confirmation"),
+        Transition(from: "ritual_now_or_wait", trigger: Interact,
+            when: And([
+                HasItem("eternal_gem"), HasItem("philosophers_stone"),
+                HasItem("dragon_scale"), HasItem("ancient_scroll"),
+            ]),
+            actions: [
+                RemoveItem("eternal_gem"),
+                RemoveItem("philosophers_stone"),
+                RemoveItem("dragon_scale"),
+                RemoveItem("ancient_scroll"),
+                Log("노인: 그래... 시작하지. 50년은 버텨줄 거야. 그 정도면 충분하겠지."),
+                Log("노인: 균열이 봉인되고 있어..."),
+            ],
+            to: "incomplete_ending"),
+        Transition(from: "ritual_now_or_wait", trigger: Interact,
+            actions: [Log("노인: 성물이 없으면 의식을 시작할 수 없어.")],
+            to: "ritual_now_or_wait"),
+
+        // ── ritual_confirmation ──
+        Transition(from: "ritual_confirmation", trigger: Interact,
+            when: And([
+                HasItem("eternal_gem"), HasItem("philosophers_stone"),
+                HasItem("dragon_scale"), HasItem("ancient_scroll"),
+                PhaseIs(quest: "alchemist_quest", phase: "legendary_done"),
+            ]),
+            actions: [
+                RemoveItem("eternal_gem"),
+                RemoveItem("philosophers_stone"),
+                RemoveItem("dragon_scale"),
+                RemoveItem("ancient_scroll"),
+                Log("노인: 의식이 시작된다!"),
+                Log("노인: 연금술사의 전설적인 에너지가 봉인을 강화하고 있어!"),
+                Log("노인: 균열이 완전히 봉인되었다! 이 봉인은 1000년은 지속될 거야."),
+            ],
+            to: "legendary_ending"),
+        Transition(from: "ritual_confirmation", trigger: Interact,
+            when: And([
+                HasItem("eternal_gem"), HasItem("philosophers_stone"),
+                HasItem("dragon_scale"), HasItem("ancient_scroll"),
+            ]),
+            actions: [
+                RemoveItem("eternal_gem"),
+                RemoveItem("philosophers_stone"),
+                RemoveItem("dragon_scale"),
+                RemoveItem("ancient_scroll"),
+                Log("노인: 의식이 시작된다!"),
+                Log("노인: 균열이 봉인되고 있어... 완성됐어. 100년의 평화가 찾아올 거야."),
+            ],
+            to: "normal_ending"),
+        Transition(from: "ritual_confirmation", trigger: Interact,
+            actions: [Log("노인: 성물이 부족해. 모두 갖춰야 의식을 시작할 수 있어.")],
+            to: "gathering_all"),
+
+        // ── legendary_ready ──
+        Transition(from: "legendary_ready", trigger: Interact,
+            when: And([
+                HasItem("eternal_gem"), HasItem("philosophers_stone"),
+                HasItem("dragon_scale"), HasItem("ancient_scroll"),
+            ]),
+            actions: [
+                RemoveItem("eternal_gem"),
+                RemoveItem("philosophers_stone"),
+                RemoveItem("dragon_scale"),
+                RemoveItem("ancient_scroll"),
+                Log("노인: 의식을 시작한다!"),
+                Log("노인: 영원의 보석이 빛난다... 현자의 돌이 지식을 전한다... 용비늘이 힘을 담는다... 주문서가 봉인을 새긴다!"),
+                Log("노인: 연금술사의 포션 에너지가 모든 것을 완성시키고 있어!!"),
+                Log("노인: 균열이... 완전히 봉인되었다!! 영원히!!"),
+                Log("세계가 구원받았다. 이 봉인은 영원히 지속될 것이다."),
+            ],
+            to: "legendary_ending"),
+        Transition(from: "legendary_ready", trigger: Interact,
+            actions: [Log("노인: 성물이 부족해. 모두 갖춰야 해.")],
+            to: "gathering_all"),
+
+        // ── normal_ready ──
+        Transition(from: "normal_ready", trigger: Interact,
+            when: And([
+                HasItem("eternal_gem"), HasItem("philosophers_stone"),
+                HasItem("dragon_scale"), HasItem("ancient_scroll"),
+            ]),
+            actions: [
+                RemoveItem("eternal_gem"),
+                RemoveItem("philosophers_stone"),
+                RemoveItem("dragon_scale"),
+                RemoveItem("ancient_scroll"),
+                Log("노인: 의식이 시작된다!"),
+                Log("노인: 봉인이 새겨지고 있어... 균열이 막히고 있어!"),
+                Log("노인: 완성됐어. 100년의 평화가 찾아왔어."),
+            ],
+            to: "normal_ending"),
+        Transition(from: "normal_ready", trigger: Interact,
+            actions: [Log("노인: 성물이 부족해. 모두 갖춰야 해.")],
+            to: "gathering_all"),
+    ],
 
     spawns: [
         // 주 수집 단계: 3개 아이템 던전 스폰 (현자의 돌은 gem_quest 보상으로만 획득)

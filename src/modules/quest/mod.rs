@@ -18,6 +18,9 @@ pub struct QuestDef {
     pub giver_npc: String,
     pub initial_phase: String,
     pub phases: HashMap<String, QuestPhaseDef>,
+    /// 순서 있는 상태 전환 규칙 목록. 각 trigger 유형별로 첫 번째 매칭 규칙만 실행.
+    #[serde(default)]
+    pub transitions: Vec<QuestTransition>,
     #[serde(default)]
     pub spawns: Vec<QuestSpawn>,
     /// 게임 시작 시 이 퀘스트가 활성화될 확률 (0.0 ~ 1.0). 기본값 1.0 (항상 등장).
@@ -31,20 +34,31 @@ fn default_spawn_chance() -> f32 { 1.0 }
 pub struct QuestPhaseDef {
     pub dialog: Vec<String>,
     #[serde(default)]
-    pub on_interact: Vec<QuestAction>,
-    #[serde(default)]
-    pub auto_advance: Vec<AutoAdvance>,
-    #[serde(default)]
     pub objective: Option<String>,
 }
 
+/// NPC 상호작용 또는 자동 조건 체크로 발동하는 상태 전환 규칙.
+/// `transitions` 목록 순서대로 평가하며 첫 번째 매칭 규칙만 실행한다.
 #[derive(Debug, Deserialize, Clone)]
-pub struct AutoAdvance {
-    pub condition: QuestCondition,
-    pub next_phase: String,
-    /// 조건 발동 시 즉시 실행되는 액션 (RemoveItem, DespawnWorldItem, SetFlag 지원)
+#[serde(rename = "Transition")]
+pub struct QuestTransition {
+    pub from: String,
+    pub trigger: TriggerKind,
+    /// 없으면 항상 매칭 (unconditional)
+    #[serde(default)]
+    pub when: Option<QuestCondition>,
+    /// 전환 시 실행할 사이드이펙트 액션 목록. Auto trigger 는 DespawnWorldItem/RemoveItem/SetFlag 만 허용.
     #[serde(default)]
     pub actions: Vec<QuestAction>,
+    pub to: String,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+pub enum TriggerKind {
+    /// NPC 마지막 대사 이후 플레이어 interact 시 평가
+    Interact,
+    /// 매 프레임 조건 자동 평가
+    Auto,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -77,7 +91,6 @@ pub enum PortalPlacement {
 
 #[derive(Debug, Deserialize, Clone)]
 pub enum QuestAction {
-    AdvancePhase(String),
     GiveItem(String),
     RemoveItem(String),
     Log(String),
@@ -98,11 +111,6 @@ pub enum QuestAction {
     GiveItems { item: String, count: u32 },
     /// 월드에 놓인 아이템 엔티티를 즉시 제거한다 (인벤토리는 건들지 않음)
     DespawnWorldItem(String),
-    Branch {
-        condition: Box<QuestCondition>,
-        if_true: Vec<QuestAction>,
-        if_false: Vec<QuestAction>,
-    },
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -283,15 +291,10 @@ fn validate_quest_item_refs(
                 ));
             }
         }
-        // 모든 phase 의 action 들을 탐색
-        for (phase_id, phase) in &qdef.phases {
-            for action in phase.on_interact.iter() {
-                check_action_item_ids(action, qid, phase_id, &quest_items, &mut errors);
-            }
-            for auto in &phase.auto_advance {
-                for action in &auto.actions {
-                    check_action_item_ids(action, qid, phase_id, &quest_items, &mut errors);
-                }
+        // 모든 transition 의 actions 탐색
+        for transition in &qdef.transitions {
+            for action in &transition.actions {
+                check_action_item_ids(action, qid, &transition.from, &quest_items, &mut errors);
             }
         }
     }
@@ -320,11 +323,6 @@ fn check_action_item_ids(
                     "퀘스트 '{}' phase '{}': item_id '{}' 가 인식되지 않습니다",
                     qid, phase_id, id
                 ));
-            }
-        }
-        QuestAction::Branch { if_true, if_false, .. } => {
-            for a in if_true.iter().chain(if_false.iter()) {
-                check_action_item_ids(a, qid, phase_id, quest_items, errors);
             }
         }
         _ => {}
@@ -405,28 +403,28 @@ pub fn validate_quest_def(def: &QuestDef, quest_items: &crate::modules::item::Qu
         ));
     }
 
-    for (phase_id, phase) in &def.phases {
-        // on_interact AdvancePhase 참조 확인
-        for action in &phase.on_interact {
-            collect_action_errors(action, &def.phases, phase_id, quest_items, &mut errors);
+    // transitions 검증
+    for (i, t) in def.transitions.iter().enumerate() {
+        if !def.phases.contains_key(&t.from) {
+            errors.push(format!("transitions[{}]: from '{}' 이 phases 에 없습니다", i, t.from));
         }
-        // auto_advance next_phase 및 런타임에서 실제 실행되는 액션만 허용
-        for auto in &phase.auto_advance {
-            if !def.phases.contains_key(&auto.next_phase) {
-                errors.push(format!(
-                    "페이즈 '{}': auto_advance next_phase '{}' 이 없습니다",
-                    phase_id, auto.next_phase
-                ));
-            }
-            for action in &auto.actions {
-                if !is_auto_advance_action_supported(action) {
+        if !def.phases.contains_key(&t.to) {
+            errors.push(format!("transitions[{}]: to '{}' 이 phases 에 없습니다", i, t.to));
+        }
+        // Auto trigger 는 일부 액션만 허용
+        if t.trigger == TriggerKind::Auto {
+            for action in &t.actions {
+                if !is_auto_action_supported(action) {
                     errors.push(format!(
-                        "페이즈 '{}': auto_advance actions 에서 지원하지 않는 액션 {:?}",
-                        phase_id, action
+                        "transitions[{}] (Auto, from '{}'): 지원하지 않는 액션 {:?}",
+                        i, t.from, action
                     ));
                 }
-                collect_action_errors(action, &def.phases, phase_id, quest_items, &mut errors);
             }
+        }
+        // 액션 내 아이템 ID 검증
+        for action in &t.actions {
+            collect_action_errors(action, &t.from, quest_items, &mut errors);
         }
     }
 
@@ -457,36 +455,24 @@ pub fn validate_quest_def(def: &QuestDef, quest_items: &crate::modules::item::Qu
 
 fn collect_action_errors(
     action: &QuestAction,
-    phases: &HashMap<String, QuestPhaseDef>,
     phase_id: &str,
     quest_items: &crate::modules::item::QuestItemRegistry,
     errors: &mut Vec<String>,
 ) {
     match action {
-        QuestAction::AdvancePhase(next) => {
-            if !phases.contains_key(next) {
-                errors.push(format!(
-                    "페이즈 '{}': AdvancePhase('{}') 이 없습니다", phase_id, next
-                ));
-            }
-        }
-        QuestAction::GiveItem(id) | QuestAction::GiveItems { item: id, .. } | QuestAction::RemoveItem(id) | QuestAction::DespawnWorldItem(id) => {
+        QuestAction::GiveItem(id) | QuestAction::GiveItems { item: id, .. }
+        | QuestAction::RemoveItem(id) | QuestAction::DespawnWorldItem(id) => {
             if item_id_to_kind(id, quest_items).is_none() {
                 errors.push(format!(
-                    "페이즈 '{}': item_id '{}' 를 인식할 수 없습니다", phase_id, id
+                    "phase '{}': item_id '{}' 를 인식할 수 없습니다", phase_id, id
                 ));
-            }
-        }
-        QuestAction::Branch { if_true, if_false, .. } => {
-            for a in if_true.iter().chain(if_false.iter()) {
-                collect_action_errors(a, phases, phase_id, quest_items, errors);
             }
         }
         _ => {}
     }
 }
 
-fn is_auto_advance_action_supported(action: &QuestAction) -> bool {
+fn is_auto_action_supported(action: &QuestAction) -> bool {
     matches!(
         action,
         QuestAction::DespawnWorldItem(_)
@@ -524,14 +510,15 @@ fn check_auto_advance(
             Some(p) => p.clone(),
             None => continue,
         };
-        let phase_def = match quest_def.phases.get(&current) {
-            Some(p) => p,
-            None => continue,
-        };
-        for auto in &phase_def.auto_advance {
-            if eval_condition(&auto.condition, &inventory, &world, &state, &quest_items) {
-                advances.push((quest_id.clone(), auto.next_phase.clone(), auto.actions.clone()));
-                break; // 첫 번째 충족 조건만 사용
+        // 현재 phase 에서 시작하는 Auto 트리거 transition 순서대로 평가, 첫 매칭만 실행
+        for t in &quest_def.transitions {
+            if t.from != current || t.trigger != TriggerKind::Auto { continue; }
+            let condition_met = t.when.as_ref()
+                .map(|c| eval_condition(c, &inventory, &world, &state, &quest_items))
+                .unwrap_or(true);
+            if condition_met {
+                advances.push((quest_id.clone(), t.to.clone(), t.actions.clone()));
+                break;
             }
         }
     }
@@ -539,7 +526,7 @@ fn check_auto_advance(
     for (quest_id, next_phase, actions) in advances {
         info!("퀘스트 [{}] 자동 전진: {}", quest_id, next_phase);
         state.set_phase(&quest_id, &next_phase);
-        // auto_advance 전용 인라인 실행 (DespawnWorldItem, RemoveItem, SetFlag 지원)
+        // Auto trigger 허용 액션만 실행 (DespawnWorldItem, RemoveItem, SetFlag)
         for action in &actions {
             match action {
                 QuestAction::DespawnWorldItem(item_id) => {
@@ -553,7 +540,7 @@ fn check_auto_advance(
                 QuestAction::SetFlag { flag, value } => {
                     state.set_flag(flag, value);
                 }
-                _ => {} // on_interact 전용 액션(OpenPortal, KillNpc 등)은 auto_advance에서 미지원
+                _ => {} // Interact 전용 액션(OpenPortal, KillNpc 등)은 Auto trigger 에서 미지원
             }
         }
     }
@@ -567,7 +554,6 @@ pub fn execute_actions(
     state: &mut QuestState,
     inventory: &mut PlayerInventory,
     log: &mut EventWriter<crate::modules::ui::LogMessage>,
-    world: &crate::modules::zone::WorldState,
     kill_npc: &mut EventWriter<KillNpcEvent>,
     open_portal: &mut EventWriter<SpawnQuestPortalEvent>,
     close_portal: &mut EventWriter<CloseQuestPortalEvent>,
@@ -576,10 +562,6 @@ pub fn execute_actions(
 ) {
     for action in actions {
         match action {
-            QuestAction::AdvancePhase(phase) => {
-                state.set_phase(quest_id, phase);
-                info!("퀘스트 [{}] 단계 전진: {}", quest_id, phase);
-            }
             QuestAction::GiveItem(item_id) => {
                 if let Some(kind) = item_id_to_kind(item_id, quest_items) {
                     inventory.items.push(InventoryItem { kind });
@@ -646,14 +628,6 @@ pub fn execute_actions(
             QuestAction::DespawnWorldItem(item_id) => {
                 despawn_item.send(DespawnWorldItemEvent(item_id.clone()));
                 info!("월드 아이템 제거: {}", item_id);
-            }
-            QuestAction::Branch { condition, if_true, if_false } => {
-                let branch = if eval_condition(condition, inventory, world, state, quest_items) {
-                    if_true.as_slice()
-                } else {
-                    if_false.as_slice()
-                };
-                execute_actions(branch, quest_id, state, inventory, log, world, kill_npc, open_portal, close_portal, despawn_item, quest_items);
             }
         }
     }
@@ -817,22 +791,34 @@ mod tests {
                 let mut m = HashMap::new();
                 m.insert("not_started".into(), QuestPhaseDef {
                     dialog: vec!["대화".into()],
-                    on_interact: vec![QuestAction::AdvancePhase("active".into())],
-                    auto_advance: vec![],
                     objective: None,
                 });
                 m.insert("active".into(), QuestPhaseDef {
                     dialog: vec!["아직".into()],
-                    on_interact: vec![],
-                    auto_advance: vec![AutoAdvance {
-                        condition: QuestCondition::HasItem("eternal_gem".into()),
-                        next_phase: "ready".into(),
-                        actions: vec![],
-                    }],
                     objective: Some("영원의 보석을 찾아라".into()),
+                });
+                m.insert("ready".into(), QuestPhaseDef {
+                    dialog: vec!["보석을 가져왔군!".into()],
+                    objective: None,
                 });
                 m
             },
+            transitions: vec![
+                QuestTransition {
+                    from: "not_started".into(),
+                    trigger: TriggerKind::Interact,
+                    when: None,
+                    actions: vec![],
+                    to: "active".into(),
+                },
+                QuestTransition {
+                    from: "active".into(),
+                    trigger: TriggerKind::Auto,
+                    when: Some(QuestCondition::HasItem("eternal_gem".into())),
+                    actions: vec![],
+                    to: "ready".into(),
+                },
+            ],
             spawns: vec![],
             spawn_chance: 1.0,
         };
@@ -972,87 +958,83 @@ mod tests {
     #[test]
     fn auto_advance_priority_first_match_wins() {
         // gathering 단계 재현: dragon_scale + ancient_scroll 있으면 1순위 both_ready
-        let mut state = QuestState::default();
-        state.set_phase("test_q", "gathering");
-        let phase = QuestPhaseDef {
-            dialog: vec![],
-            on_interact: vec![],
-            auto_advance: vec![
-                AutoAdvance {
-                    condition: QuestCondition::And(vec![
-                        QuestCondition::HasItem("dragon_scale".into()),
-                        QuestCondition::HasItem("ancient_scroll".into()),
-                    ]),
-                    next_phase: "both_ready".into(),
-                    actions: vec![],
-                },
-                AutoAdvance {
-                    condition: QuestCondition::HasItem("dragon_scale".into()),
-                    next_phase: "has_scale_hint".into(),
-                    actions: vec![],
-                },
-            ],
-            objective: None,
-        };
+        let state = QuestState::default();
+        let transitions = vec![
+            QuestTransition {
+                from: "gathering".into(),
+                trigger: TriggerKind::Auto,
+                when: Some(QuestCondition::And(vec![
+                    QuestCondition::HasItem("dragon_scale".into()),
+                    QuestCondition::HasItem("ancient_scroll".into()),
+                ])),
+                actions: vec![],
+                to: "both_ready".into(),
+            },
+            QuestTransition {
+                from: "gathering".into(),
+                trigger: TriggerKind::Auto,
+                when: Some(QuestCondition::HasItem("dragon_scale".into())),
+                actions: vec![],
+                to: "has_scale_hint".into(),
+            },
+        ];
         let world = make_world();
         let inv_both = make_inventory_with(&["dragon_scale", "ancient_scroll"]);
-        let matched: Option<String> = phase.auto_advance.iter()
-            .find(|a| eval_condition(&a.condition, &inv_both, &world, &state, qi()))
-            .map(|a| a.next_phase.clone());
+        let matched = transitions.iter()
+            .filter(|t| t.from == "gathering" && t.trigger == TriggerKind::Auto)
+            .find(|t| t.when.as_ref().map(|c| eval_condition(c, &inv_both, &world, &state, qi())).unwrap_or(true))
+            .map(|t| t.to.clone());
         assert_eq!(matched.as_deref(), Some("both_ready"), "둘 다 있으면 1순위가 선택돼야 한다");
 
         let inv_scale = make_inventory_with(&["dragon_scale"]);
-        let matched2: Option<String> = phase.auto_advance.iter()
-            .find(|a| eval_condition(&a.condition, &inv_scale, &world, &state, qi()))
-            .map(|a| a.next_phase.clone());
+        let matched2 = transitions.iter()
+            .filter(|t| t.from == "gathering" && t.trigger == TriggerKind::Auto)
+            .find(|t| t.when.as_ref().map(|c| eval_condition(c, &inv_scale, &world, &state, qi())).unwrap_or(true))
+            .map(|t| t.to.clone());
         assert_eq!(matched2.as_deref(), Some("has_scale_hint"), "용비늘만 있으면 2순위가 선택돼야 한다");
     }
 
     #[test]
-    fn branch_action_selects_correct_path() {
-        let mut state = QuestState::default();
-        state.set_phase("test_q", "ready");
-        let mut inv = make_inventory_with(&["dragon_scale", "ancient_scroll"]);
+    fn ordered_interact_transitions_first_match_wins() {
+        // both_ready 단계: 두 재료 있으면 1순위 normal_done, 없으면 fallback gathering
+        let state = QuestState::default();
+        let inv = make_inventory_with(&["dragon_scale", "ancient_scroll"]);
         let world = make_world();
-        let mut log_msgs: Vec<String> = Vec::new();
+        let transitions = vec![
+            QuestTransition {
+                from: "both_ready".into(),
+                trigger: TriggerKind::Interact,
+                when: Some(QuestCondition::And(vec![
+                    QuestCondition::HasItem("dragon_scale".into()),
+                    QuestCondition::HasItem("ancient_scroll".into()),
+                ])),
+                actions: vec![
+                    QuestAction::RemoveItem("dragon_scale".into()),
+                    QuestAction::RemoveItem("ancient_scroll".into()),
+                    QuestAction::Log("정통 결말".into()),
+                ],
+                to: "normal_done".into(),
+            },
+            QuestTransition {
+                from: "both_ready".into(),
+                trigger: TriggerKind::Interact,
+                when: None,
+                actions: vec![QuestAction::Log("재료 부족".into())],
+                to: "gathering".into(),
+            },
+        ];
+        let matched = transitions.iter()
+            .filter(|t| t.from == "both_ready" && t.trigger == TriggerKind::Interact)
+            .find(|t| t.when.as_ref().map(|c| eval_condition(c, &inv, &world, &state, qi())).unwrap_or(true));
+        assert!(matched.is_some());
+        assert_eq!(matched.unwrap().to, "normal_done", "두 재료 있으면 1순위가 선택돼야 한다");
 
-        // Branch: dragon_scale + ancient_scroll 있으면 if_true
-        let action = QuestAction::Branch {
-            condition: Box::new(QuestCondition::And(vec![
-                QuestCondition::HasItem("dragon_scale".into()),
-                QuestCondition::HasItem("ancient_scroll".into()),
-            ])),
-            if_true: vec![
-                QuestAction::RemoveItem("dragon_scale".into()),
-                QuestAction::RemoveItem("ancient_scroll".into()),
-                QuestAction::Log("정통 결말".into()),
-                QuestAction::AdvancePhase("normal_done".into()),
-            ],
-            if_false: vec![
-                QuestAction::Log("재료 부족".into()),
-            ],
-        };
-
-        // EventWriter 없이 내부 로직만 재현
-        if let QuestAction::Branch { condition, if_true, if_false } = &action {
-            let branch = if eval_condition(condition, &inv, &world, &state, qi()) { if_true } else { if_false };
-            for a in branch {
-                match a {
-                    QuestAction::RemoveItem(id) => {
-                        if let Some(kind) = item_id_to_kind(id, qi()) {
-                            inv.items.retain(|i| i.kind != kind);
-                        }
-                    }
-                    QuestAction::Log(msg) => log_msgs.push(msg.clone()),
-                    QuestAction::AdvancePhase(p) => state.set_phase("test_q", p),
-                    _ => {}
-                }
-            }
-        }
-
-        assert_eq!(state.current_phase("test_q"), Some("normal_done"));
-        assert!(log_msgs.contains(&"정통 결말".to_string()));
-        assert!(!inv.items.iter().any(|i| matches!(i.kind, ItemKind::QuestItem(qk) if qk.0 == "dragon_scale")));
+        let empty_inv = PlayerInventory::default();
+        let matched2 = transitions.iter()
+            .filter(|t| t.from == "both_ready" && t.trigger == TriggerKind::Interact)
+            .find(|t| t.when.as_ref().map(|c| eval_condition(c, &empty_inv, &world, &state, qi())).unwrap_or(true));
+        assert!(matched2.is_some());
+        assert_eq!(matched2.unwrap().to, "gathering", "재료 없으면 unconditional fallback이 선택돼야 한다");
     }
 
     #[test]
@@ -1103,29 +1085,24 @@ mod tests {
     }
 
     #[test]
-    fn auto_advance_actions_field_defaults_to_empty() {
+    fn transition_actions_field_defaults_to_empty() {
         let def: QuestDef = ron::de::from_str(r#"
+            #![enable(implicit_some)]
             QuestDef(
                 id: "test",
                 title: "test",
                 giver_npc: "npc",
                 initial_phase: "start",
                 phases: {
-                    "start": QuestPhaseDef(
-                        dialog: [],
-                        auto_advance: [
-                            AutoAdvance(
-                                condition: HasItem("eternal_gem"),
-                                next_phase: "done",
-                            ),
-                        ],
-                    ),
+                    "start": QuestPhaseDef(dialog: []),
                     "done": QuestPhaseDef(dialog: []),
                 },
+                transitions: [
+                    Transition(from: "start", trigger: Auto, when: HasItem("eternal_gem"), to: "done"),
+                ],
             )
         "#).expect("RON 파싱 성공해야 한다");
-        let phase = def.phases.get("start").unwrap();
-        assert!(phase.auto_advance[0].actions.is_empty(), "actions 미지정 시 빈 vec이어야 한다");
+        assert!(def.transitions[0].actions.is_empty(), "actions 미지정 시 빈 vec이어야 한다");
     }
 
     #[test]
@@ -1133,69 +1110,74 @@ mod tests {
         let def: QuestDef = ron::de::from_str(r#"
             QuestDef(
                 id: "test", title: "test", giver_npc: "npc", initial_phase: "p1",
-                phases: { "p1": QuestPhaseDef(dialog: [], on_interact: [
-                    ClosePortal("d_rank_dungeon"),
-                ]) },
+                phases: {
+                    "p1": QuestPhaseDef(dialog: []),
+                    "p2": QuestPhaseDef(dialog: []),
+                },
+                transitions: [
+                    Transition(from: "p1", trigger: Interact, actions: [ClosePortal("d_rank_dungeon")], to: "p2"),
+                ],
             )
         "#).expect("RON 파싱 성공");
-        let actions = &def.phases.get("p1").unwrap().on_interact;
+        let actions = &def.transitions[0].actions;
         assert!(matches!(&actions[0], QuestAction::ClosePortal(z) if z == "d_rank_dungeon"));
     }
 
     #[test]
-    fn auto_advance_actions_parsed_from_ron() {
+    fn auto_transition_actions_parsed_from_ron() {
         let def: QuestDef = ron::de::from_str(r#"
+            #![enable(implicit_some)]
             QuestDef(
                 id: "test",
                 title: "test",
                 giver_npc: "npc",
                 initial_phase: "start",
                 phases: {
-                    "start": QuestPhaseDef(
-                        dialog: [],
-                        auto_advance: [
-                            AutoAdvance(
-                                condition: HasItem("prologue_greatsword"),
-                                next_phase: "done",
-                                actions: [
-                                    DespawnWorldItem("prologue_daggers"),
-                                    DespawnWorldItem("prologue_bowtorch"),
-                                ],
-                            ),
-                        ],
-                    ),
+                    "start": QuestPhaseDef(dialog: []),
                     "done": QuestPhaseDef(dialog: []),
                 },
+                transitions: [
+                    Transition(
+                        from: "start",
+                        trigger: Auto,
+                        when: HasItem("prologue_greatsword"),
+                        actions: [
+                            DespawnWorldItem("prologue_daggers"),
+                            DespawnWorldItem("prologue_bowtorch"),
+                        ],
+                        to: "done",
+                    ),
+                ],
             )
         "#).expect("RON 파싱 성공해야 한다");
-        let phase = def.phases.get("start").unwrap();
-        let actions = &phase.auto_advance[0].actions;
+        let actions = &def.transitions[0].actions;
         assert_eq!(actions.len(), 2);
         assert!(matches!(&actions[0], QuestAction::DespawnWorldItem(id) if id == "prologue_daggers"));
         assert!(matches!(&actions[1], QuestAction::DespawnWorldItem(id) if id == "prologue_bowtorch"));
     }
 
     #[test]
-    fn validate_rejects_unsupported_auto_advance_action() {
+    fn validate_rejects_unsupported_auto_transition_action() {
         let def: QuestDef = ron::de::from_str(r#"
+            #![enable(implicit_some)]
             QuestDef(
                 id: "test",
                 title: "test",
                 giver_npc: "npc",
                 initial_phase: "start",
                 phases: {
-                    "start": QuestPhaseDef(
-                        dialog: [],
-                        auto_advance: [
-                            AutoAdvance(
-                                condition: HasFlag("ready"),
-                                next_phase: "done",
-                                actions: [OpenPortal(zone: "rift", generator: "bsp")],
-                            ),
-                        ],
-                    ),
+                    "start": QuestPhaseDef(dialog: []),
                     "done": QuestPhaseDef(dialog: []),
                 },
+                transitions: [
+                    Transition(
+                        from: "start",
+                        trigger: Auto,
+                        when: HasFlag("ready"),
+                        actions: [OpenPortal(zone: "rift", generator: "bsp")],
+                        to: "done",
+                    ),
+                ],
             )
         "#).expect("RON 파싱 성공해야 한다");
         let errors = validate_quest_def(&def, qi());
@@ -1373,16 +1355,20 @@ mod tests {
     }
 
     #[test]
-    fn check_action_item_ids_recurses_into_branches() {
-        let _ = qi();
-        let action = QuestAction::Branch {
-            condition: Box::new(QuestCondition::HasFlag("test".into())),
-            if_true: vec![QuestAction::GiveItem("invalid_item_id".into())],
-            if_false: vec![],
-        };
-        let mut errors = Vec::new();
-        check_action_item_ids(&action, "q", "p", qi(), &mut errors);
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("invalid_item_id"));
+    fn validate_rejects_unknown_item_in_transition_action() {
+        let def: QuestDef = ron::de::from_str(r#"
+            QuestDef(
+                id: "test", title: "test", giver_npc: "npc", initial_phase: "start",
+                phases: {
+                    "start": QuestPhaseDef(dialog: []),
+                    "done": QuestPhaseDef(dialog: []),
+                },
+                transitions: [
+                    Transition(from: "start", trigger: Interact, actions: [GiveItem("invalid_item_id")], to: "done"),
+                ],
+            )
+        "#).expect("RON 파싱 성공해야 한다");
+        let errors = validate_quest_def(&def, qi());
+        assert!(errors.iter().any(|e| e.contains("invalid_item_id")));
     }
 }

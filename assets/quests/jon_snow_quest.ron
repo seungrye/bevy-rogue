@@ -1,3 +1,5 @@
+#![enable(implicit_some)]
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  장벽 너머의 그림자 — 존 스노우 루트
 //
@@ -30,13 +32,6 @@ QuestDef(
                 "어딘가에서 온 것 같은데, 아직 우리 형제인지 모르겠어.",
                 "검은 망토를 입고 오면 이야기하자.",
             ],
-            on_interact: [],
-            auto_advance: [
-                AutoAdvance(
-                    condition: FlagIs(flag: "character", value: "jon_snow"),
-                    next_phase: "beyond_wall",
-                ),
-            ],
             objective: None,
         ),
 
@@ -48,8 +43,6 @@ QuestDef(
                 "모르몬트 올드 베어가 직접 이끈다. 나도 가. 무섭지만... 같이 가는 거잖아.",
                 "고스트가 이미 앞서 가고 있어. 그 녀석 코가 우리보다 훨씬 믿을 만해.",
             ],
-            on_interact: [AdvancePhase("fist_of_firstmen")],
-            auto_advance: [],
             objective: Some("샘웰에게 원정 브리핑을 들어라."),
         ),
 
@@ -61,12 +54,6 @@ QuestDef(
                 "존, 저기... 고스트가 왜 저러지? 뭔가 냄새를 맡고 있어.",
                 "어둠 속에서 뭔가 움직이고 있어. 너무 조용해. 나쁜 징조야.",
             ],
-            on_interact: [
-                Log("밤이 됐다. 별도 없었다."),
-                Log("그리고 그들이 왔다."),
-                AdvancePhase("wights_attack"),
-            ],
-            auto_advance: [],
             objective: Some("최초인의 요새를 살펴라. 고스트의 행동을 주시해야 한다."),
         ),
 
@@ -77,14 +64,6 @@ QuestDef(
                 "횃불로 태울 수 있어! 하지만 너무 많아. 포위당했어!",
                 "존, 고스트한테 연결해봐. 고스트가 밖에 있잖아. 그 녀석 눈으로 봐야 해.",
             ],
-            on_interact: [
-                Log("【고스트 시야】 눈을 감았다. 고스트와 연결됐다."),
-                Log("하얀 늑대의 눈으로 요새 외곽을 내려봤다. 와이트 수백이 에워싸고 있었다."),
-                Log("북쪽 사면... 그곳만 얇았다. 그리고 그 너머에 무언가 빛나는 것이 있었다."),
-                SetFlag(flag: "ghost_scout_done", value: "true"),
-                AdvancePhase("dragonglass_search"),
-            ],
-            auto_advance: [],
             objective: Some("고스트의 시야로 포위망이 얇은 곳을 찾아라."),
         ),
 
@@ -94,13 +73,6 @@ QuestDef(
                 "북쪽 사면이 얇아. 그쪽으로 빠져나가면서 뭔가 빛나는 걸 봤어.",
                 "드래곤스톤... 여기에 있었던 거야. 선조들이 묻어두었나봐.",
                 "빨리 찾아. 드래곤스톤 화살촉이 있으면 와이트들을 멈출 수 있어. 진짜야.",
-            ],
-            on_interact: [],
-            auto_advance: [
-                AutoAdvance(
-                    condition: HasItem("dragonglass_arrows"),
-                    next_phase: "escape_route",
-                ),
             ],
             objective: Some("북쪽 사면에서 드래곤스톤 화살촉을 찾아라. 죽은 레인저의 메모도 확인하라."),
         ),
@@ -112,14 +84,6 @@ QuestDef(
                 "드래곤스톤 화살촉으로 앞을 막는 놈들을 쏴. 그러면 나머지가 잠깐 멈춰.",
                 "살아서 장벽으로 돌아가야 해. 이 정보를 가져가야 해. 화이트 워커가 군대를 이끌고 있다는 것을.",
             ],
-            on_interact: [
-                Log("【협공】 고스트가 선두 와이트를 넘어뜨렸다. 순간적인 공백이 생겼다."),
-                Log("드래곤스톤 화살촉이 와이트의 가슴에 박혔다. 그것은 단순히 쓰러지지 않았다 — 부서졌다."),
-                Log("【백스테브】 고스트가 주의를 끄는 사이 단검이 뒤에서 급소를 찔렀다. 두 번째, 세 번째."),
-                Log("북쪽 포위망이 열렸다. 일행이 달리기 시작했다."),
-                AdvancePhase("rangers_message"),
-            ],
-            auto_advance: [],
             objective: Some("드래곤스톤 화살촉과 고스트의 협공으로 포위망을 뚫어라."),
         ),
 
@@ -129,13 +93,6 @@ QuestDef(
                 "살았어... 살았어, 존!",
                 "저기, 저기 눈 속에 묻혀있는 거 봐. 검은 망토야.",
                 "죽은 레인저야. 하지만 손에 뭔가 쥐고 있어. 메모 같은데.",
-            ],
-            on_interact: [],
-            auto_advance: [
-                AutoAdvance(
-                    condition: HasItem("rangers_note"),
-                    next_phase: "ygritte_encounter",
-                ),
             ],
             objective: Some("눈 속에 묻힌 죽은 레인저의 메모를 회수하라."),
         ),
@@ -148,7 +105,54 @@ QuestDef(
                 "야인 여자야. 빨간 머리. 활을 겨누고 있어. 이미 우리를 포위했어.",
                 "\"검은 까마귀.\" 그녀가 말했다. \"움직이면 쏜다.\"",
             ],
-            on_interact: [
+            objective: Some("이그리트와 대치하라. 싸우지 말고 그녀의 말을 들어라."),
+        ),
+
+        "wildling_world": QuestPhaseDef(
+            dialog: [],
+            objective: Some("나는 존 스노우다. 야인의 세계로 잠입한다. 만스 레이더를 만나야 한다."),
+        ),
+    },
+
+    transitions: [
+        // 각성(character=jon_snow) 시 잠든 퀘스트가 깨어난다
+        Transition(from: "dormant", trigger: Auto,
+            when: FlagIs(flag: "character", value: "jon_snow"),
+            to: "beyond_wall"),
+        // 원정 브리핑 → 최초인의 요새
+        Transition(from: "beyond_wall", trigger: Interact, to: "fist_of_firstmen"),
+        // 요새 정찰 → 와이트 습격
+        Transition(from: "fist_of_firstmen", trigger: Interact,
+            actions: [
+                Log("밤이 됐다. 별도 없었다."),
+                Log("그리고 그들이 왔다."),
+            ],
+            to: "wights_attack"),
+        // 고스트 시야 정찰 → 드래곤스톤 수색
+        Transition(from: "wights_attack", trigger: Interact,
+            actions: [
+                Log("【고스트 시야】 눈을 감았다. 고스트와 연결됐다."),
+                Log("하얀 늑대의 눈으로 요새 외곽을 내려봤다. 와이트 수백이 에워싸고 있었다."),
+                Log("북쪽 사면... 그곳만 얇았다. 그리고 그 너머에 무언가 빛나는 것이 있었다."),
+                SetFlag(flag: "ghost_scout_done", value: "true"),
+            ],
+            to: "dragonglass_search"),
+        // 드래곤스톤 화살촉 획득 → 탈출 개척
+        Transition(from: "dragonglass_search", trigger: Auto, when: HasItem("dragonglass_arrows"), to: "escape_route"),
+        // 포위망 돌파 → 죽은 레인저 발견
+        Transition(from: "escape_route", trigger: Interact,
+            actions: [
+                Log("【협공】 고스트가 선두 와이트를 넘어뜨렸다. 순간적인 공백이 생겼다."),
+                Log("드래곤스톤 화살촉이 와이트의 가슴에 박혔다. 그것은 단순히 쓰러지지 않았다 — 부서졌다."),
+                Log("【백스테브】 고스트가 주의를 끄는 사이 단검이 뒤에서 급소를 찔렀다. 두 번째, 세 번째."),
+                Log("북쪽 포위망이 열렸다. 일행이 달리기 시작했다."),
+            ],
+            to: "rangers_message"),
+        // 레인저의 메모 회수 → 이그리트 조우
+        Transition(from: "rangers_message", trigger: Auto, when: HasItem("rangers_note"), to: "ygritte_encounter"),
+        // 이그리트와 대치 → 야인의 세계 잠입
+        Transition(from: "ygritte_encounter", trigger: Interact,
+            actions: [
                 Log("존 스노우는 손을 들었다. 단검을 땅에 내려놨다."),
                 Log("빨간 머리 야인이 다가왔다. 경계하는 눈, 하지만 호기심도 있었다."),
                 Log("\"너희 까마귀들은 항상 혼자 와서 죽어.\" 그녀가 말했다. \"넌 고스트도 있군.\""),
@@ -156,19 +160,9 @@ QuestDef(
                 Log("\"이그리트.\" 그녀가 자신을 소개했다. \"따라와. 만스가 너희 이야기를 들을 거야.\""),
                 GiveItem("ygritte_bow"),
                 SetFlag(flag: "wildling_contact", value: "ygritte"),
-                AdvancePhase("wildling_world"),
             ],
-            auto_advance: [],
-            objective: Some("이그리트와 대치하라. 싸우지 말고 그녀의 말을 들어라."),
-        ),
-
-        "wildling_world": QuestPhaseDef(
-            dialog: [],
-            on_interact: [],
-            auto_advance: [],
-            objective: Some("나는 존 스노우다. 야인의 세계로 잠입한다. 만스 레이더를 만나야 한다."),
-        ),
-    },
+            to: "wildling_world"),
+    ],
 
     spawns: [
         QuestSpawn(phase: "dragonglass_search", item: "dragonglass_arrows", zone: Dungeon(2)),

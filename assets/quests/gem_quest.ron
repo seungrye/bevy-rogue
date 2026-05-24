@@ -1,3 +1,5 @@
+#![enable(implicit_some)]
+
 QuestDef(
     id: "gem_quest",
     title: "잃어버린 보석",
@@ -12,19 +14,10 @@ QuestDef(
                 "던전 2층에 '영원의 보석'이 숨겨져 있다오.",
                 "그것을 찾아 내게 가져다 주겠소?",
             ],
-            on_interact: [AdvancePhase("active")],
-            auto_advance: [],
             objective: Some("장로의 부탁을 들어주기로 했다."),
         ),
         "active": QuestPhaseDef(
             dialog: ["아직 보석을 찾지 못했나요? 던전 2층을 살펴보시오."],
-            on_interact: [],
-            auto_advance: [
-                AutoAdvance(
-                    condition: HasItem("eternal_gem"),
-                    next_phase: "ready",
-                ),
-            ],
             objective: Some("숲을 지나 던전 2층에서 영원의 보석을 찾아라."),
         ),
         "ready": QuestPhaseDef(
@@ -32,21 +25,24 @@ QuestDef(
                 "오! 보석을 찾아왔군요!",
                 "약속대로 '현자의 돌'을 드리겠소.",
             ],
-            on_interact: [
-                RemoveItem("eternal_gem"),
-                GiveItem("philosophers_stone"),
-                AdvancePhase("done"),
-            ],
-            auto_advance: [],
             objective: Some("마을 장로에게 영원의 보석을 가져다 주어라."),
         ),
         "done": QuestPhaseDef(
             dialog: ["덕분에 마을이 평화로워졌소. 감사합니다."],
-            on_interact: [],
-            auto_advance: [],
             objective: Some("퀘스트 완료!"),
         ),
     },
+
+    transitions: [
+        // 장로와 첫 대화 → 의뢰 수락
+        Transition(from: "not_started", trigger: Interact, to: "active"),
+        // 보석을 얻으면 자동으로 반납 준비 단계로
+        Transition(from: "active", trigger: Auto, when: HasItem("eternal_gem"), to: "ready"),
+        // 장로에게 보석 반납 → 현자의 돌 수령
+        Transition(from: "ready", trigger: Interact,
+            actions: [RemoveItem("eternal_gem"), GiveItem("philosophers_stone")],
+            to: "done"),
+    ],
 
     spawns: [
         QuestSpawn(

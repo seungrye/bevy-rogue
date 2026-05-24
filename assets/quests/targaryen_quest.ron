@@ -1,3 +1,5 @@
+#![enable(implicit_some)]
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  재생의 불꽃 — 대너리스 타르가르옌 루트
 //
@@ -12,7 +14,7 @@
 //
 //  ─── 루트 조건 ────────────────────────────────────────────────────────────
 //    dormant → (FlagIs character=targaryen) → exile_begins
-// ════════════════════════════════════════════════════════════════════════��══
+// ═══════════════════════════════════════════════════════════════════════════
 
 QuestDef(
     id: "targaryen_quest",
@@ -29,13 +31,6 @@ QuestDef(
                 "...칼리시. 아직 때가 아닌 것 같습니다.",
                 "당신이 누구인지, 당신 안에 무엇이 있는지 먼저 확인해야 합니다.",
             ],
-            on_interact: [],
-            auto_advance: [
-                AutoAdvance(
-                    condition: FlagIs(flag: "character", value: "targaryen"),
-                    next_phase: "exile_begins",
-                ),
-            ],
             objective: None,
         ),
 
@@ -48,8 +43,6 @@ QuestDef(
                 "드래곤 알에서 세 마리가 부화했습니다. 드로곤, 레이걸, 비세리온. 하지만 붉은 사막을 건너야 해요.",
                 "살아남은 자들만이 콰스에 닿을 수 있습니다. 준비가 됐나요?",
             ],
-            on_interact: [AdvancePhase("desert_crossing")],
-            auto_advance: [],
             objective: Some("조라의 말을 모두 들어라. 붉은 사막 횡단이 기다린다."),
         ),
 
@@ -60,13 +53,6 @@ QuestDef(
                 "하지만 드래곤들이 살아있는 한, 당신은 죽지 않을 거예요.",
                 "앞으로 나아가세요. 칼리시. 사막은 약한 자에게만 끝없이 이어집니다.",
             ],
-            on_interact: [
-                Log("【사막 횡단】 불볕 아래 사흘을 걸었다. 한낮 기온이 살인적이었다."),
-                Log("드로곤이 앞서 날며 길을 인도했다. 타지 않는 몸이 오히려 뜨거움을 즐기고 있었다."),
-                Log("사막 끝에서 콰스의 탑들이 신기루처럼 솟아올랐다."),
-                AdvancePhase("qarth_arrival"),
-            ],
-            auto_advance: [],
             objective: Some("붉은 사막을 건너 콰스로 향하라."),
         ),
 
@@ -78,8 +64,6 @@ QuestDef(
                 "칼리시, 드래곤들이 없어졌습니다. 자고 일어났더니... 불멸의 집 마법사 파로의 짓입니다.",
                 "그의 탑은 안이 밖보다 넓고, 환영이 현실처럼 보이도록 짜여있어요. 하지만 당신은 불을 두려워하지 않잖아요.",
             ],
-            on_interact: [AdvancePhase("tower_assault")],
-            auto_advance: [],
             objective: Some("드래곤들이 납치됐다. 마법사 파로의 불멸의 집으로 향하라."),
         ),
 
@@ -89,13 +73,6 @@ QuestDef(
                 "탑 입구에는 열쇠가 숨겨져 있습니다. 폐허 어딘가에서 찾을 수 있을 거예요.",
                 "내부에 들어가면 환영이 당신을 공격할 거예요. 횃불로 그것들을 태워버리세요.",
                 "활로 그림자들을 쏘세요. 본체가 드러나면 드래곤들이 반응할 거예요.",
-            ],
-            on_interact: [],
-            auto_advance: [
-                AutoAdvance(
-                    condition: HasItem("warlock_key"),
-                    next_phase: "tower_inside",
-                ),
             ],
             objective: Some("불멸의 집 열쇠를 찾아라."),
         ),
@@ -107,15 +84,6 @@ QuestDef(
                 "무엇이 진짜인지 의심하세요. 이 탑 안에서는 눈이 아니라 열기로 느껴야 합니다.",
                 "드래곤들의 소리가 들리나요? 위층에서 울고 있어요.",
             ],
-            on_interact: [
-                Log("【탑 침투】 문을 열자 복도가 무한히 이어졌다. 왼쪽으로 갔더니 다시 입구였다."),
-                Log("횃불을 벽에 가까이 대자 환영이 흔들렸다. 불꽃이 닿는 곳에서 현실이 드러났다."),
-                Log("【사격】 천장에서 마법 분신 둘이 내려왔다. 첫 번째 화살이 왼쪽을 꿰뚫었다."),
-                Log("분신이 연기처럼 흩어지며 진짜 파로가 드러났다. 작고 창백한 남자."),
-                Log("\"용의 어머니... 여기까지 오다니.\" 파로가 웃었다. \"드래곤들이 기다리고 있지.\""),
-                AdvancePhase("dragons_freed"),
-            ],
-            auto_advance: [],
             objective: Some("탑 안의 환영을 횃불로 파훼하고 마법 분신을 활로 쏘아 본체를 드러내라."),
         ),
 
@@ -126,18 +94,6 @@ QuestDef(
                 "파로가 마지막 환영으로 도망치려 했다. 하지만 당신 안에서 무언가 타올랐다.",
                 "단어가 머릿속에서 울렸다. 베스타리의 언어로. 아버지에게서 흘러온 피 속에 새겨진 말.",
             ],
-            on_interact: [
-                Log("대너리스는 드래곤들을 향해 손을 뻗었다."),
-                GiveItem("dragon_chain"),
-                Log("족쇄들이 녹아내렸다. 드로곤, 레이걸, 비세리온이 날갯짓을 시작했다."),
-                Log("파로가 뒤로 물러섰다. \"안 돼, 이럴 수가—\""),
-                Log("【드라카리스】 \"드라카리스.\""),
-                Log("불꽃이 방 전체를 덮었다. 뜨거웠지만 대너리스는 서 있었다. 타지 않았다."),
-                Log("파로는 재가 됐다. 드래곤들이 어머니의 어깨 위로 내려앉았다."),
-                SetFlag(flag: "dracarys_learned", value: "true"),
-                AdvancePhase("qarth_plunder"),
-            ],
-            auto_advance: [],
             objective: Some("드래곤들의 족쇄를 풀어라. 드라카리스를 발동할 때가 됐다."),
         ),
 
@@ -148,25 +104,68 @@ QuestDef(
                 "창고에 황금이 있었어요. 그리고 항구에 배들이 있었고요.",
                 "칼리시, 에소스가 기다리고 있습니다. 항로도를 가져왔어요. 어디로 가겠어요?",
             ],
-            on_interact: [
-                Log("황금이 배에 실렸다. 드래곤들이 돛대 위에서 날개를 폈다."),
-                Log("조라가 항로도를 펼쳤다. 서쪽으로 슬라버스 베이, 동쪽으로 볼란티스."),
-                Log("대너리스 타르가르옌은 에소스 대륙을 바라봤다. 그리고 처음으로 웃었다."),
-                GiveItem("essos_sail_map"),
-                SetFlag(flag: "essos_route", value: "chosen"),
-                AdvancePhase("conquest_begin"),
-            ],
-            auto_advance: [],
             objective: Some("조라에게서 항로도를 받고 출항 준비를 마쳐라."),
         ),
 
         "conquest_begin": QuestPhaseDef(
             dialog: [],
-            on_interact: [],
-            auto_advance: [],
             objective: Some("나는 대너리스 타르가르옌이다. 에소스를 횡단하며 군대를 모은다."),
         ),
     },
+
+    transitions: [
+        // 각성(character=targaryen) 시 잠든 퀘스트가 깨어난다
+        Transition(from: "dormant", trigger: Auto,
+            when: FlagIs(flag: "character", value: "targaryen"),
+            to: "exile_begins"),
+        // 조라의 브리핑 → 사막 횡단
+        Transition(from: "exile_begins", trigger: Interact, to: "desert_crossing"),
+        // 사막 횡단 → 콰스 도착
+        Transition(from: "desert_crossing", trigger: Interact,
+            actions: [
+                Log("【사막 횡단】 불볕 아래 사흘을 걸었다. 한낮 기온이 살인적이었다."),
+                Log("드로곤이 앞서 날며 길을 인도했다. 타지 않는 몸이 오히려 뜨거움을 즐기고 있었다."),
+                Log("사막 끝에서 콰스의 탑들이 신기루처럼 솟아올랐다."),
+            ],
+            to: "qarth_arrival"),
+        // 콰스 도착 → 탑 침투 준비
+        Transition(from: "qarth_arrival", trigger: Interact, to: "tower_assault"),
+        // 불멸의 집 열쇠 획득 → 탑 내부 진입
+        Transition(from: "tower_assault", trigger: Auto, when: HasItem("warlock_key"), to: "tower_inside"),
+        // 탑 내부 환영 파훼 → 드래곤 해방
+        Transition(from: "tower_inside", trigger: Interact,
+            actions: [
+                Log("【탑 침투】 문을 열자 복도가 무한히 이어졌다. 왼쪽으로 갔더니 다시 입구였다."),
+                Log("횃불을 벽에 가까이 대자 환영이 흔들렸다. 불꽃이 닿는 곳에서 현실이 드러났다."),
+                Log("【사격】 천장에서 마법 분신 둘이 내려왔다. 첫 번째 화살이 왼쪽을 꿰뚫었다."),
+                Log("분신이 연기처럼 흩어지며 진짜 파로가 드러났다. 작고 창백한 남자."),
+                Log("\"용의 어머니... 여기까지 오다니.\" 파로가 웃었다. \"드래곤들이 기다리고 있지.\""),
+            ],
+            to: "dragons_freed"),
+        // 드라카리스 발동 → 콰스 약탈
+        Transition(from: "dragons_freed", trigger: Interact,
+            actions: [
+                Log("대너리스는 드래곤들을 향해 손을 뻗었다."),
+                GiveItem("dragon_chain"),
+                Log("족쇄들이 녹아내렸다. 드로곤, 레이걸, 비세리온이 날갯짓을 시작했다."),
+                Log("파로가 뒤로 물러섰다. \"안 돼, 이럴 수가—\""),
+                Log("【드라카리스】 \"드라카리스.\""),
+                Log("불꽃이 방 전체를 덮었다. 뜨거웠지만 대너리스는 서 있었다. 타지 않았다."),
+                Log("파로는 재가 됐다. 드래곤들이 어머니의 어깨 위로 내려앉았다."),
+                SetFlag(flag: "dracarys_learned", value: "true"),
+            ],
+            to: "qarth_plunder"),
+        // 항로도 수령 → 정복 시작
+        Transition(from: "qarth_plunder", trigger: Interact,
+            actions: [
+                Log("황금이 배에 실렸다. 드래곤들이 돛대 위에서 날개를 폈다."),
+                Log("조라가 항로도를 펼쳤다. 서쪽으로 슬라버스 베이, 동쪽으로 볼란티스."),
+                Log("대너리스 타르가르옌은 에소스 대륙을 바라봤다. 그리고 처음으로 웃었다."),
+                GiveItem("essos_sail_map"),
+                SetFlag(flag: "essos_route", value: "chosen"),
+            ],
+            to: "conquest_begin"),
+    ],
 
     spawns: [
         QuestSpawn(phase: "tower_assault", item: "warlock_key", zone: Dungeon(1)),

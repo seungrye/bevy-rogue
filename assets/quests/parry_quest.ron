@@ -1,3 +1,5 @@
+#![enable(implicit_some)]
+
 QuestDef(
     id: "parry_quest",
     title: "파리 고수와 기계 공학자",
@@ -15,13 +17,6 @@ QuestDef(
                 "D급 던전에 강철 갑주 보스가 출현했다는 정보가 있소.",
                 "그 보스를 이 파암추로 쓰러뜨려 주면 정식 채용하겠습니다.",
             ],
-            on_interact: [
-                GiveItem("prototype_hammer"),
-                Log("그레체: 던전으로 가는 길을 열어드리겠습니다."),
-                OpenPortal(zone: "d_rank_dungeon", generator: "bsp"),
-                AdvancePhase("dungeon_ready"),
-            ],
-            auto_advance: [],
             objective: Some("그레체의 이야기를 끝까지 들어라."),
         ),
 
@@ -30,13 +25,6 @@ QuestDef(
                 "아직 던전에서 돌아오지 않았군요.",
                 "강철 갑주 보스는 마법이 통하지 않습니다. 파암추의 파일뱅커를 잘 활용하세요.",
                 "타이밍이 생명입니다. 패리 후 반격이 핵심이에요.",
-            ],
-            on_interact: [],
-            auto_advance: [
-                AutoAdvance(
-                    condition: HasItem("steel_core"),
-                    next_phase: "boss_defeated",
-                ),
             ],
             objective: Some("D급 던전에서 강철 갑주 심장을 획득하라."),
         ),
@@ -48,15 +36,6 @@ QuestDef(
                 "게다가 저 파일뱅커 타이밍. 완벽한 패리 후 반격이었어요.",
                 "당신, 제 전속 테스트 파일럿이 되어 주세요. 이건 거절을 허락하지 않겠습니다.",
             ],
-            on_interact: [
-                RemoveItem("prototype_hammer"),
-                RemoveItem("steel_core"),
-                GiveItem("pilot_badge"),
-                Log("그레체의 전속 테스트 파일럿이 되었다. 새로운 여정이 시작된다."),
-                ClosePortal("d_rank_dungeon"),
-                AdvancePhase("done"),
-            ],
-            auto_advance: [],
             objective: Some("그레체에게 결과를 보고하라."),
         ),
 
@@ -65,11 +44,32 @@ QuestDef(
                 "신대중공의 최신 무기들이 기다리고 있습니다.",
                 "다음 시제품은 더 위험하니까, 각오해 두세요.",
             ],
-            on_interact: [],
-            auto_advance: [],
             objective: Some("전속 테스트 파일럿으로 채용 완료."),
         ),
     },
+
+    transitions: [
+        // 이야기를 끝까지 들으면 파암추 지급 + 던전 포탈 개방
+        Transition(from: "not_started", trigger: Interact,
+            actions: [
+                GiveItem("prototype_hammer"),
+                Log("그레체: 던전으로 가는 길을 열어드리겠습니다."),
+                OpenPortal(zone: "d_rank_dungeon", generator: "bsp"),
+            ],
+            to: "dungeon_ready"),
+        // 강철 갑주 심장을 얻으면 자동으로 보고 단계로
+        Transition(from: "dungeon_ready", trigger: Auto, when: HasItem("steel_core"), to: "boss_defeated"),
+        // 결과 보고 → 보상 + 포탈 정리
+        Transition(from: "boss_defeated", trigger: Interact,
+            actions: [
+                RemoveItem("prototype_hammer"),
+                RemoveItem("steel_core"),
+                GiveItem("pilot_badge"),
+                Log("그레체의 전속 테스트 파일럿이 되었다. 새로운 여정이 시작된다."),
+                ClosePortal("d_rank_dungeon"),
+            ],
+            to: "done"),
+    ],
 
     spawns: [
         QuestSpawn(

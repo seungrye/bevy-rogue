@@ -11,7 +11,7 @@ use crate::modules::{
     },
     player::{Player, MovingTo, MoveQueue, PlayerSystemSet, LERP_SPEED},
     ui::{LogMessage, minimap::{DiscoveredMarkers, MarkerKind}},
-    quest::{QuestRegistry, QuestState, QuestSystemSet, KillNpcEvent, DespawnWorldItemEvent, execute_actions, QuestDef, QuestAction, eval_condition},
+    quest::{QuestRegistry, QuestState, QuestSystemSet, KillNpcEvent, DespawnWorldItemEvent, execute_actions, QuestDef, eval_condition},
     item::{PlayerInventory},
     zone::{WorldState, SpawnQuestPortalEvent},
     combat::Speed,
@@ -170,7 +170,7 @@ fn handle_kill_npc(
 /// 마커 표시 조건 (모두 만족):
 /// - villager 의 quest_id 가 등록된 퀘스트
 /// - quest 가 시작됨 (state.phases 에 있고, initial_phase 가 아님)
-/// - quest 가 terminal 페이즈가 아님 (on_interact / auto_advance 가 비어있지 않음)
+/// - quest 가 terminal 페이즈가 아님 (현재 phase 에서 시작하는 transition 이 있음)
 /// - NPC 가 player FOV 안에 있음
 ///
 /// 위 중 하나라도 깨지면 해당 NPC 의 마커를 제거한다 (시작 전 / 종료 후 / 다른 zone).
@@ -392,7 +392,7 @@ fn show_quest_dialog(
 
     // state.phases 에 등록되지 않은 첫 만남이면 initial_phase 의 dialog 만
     // 보여준다 — 인사말 한 줄에 패널 등록되는 어색함 방지. 마지막 대화 줄
-    // + Interact 시점에 한꺼번에 set_phase + on_interact 실행.
+    // + Interact 시점에 한꺼번에 set_phase + transition 실행.
     let phase_id = state.phases.get(quest_id)
         .cloned()
         .unwrap_or_else(|| quest_def.initial_phase.clone());
@@ -400,7 +400,6 @@ fn show_quest_dialog(
     let Some(phase) = quest_def.phases.get(&phase_id) else { return };
 
     let dialog = phase.dialog.clone();
-    let actions = phase.on_interact.clone();
     let npc_name = quest_def.giver_npc.clone();
 
     let idx = villager.quest_dialogue_idx.min(dialog.len().saturating_sub(1));
@@ -408,14 +407,28 @@ fn show_quest_dialog(
         log.send(LogMessage(format!("{}: {}", npc_name, line)));
     }
 
-    // 마지막 줄에서 액션 실행
+    // 마지막 줄에서 Interact transition 평가
     if !dialog.is_empty() && idx + 1 >= dialog.len() {
         villager.quest_dialogue_idx = 0;
         // 첫 phase 등록 (아직 안 됐으면) — 마지막 대화 후 Interact 시점.
         if !state.phases.contains_key(quest_id) {
             state.set_phase(quest_id, &quest_def.initial_phase.clone());
         }
-        execute_actions(&actions, quest_id, state, inventory, log, world, kill_npc, open_portal, close_portal, despawn_item, quest_items);
+        // 현재 phase 에서 시작하는 Interact transition 을 순서대로 평가, 첫 매칭만 실행
+        let matched = quest_def.transitions.iter()
+            .find(|t| t.from == phase_id
+                && t.trigger == crate::modules::quest::TriggerKind::Interact
+                && t.when.as_ref()
+                    .map(|c| eval_condition(c, inventory, world, state, quest_items))
+                    .unwrap_or(true))
+            .cloned();
+        if let Some(t) = matched {
+            execute_actions(&t.actions, quest_id, state, inventory, log, kill_npc, open_portal, close_portal, despawn_item, quest_items);
+            if t.to != phase_id {
+                state.set_phase(quest_id, &t.to);
+                info!("퀘스트 [{}] 단계 전진: {} → {}", quest_id, phase_id, t.to);
+            }
+        }
     } else {
         villager.quest_dialogue_idx = idx + 1;
     }
@@ -544,23 +557,22 @@ fn update_villager_glyph(
     }
 }
 
-/// on_interact 액션 트리 안에 AdvancePhase 가 있는지 재귀 탐색한다.
-/// Branch 의 if_true/if_false 를 포함해 모든 경로를 탐색한다.
-/// Log·SetFlag 등 순수 힌트 액션만 있는 페이즈에서는 false 를 반환한다.
-pub fn on_interact_can_advance(actions: &[QuestAction]) -> bool {
-    actions.iter().any(|a| match a {
-        QuestAction::AdvancePhase(_) => true,
-        QuestAction::Branch { if_true, if_false, .. } =>
-            on_interact_can_advance(if_true) || on_interact_can_advance(if_false),
-        _ => false,
-    })
+/// 해당 phase 에서 시작하는 Interact transition 중 실제로 다른 phase 로
+/// 넘어가는(to != from) 규칙이 하나라도 있으면 true.
+/// Log 전용 self-loop transition (to == from) 만 있는 경우는 false 를 반환한다.
+pub fn interact_can_advance(def: &QuestDef, phase_id: &str) -> bool {
+    def.transitions.iter().any(|t|
+        t.from == phase_id
+            && t.trigger == crate::modules::quest::TriggerKind::Interact
+            && t.to != phase_id
+    )
 }
 
 /// 퀘스트 NPC 의 현재 퀘스트 상태에 따라 표시 글리프와 색상을 결정한다
 ///
 /// - `?` (노란색) : 퀘스트 있음 — initial_phase 이거나 아직 수락 전
 /// - `?` (초록색) : 퀘스트 수락, 다음 페이즈로 넘어갈 수 없는 상태 (아이템 수집·이동 중)
-/// - `!` (초록색) : 다음 페이즈로 넘어갈 수 있는 상태 (on_interact 가 AdvancePhase 포함 또는 auto_advance 조건 충족)
+/// - `!` (초록색) : 다음 페이즈로 넘어갈 수 있는 상태 (Interact transition 으로 전진 가능 또는 Auto transition 조건 충족)
 /// - `v` (base_color) : 터미널 (퀘스트 완료)
 pub fn quest_npc_glyph(
     quest_id: &str,
@@ -593,20 +605,26 @@ pub fn quest_npc_glyph(
     let Some(pid) = phase_id else {
         return ("?", yellow);
     };
-    let Some(phase) = def.phases.get(pid) else {
+    if !def.phases.contains_key(pid) {
         return ("v", base_color);
-    };
+    }
 
-    // on_interact 에 AdvancePhase 가 있으면 NPC 에게 말을 걸어 다음 페이즈로 넘어갈 수 있다.
-    // Log·Branch(Log) 등 순수 힌트 액션만 있는 경우는 진행 불가로 간주한다.
-    if on_interact_can_advance(&phase.on_interact) {
+    // Interact transition 으로 다른 phase 로 넘어갈 수 있으면 NPC 에게 말을 걸어 전진 가능.
+    // Log 전용 self-loop transition 만 있는 경우는 진행 불가로 간주한다.
+    if interact_can_advance(def, pid) {
         return ("!", green);
     }
 
-    // auto_advance 조건이 현재 충족됐으면 다음 페이즈로 넘어갈 수 있다
-    let can_advance = phase.auto_advance.iter()
-        .any(|aa| eval_condition(&aa.condition, inventory, world, state, quest_items));
-    if can_advance {
+    // Auto transition 조건이 현재 충족됐으면 곧 자동 전진 → '!'
+    let auto_ready = def.transitions.iter().any(|t|
+        t.from == *pid
+            && t.trigger == crate::modules::quest::TriggerKind::Auto
+            && t.to != *pid
+            && t.when.as_ref()
+                .map(|c| eval_condition(c, inventory, world, state, quest_items))
+                .unwrap_or(true)
+    );
+    if auto_ready {
         return ("!", green);
     }
 
@@ -614,10 +632,11 @@ pub fn quest_npc_glyph(
     ("?", green)
 }
 
+/// 현재 phase 에서 시작하는 transition 이 하나도 없으면 터미널(퀘스트 완료)이다.
 fn is_quest_terminal_def(def: &QuestDef, state: &QuestState, quest_id: &str) -> bool {
     let Some(phase_id) = state.phases.get(quest_id) else { return false };
-    let Some(phase) = def.phases.get(phase_id) else { return false };
-    phase.on_interact.is_empty() && phase.auto_advance.is_empty()
+    if !def.phases.contains_key(phase_id) { return false; }
+    !def.transitions.iter().any(|t| t.from == *phase_id)
 }
 
 #[cfg(test)]
@@ -878,48 +897,54 @@ mod tests {
         }
     }
 
-    use crate::modules::quest::{QuestDef, QuestPhaseDef, QuestState, QuestAction, AutoAdvance, QuestCondition};
+    use crate::modules::quest::{QuestDef, QuestPhaseDef, QuestState, QuestTransition, TriggerKind, QuestCondition};
     use crate::modules::item::{PlayerInventory, InventoryItem, ItemKind, QuestItemKind};
     use crate::modules::zone::WorldState;
     use std::collections::HashMap as HM;
 
+    fn phase(dialog: &[&str]) -> QuestPhaseDef {
+        QuestPhaseDef {
+            dialog: dialog.iter().map(|s| s.to_string()).collect(),
+            objective: None,
+        }
+    }
+
     fn make_test_quest_def() -> QuestDef {
-        // not_started → active → ready → done
+        // not_started → active(Auto: eternal_gem) → ready → done
         let mut phases = HM::new();
-        phases.insert("not_started".to_string(), QuestPhaseDef {
-            dialog: vec![],
-            on_interact: vec![QuestAction::AdvancePhase("active".to_string())],
-            auto_advance: vec![],
-            objective: None,
-        });
-        phases.insert("active".to_string(), QuestPhaseDef {
-            dialog: vec![],
-            on_interact: vec![],
-            auto_advance: vec![AutoAdvance {
-                condition: QuestCondition::HasItem("eternal_gem".to_string()),
-                next_phase: "ready".to_string(),
-                actions: vec![],
-            }],
-            objective: None,
-        });
-        phases.insert("ready".to_string(), QuestPhaseDef {
-            dialog: vec![],
-            on_interact: vec![QuestAction::AdvancePhase("done".to_string())],
-            auto_advance: vec![],
-            objective: None,
-        });
-        phases.insert("done".to_string(), QuestPhaseDef {
-            dialog: vec![],
-            on_interact: vec![],
-            auto_advance: vec![],
-            objective: None,
-        });
+        phases.insert("not_started".to_string(), phase(&[]));
+        phases.insert("active".to_string(), phase(&[]));
+        phases.insert("ready".to_string(), phase(&[]));
+        phases.insert("done".to_string(), phase(&[]));
         QuestDef {
             id: "test_quest".to_string(),
             title: "테스트".to_string(),
             giver_npc: "장로".to_string(),
             initial_phase: "not_started".to_string(),
             phases,
+            transitions: vec![
+                QuestTransition {
+                    from: "not_started".to_string(),
+                    trigger: TriggerKind::Interact,
+                    when: None,
+                    actions: vec![],
+                    to: "active".to_string(),
+                },
+                QuestTransition {
+                    from: "active".to_string(),
+                    trigger: TriggerKind::Auto,
+                    when: Some(QuestCondition::HasItem("eternal_gem".to_string())),
+                    actions: vec![],
+                    to: "ready".to_string(),
+                },
+                QuestTransition {
+                    from: "ready".to_string(),
+                    trigger: TriggerKind::Interact,
+                    when: None,
+                    actions: vec![],
+                    to: "done".to_string(),
+                },
+            ],
             spawns: vec![],
             spawn_chance: 1.0,
         }
@@ -983,14 +1008,14 @@ mod tests {
     }
 
     #[test]
-    fn glyph_green_exclamation_when_has_on_interact() {
+    fn glyph_green_exclamation_when_has_interact_transition() {
         let def = make_test_quest_def();
         let state = make_state_at("ready");
         let inv = empty_inventory();
         let world = default_world();
         let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, Color::WHITE, qi());
         assert_eq!(glyph, "!");
-        assert_eq!(color, Color::rgb(0.3, 1.0, 0.6), "on_interact 있음 = 초록 !");
+        assert_eq!(color, Color::rgb(0.3, 1.0, 0.6), "Interact transition 있음 = 초록 !");
     }
 
     #[test]
@@ -1005,66 +1030,85 @@ mod tests {
         assert_eq!(color, base, "터미널 = v + 기본 색상");
     }
 
-    // on_interact_can_advance 단위 테스트
+    // interact_can_advance 단위 테스트
     #[test]
-    fn can_advance_true_for_direct_advance_phase() {
-        let actions = vec![QuestAction::AdvancePhase("next".to_string())];
-        assert!(on_interact_can_advance(&actions));
+    fn interact_can_advance_true_for_interact_transition() {
+        let def = make_test_quest_def();
+        // ready phase 에는 Interact transition (ready → done) 이 있다
+        assert!(interact_can_advance(&def, "ready"));
     }
 
     #[test]
-    fn can_advance_false_for_log_only() {
-        let actions = vec![QuestAction::Log("힌트".to_string())];
-        assert!(!on_interact_can_advance(&actions));
+    fn interact_can_advance_false_for_auto_only_phase() {
+        let def = make_test_quest_def();
+        // active phase 에는 Auto transition 만 있고 Interact transition 은 없다
+        assert!(!interact_can_advance(&def, "active"));
     }
 
     #[test]
-    fn can_advance_true_for_branch_containing_advance() {
-        let actions = vec![QuestAction::Branch {
-            condition: Box::new(QuestCondition::HasItem("x".to_string())),
-            if_true: vec![QuestAction::AdvancePhase("next".to_string())],
-            if_false: vec![QuestAction::Log("없음".to_string())],
-        }];
-        assert!(on_interact_can_advance(&actions));
-    }
-
-    #[test]
-    fn can_advance_false_for_branch_with_log_only() {
-        let actions = vec![QuestAction::Branch {
-            condition: Box::new(QuestCondition::HasItem("x".to_string())),
-            if_true: vec![QuestAction::Log("a".to_string())],
-            if_false: vec![QuestAction::Log("b".to_string())],
-        }];
-        assert!(!on_interact_can_advance(&actions));
-    }
-
-    #[test]
-    fn glyph_green_question_when_on_interact_is_hint_only() {
-        // gathering 페이즈처럼 on_interact 에 Log/Branch(Log) 만 있는 경우 초록 '?'
-        // initial_phase 는 "not_started", 현재 페이즈는 "gathering" — initial 분기에 걸리지 않음
+    fn interact_can_advance_false_for_self_loop_only() {
+        // gathering phase 에 Log 전용 self-loop Interact transition (to == from) 만 있는 경우
         let mut phases = HM::new();
-        phases.insert("not_started".to_string(), QuestPhaseDef {
-            dialog: vec![],
-            on_interact: vec![QuestAction::AdvancePhase("gathering".to_string())],
-            auto_advance: vec![],
-            objective: None,
-        });
-        phases.insert("gathering".to_string(), QuestPhaseDef {
-            dialog: vec!["아직 재료가 부족하네.".to_string()],
-            on_interact: vec![QuestAction::Branch {
-                condition: Box::new(QuestCondition::HasItem("dragon_scale".to_string())),
-                if_true: vec![QuestAction::Log("있군".to_string())],
-                if_false: vec![QuestAction::Log("없군".to_string())],
-            }],
-            auto_advance: vec![],
-            objective: None,
-        });
+        phases.insert("not_started".to_string(), phase(&[]));
+        phases.insert("gathering".to_string(), phase(&["아직 재료가 부족하네."]));
         let def = QuestDef {
             id: "alchemist_quest".to_string(),
             title: "연금술사".to_string(),
             giver_npc: "연금술사".to_string(),
             initial_phase: "not_started".to_string(),
             phases,
+            transitions: vec![
+                QuestTransition {
+                    from: "not_started".to_string(),
+                    trigger: TriggerKind::Interact,
+                    when: None,
+                    actions: vec![],
+                    to: "gathering".to_string(),
+                },
+                // self-loop 힌트 transition: to == from
+                QuestTransition {
+                    from: "gathering".to_string(),
+                    trigger: TriggerKind::Interact,
+                    when: None,
+                    actions: vec![crate::modules::quest::QuestAction::Log("아직 멀었네".to_string())],
+                    to: "gathering".to_string(),
+                },
+            ],
+            spawns: vec![],
+            spawn_chance: 1.0,
+        };
+        assert!(!interact_can_advance(&def, "gathering"), "self-loop transition 은 전진으로 보지 않는다");
+    }
+
+    #[test]
+    fn glyph_green_question_when_interact_is_self_loop_hint_only() {
+        // gathering 페이즈에 Log 전용 self-loop transition 만 있으면 초록 '?'
+        // initial_phase 는 "not_started", 현재 페이즈는 "gathering" — initial 분기에 걸리지 않음
+        let mut phases = HM::new();
+        phases.insert("not_started".to_string(), phase(&[]));
+        phases.insert("gathering".to_string(), phase(&["아직 재료가 부족하네."]));
+        let def = QuestDef {
+            id: "alchemist_quest".to_string(),
+            title: "연금술사".to_string(),
+            giver_npc: "연금술사".to_string(),
+            initial_phase: "not_started".to_string(),
+            phases,
+            transitions: vec![
+                QuestTransition {
+                    from: "not_started".to_string(),
+                    trigger: TriggerKind::Interact,
+                    when: None,
+                    actions: vec![],
+                    to: "gathering".to_string(),
+                },
+                QuestTransition {
+                    from: "gathering".to_string(),
+                    trigger: TriggerKind::Interact,
+                    when: None,
+                    actions: vec![crate::modules::quest::QuestAction::Log("아직 멀었네".to_string())],
+                    to: "gathering".to_string(),
+                },
+            ],
             spawns: vec![],
             spawn_chance: 1.0,
         };
@@ -1073,7 +1117,7 @@ mod tests {
         let inv = empty_inventory();
         let world = default_world();
         let (glyph, color) = quest_npc_glyph("alchemist_quest", &def, &state, &inv, &world, Color::WHITE, qi());
-        assert_eq!(glyph, "?", "힌트만 있는 on_interact 는 '?' 여야 한다");
+        assert_eq!(glyph, "?", "self-loop 힌트만 있는 phase 는 '?' 여야 한다");
         assert_eq!(color, Color::rgb(0.3, 1.0, 0.6));
     }
 }

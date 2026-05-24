@@ -1,3 +1,5 @@
+#![enable(implicit_some)]
+
 // ═══════════════════════════════════════════════════════════════════════
 //  연금술사의 비전 — 비선형 분기 퀘스트
 //
@@ -11,10 +13,13 @@
 //    정통(normal_done)    : 용비늘 + 주문서
 //    실패(gathering)      : 재료 부족 → 다시 수집
 //
-//  auto_advance 우선순위:
+//  Auto transition 우선순위 (gathering):
 //    1순위 — And([dragon_scale, ancient_scroll]) → both_ready
 //    2순위 — HasItem(dragon_scale)               → has_scale_hint
 //    3순위 — HasItem(ancient_scroll)             → has_scroll_hint
+//
+//  참고: 옛 포맷의 중첩 Branch 는 순서형 transitions 로 평탄화됨.
+//    both_ready 의 전설/정통/실패 분기는 조건 우선순위 순서대로 나열한다.
 // ═══════════════════════════════════════════════════════════════════════
 QuestDef(
     id: "alchemist_quest",
@@ -35,48 +40,12 @@ QuestDef(
                 "물론 그게 전부일 필요는 없지... 현자의 돌이 있다면 이야기가 달라지지.",
                 "도와주겠나?",
             ],
-            on_interact: [
-                Branch(
-                    condition: Or([
-                        HasItem("health_potion"),
-                        PhaseIs(quest: "gem_quest", phase: "done"),
-                    ]),
-                    if_true: [Log("연금술사: 준비가 잘 되어있군! 잘 해낼 거야.")],
-                    if_false: [Log("연금술사: 위험한 던전이니 포션이라도 챙기게.")],
-                ),
-                AdvancePhase("gathering"),
-            ],
-            auto_advance: [],
             objective: Some("연금술사를 위해 재료를 수집하기로 했다."),
         ),
 
-        // ── 재료 수집 중 — 우선순위 auto_advance ─────────────────────────
+        // ── 재료 수집 중 ─────────────────────────────────────────────────
         "gathering": QuestPhaseDef(
             dialog: ["아직 재료가 부족하네. 던전을 탐험해 보게."],
-            on_interact: [
-                Branch(
-                    condition: Not(HasItem("dragon_scale")),
-                    if_true: [Log("연금술사: 용비늘은 던전 2층 깊숙이 있을 거야.")],
-                    if_false: [Log("연금술사: 용비늘은 있군. 이제 주문서만 남았어.")],
-                ),
-            ],
-            auto_advance: [
-                // 1순위: 둘 다 있으면 바로 both_ready
-                AutoAdvance(
-                    condition: And([HasItem("dragon_scale"), HasItem("ancient_scroll")]),
-                    next_phase: "both_ready",
-                ),
-                // 2순위: 용비늘만
-                AutoAdvance(
-                    condition: HasItem("dragon_scale"),
-                    next_phase: "has_scale_hint",
-                ),
-                // 3순위: 주문서만
-                AutoAdvance(
-                    condition: HasItem("ancient_scroll"),
-                    next_phase: "has_scroll_hint",
-                ),
-            ],
             objective: Some("용비늘(던전 2층)과 고대 주문서(던전 1층)를 수집하라."),
         ),
 
@@ -85,19 +54,6 @@ QuestDef(
             dialog: [
                 "용비늘을 가져왔군! 훌륭해.",
                 "이제 고대 주문서가 필요해 — 던전 1층 어딘가에 있을 거야.",
-            ],
-            on_interact: [
-                Branch(
-                    condition: Not(HasItem("ancient_scroll")),
-                    if_true: [Log("연금술사: 주문서가 없군. 던전 1층을 뒤져보게.")],
-                    if_false: [Log("연금술사: 주문서도 있군! 어서 가져오게.")],
-                ),
-            ],
-            auto_advance: [
-                AutoAdvance(
-                    condition: HasItem("ancient_scroll"),
-                    next_phase: "both_ready",
-                ),
             ],
             objective: Some("고대 주문서를 찾아라 (던전 1층)."),
         ),
@@ -108,19 +64,6 @@ QuestDef(
                 "주문서를 찾아왔군! 잘 했어.",
                 "이제 용비늘이 필요해 — 던전 2층 몬스터 가까이에 있을 거야.",
             ],
-            on_interact: [
-                Branch(
-                    condition: Not(HasItem("dragon_scale")),
-                    if_true: [Log("연금술사: 용비늘이 없군. 던전 2층 깊은 곳을 탐험해 보게.")],
-                    if_false: [Log("연금술사: 용비늘도 있군! 어서 가져오게.")],
-                ),
-            ],
-            auto_advance: [
-                AutoAdvance(
-                    condition: HasItem("dragon_scale"),
-                    next_phase: "both_ready",
-                ),
-            ],
             objective: Some("용비늘을 찾아라 (던전 2층)."),
         ),
 
@@ -130,53 +73,6 @@ QuestDef(
                 "오! 용비늘과 주문서가 모두 있군!",
                 "이제 실험을 시작할 수 있어. 어서 가져오게.",
             ],
-            on_interact: [
-                Branch(
-                    // 전설 경로 조건: 두 재료 + gem_quest 완료 + 현자의 돌 보유
-                    condition: And([
-                        HasItem("dragon_scale"),
-                        HasItem("ancient_scroll"),
-                        PhaseIs(quest: "gem_quest", phase: "done"),
-                        HasItem("philosophers_stone"),
-                    ]),
-                    if_true: [
-                        RemoveItem("dragon_scale"),
-                        RemoveItem("ancient_scroll"),
-                        RemoveItem("philosophers_stone"),
-                        GiveItem("bow"),
-                        GiveItem("health_potion"),
-                        Log("...용비늘의 힘, 주문서의 지혜, 현자의 돌의 정수가"),
-                        Log("하나로 합쳐져 전설의 포션이 완성됐다!"),
-                        Log("연금술사: 이것은... 내 평생의 연구가 결실을 맺었어!"),
-                        Log("연금술사: 활과 특제 물약을 받게. 이건 전설의 작품이야."),
-                        AdvancePhase("legendary_done"),
-                    ],
-                    if_false: [
-                        Branch(
-                            // 정통 경로 조건: 두 재료만 있으면 됨
-                            condition: And([
-                                HasItem("dragon_scale"),
-                                HasItem("ancient_scroll"),
-                            ]),
-                            if_true: [
-                                RemoveItem("dragon_scale"),
-                                RemoveItem("ancient_scroll"),
-                                GiveItem("spear"),
-                                Log("...용비늘과 주문서가 반응하며 강력한 포션이 완성됐다."),
-                                Log("연금술사: 현자의 돌까지 있었다면 더 훌륭했겠지만..."),
-                                Log("연금술사: 충분히 뛰어난 결과야. 이 창을 받게."),
-                                AdvancePhase("normal_done"),
-                            ],
-                            if_false: [
-                                // 재료가 사라진 엣지케이스 — 수집 단계로 복귀
-                                Log("연금술사: 어? 재료가 없어졌군... 다시 구해오게."),
-                                AdvancePhase("gathering"),
-                            ],
-                        ),
-                    ],
-                ),
-            ],
-            auto_advance: [],
             objective: Some("연금술사에게 재료를 전달하라."),
         ),
 
@@ -187,8 +83,6 @@ QuestDef(
                 "용비늘, 주문서, 현자의 돌... 세 가지 비전 재료의 조화.",
                 "이 활은 그 전설의 포션으로 강화된 거야. 잘 써주게나.",
             ],
-            on_interact: [],
-            auto_advance: [],
             objective: Some("[완료] 전설의 포션 완성! 활과 특제 물약을 받았다."),
         ),
 
@@ -199,11 +93,93 @@ QuestDef(
                 "현자의 돌까지 있었다면 전설이 됐을 텐데... 그래도 충분해.",
                 "다음번엔 세 가지 재료를 모두 모아서 도전해 보게나.",
             ],
-            on_interact: [],
-            auto_advance: [],
             objective: Some("[완료] 강력한 포션 완성! 창을 받았다."),
         ),
     },
+
+    transitions: [
+        // ── 의뢰 수락: 준비 상태에 따라 다른 인사말 (둘 다 gathering 으로) ──
+        Transition(from: "not_started", trigger: Interact,
+            when: Or([HasItem("health_potion"), PhaseIs(quest: "gem_quest", phase: "done")]),
+            actions: [Log("연금술사: 준비가 잘 되어있군! 잘 해낼 거야.")],
+            to: "gathering"),
+        Transition(from: "not_started", trigger: Interact,
+            actions: [Log("연금술사: 위험한 던전이니 포션이라도 챙기게.")],
+            to: "gathering"),
+
+        // ── 수집 중 Auto 우선순위 ──
+        Transition(from: "gathering", trigger: Auto,
+            when: And([HasItem("dragon_scale"), HasItem("ancient_scroll")]),
+            to: "both_ready"),
+        Transition(from: "gathering", trigger: Auto, when: HasItem("dragon_scale"), to: "has_scale_hint"),
+        Transition(from: "gathering", trigger: Auto, when: HasItem("ancient_scroll"), to: "has_scroll_hint"),
+        // 수집 중 대화 힌트 (self-loop)
+        Transition(from: "gathering", trigger: Interact,
+            when: Not(HasItem("dragon_scale")),
+            actions: [Log("연금술사: 용비늘은 던전 2층 깊숙이 있을 거야.")],
+            to: "gathering"),
+        Transition(from: "gathering", trigger: Interact,
+            actions: [Log("연금술사: 용비늘은 있군. 이제 주문서만 남았어.")],
+            to: "gathering"),
+
+        // ── 용비늘만 보유 ──
+        Transition(from: "has_scale_hint", trigger: Auto, when: HasItem("ancient_scroll"), to: "both_ready"),
+        Transition(from: "has_scale_hint", trigger: Interact,
+            when: Not(HasItem("ancient_scroll")),
+            actions: [Log("연금술사: 주문서가 없군. 던전 1층을 뒤져보게.")],
+            to: "has_scale_hint"),
+        Transition(from: "has_scale_hint", trigger: Interact,
+            actions: [Log("연금술사: 주문서도 있군! 어서 가져오게.")],
+            to: "has_scale_hint"),
+
+        // ── 주문서만 보유 ──
+        Transition(from: "has_scroll_hint", trigger: Auto, when: HasItem("dragon_scale"), to: "both_ready"),
+        Transition(from: "has_scroll_hint", trigger: Interact,
+            when: Not(HasItem("dragon_scale")),
+            actions: [Log("연금술사: 용비늘이 없군. 던전 2층 깊은 곳을 탐험해 보게.")],
+            to: "has_scroll_hint"),
+        Transition(from: "has_scroll_hint", trigger: Interact,
+            actions: [Log("연금술사: 용비늘도 있군! 어서 가져오게.")],
+            to: "has_scroll_hint"),
+
+        // ── 핵심 분기: 전설 > 정통 > 실패(fallback) ──
+        // ① 전설: 두 재료 + gem_quest 완료 + 현자의 돌
+        Transition(from: "both_ready", trigger: Interact,
+            when: And([
+                HasItem("dragon_scale"),
+                HasItem("ancient_scroll"),
+                PhaseIs(quest: "gem_quest", phase: "done"),
+                HasItem("philosophers_stone"),
+            ]),
+            actions: [
+                RemoveItem("dragon_scale"),
+                RemoveItem("ancient_scroll"),
+                RemoveItem("philosophers_stone"),
+                GiveItem("bow"),
+                GiveItem("health_potion"),
+                Log("...용비늘의 힘, 주문서의 지혜, 현자의 돌의 정수가"),
+                Log("하나로 합쳐져 전설의 포션이 완성됐다!"),
+                Log("연금술사: 이것은... 내 평생의 연구가 결실을 맺었어!"),
+                Log("연금술사: 활과 특제 물약을 받게. 이건 전설의 작품이야."),
+            ],
+            to: "legendary_done"),
+        // ② 정통: 두 재료만
+        Transition(from: "both_ready", trigger: Interact,
+            when: And([HasItem("dragon_scale"), HasItem("ancient_scroll")]),
+            actions: [
+                RemoveItem("dragon_scale"),
+                RemoveItem("ancient_scroll"),
+                GiveItem("spear"),
+                Log("...용비늘과 주문서가 반응하며 강력한 포션이 완성됐다."),
+                Log("연금술사: 현자의 돌까지 있었다면 더 훌륭했겠지만..."),
+                Log("연금술사: 충분히 뛰어난 결과야. 이 창을 받게."),
+            ],
+            to: "normal_done"),
+        // ③ 실패: 재료가 사라진 엣지케이스 → 수집 단계로 복귀 (unconditional fallback)
+        Transition(from: "both_ready", trigger: Interact,
+            actions: [Log("연금술사: 어? 재료가 없어졌군... 다시 구해오게.")],
+            to: "gathering"),
+    ],
 
     spawns: [
         QuestSpawn(

@@ -165,7 +165,7 @@ fn build_quest_sections(
         for line in quest_progress_hints(def, phase_id, state, inventory, quest_items) {
             s.push(ts(format!("    {}\n", line), f.clone(), progress_color));
         }
-        if !done && should_hint_giver_dialogue(def, phase) {
+        if !done && should_hint_giver_dialogue(def, phase_id) {
             let marker_hint = quest_giver_marker_hint(def, world, markers);
             s.push(ts(format!("    다음: {}와 대화{}\n", def.giver_npc, marker_hint), f.clone(), meta_color));
         }
@@ -188,9 +188,12 @@ fn quest_location_hints(
         push_unique_zone(&mut zones, &spawn.zone);
     }
 
-    if let Some(phase) = def.phases.get(phase_id) {
-        for auto in &phase.auto_advance {
-            collect_condition_zones(&auto.condition, &mut zones);
+    // 현재 phase 에서 시작하는 Auto transition 의 조건에서 존 힌트 추출
+    for t in &def.transitions {
+        if t.from == phase_id && t.trigger == crate::modules::quest::TriggerKind::Auto {
+            if let Some(cond) = &t.when {
+                collect_condition_zones(cond, &mut zones);
+            }
         }
     }
 
@@ -283,8 +286,11 @@ fn quest_giver_marker_hint(
 }
 
 /// 현재 phase가 퀘스트 제공자에게 돌아가야 하는 흐름인지 판단한다.
-fn should_hint_giver_dialogue(def: &QuestDef, phase: &crate::modules::quest::QuestPhaseDef) -> bool {
-    !phase.on_interact.is_empty() && def.giver_npc.trim().len() > 0
+/// 현재 phase 에서 시작하는 Interact transition 이 있으면 giver 와 대화하라는 힌트를 띄운다.
+fn should_hint_giver_dialogue(def: &QuestDef, phase_id: &str) -> bool {
+    !def.giver_npc.trim().is_empty()
+        && def.transitions.iter().any(|t|
+            t.from == phase_id && t.trigger == crate::modules::quest::TriggerKind::Interact)
 }
 
 #[cfg(test)]
@@ -293,35 +299,43 @@ mod tests {
     use std::collections::HashMap;
     use crate::modules::{
         item::{InventoryItem, QuestItemKind},
-        quest::{AutoAdvance, QuestAction, QuestPhaseDef},
+        quest::{QuestPhaseDef, QuestTransition, TriggerKind},
     };
+
+    fn phase(objective: &str) -> QuestPhaseDef {
+        QuestPhaseDef {
+            dialog: vec![],
+            objective: Some(objective.to_string()),
+        }
+    }
 
     fn make_registry_and_state(phase_id: &str) -> (QuestRegistry, QuestState) {
         let mut phases = HashMap::new();
-        phases.insert("active".to_string(), QuestPhaseDef {
-            dialog: vec![],
-            on_interact: vec![],
-            auto_advance: vec![],
-            objective: Some("보석을 찾아라".to_string()),
-        });
-        phases.insert("ready".to_string(), QuestPhaseDef {
-            dialog: vec![],
-            on_interact: vec![QuestAction::AdvancePhase("done".into())],
-            auto_advance: vec![],
-            objective: Some("보석을 장로에게 가져가라".to_string()),
-        });
-        phases.insert("done".to_string(), QuestPhaseDef {
-            dialog: vec![],
-            on_interact: vec![],
-            auto_advance: vec![],
-            objective: Some("완료!".to_string()),
-        });
+        phases.insert("active".to_string(), phase("보석을 찾아라"));
+        phases.insert("ready".to_string(), phase("보석을 장로에게 가져가라"));
+        phases.insert("done".to_string(), phase("완료!"));
         let def = QuestDef {
             id: "gem_quest".into(),
             title: "잃어버린 보석".into(),
             giver_npc: "장로".into(),
             initial_phase: "active".into(),
             phases,
+            transitions: vec![
+                QuestTransition {
+                    from: "active".into(),
+                    trigger: TriggerKind::Auto,
+                    when: Some(QuestCondition::HasItem("eternal_gem".into())),
+                    actions: vec![],
+                    to: "ready".into(),
+                },
+                QuestTransition {
+                    from: "ready".into(),
+                    trigger: TriggerKind::Interact,
+                    when: None,
+                    actions: vec![],
+                    to: "done".into(),
+                },
+            ],
             spawns: vec![QuestSpawn {
                 phase: "active".into(),
                 item: "eternal_gem".into(),
@@ -439,8 +453,6 @@ mod tests {
         let mut phases = HashMap::new();
         phases.insert("active".to_string(), QuestPhaseDef {
             dialog: vec![],
-            on_interact: vec![],
-            auto_advance: vec![],
             objective: None,
         });
         reg.quests.insert("q".into(), QuestDef {
@@ -449,6 +461,7 @@ mod tests {
             giver_npc: "npc".into(),
             initial_phase: "active".into(),
             phases,
+            transitions: vec![],
             spawns: vec![],
             spawn_chance: 1.0,
         });
@@ -474,30 +487,25 @@ mod tests {
     }
 
     #[test]
-    fn auto_advance_zone_conditions_become_location_hints() {
+    fn auto_transition_zone_conditions_become_location_hints() {
         let mut phases = HashMap::new();
-        phases.insert("travel".to_string(), QuestPhaseDef {
-            dialog: vec![],
-            on_interact: vec![],
-            auto_advance: vec![AutoAdvance {
-                condition: QuestCondition::InZone(ZoneId::Forest),
-                next_phase: "done".into(),
-                actions: vec![],
-            }],
-            objective: Some("숲으로 이동".into()),
-        });
-        phases.insert("done".to_string(), QuestPhaseDef {
-            dialog: vec![],
-            on_interact: vec![],
-            auto_advance: vec![],
-            objective: Some("완료".into()),
-        });
+        phases.insert("travel".to_string(), phase("숲으로 이동"));
+        phases.insert("done".to_string(), phase("완료"));
         let def = QuestDef {
             id: "travel".into(),
             title: "여행".into(),
             giver_npc: "가이드".into(),
             initial_phase: "travel".into(),
             phases,
+            transitions: vec![
+                QuestTransition {
+                    from: "travel".into(),
+                    trigger: TriggerKind::Auto,
+                    when: Some(QuestCondition::InZone(ZoneId::Forest)),
+                    actions: vec![],
+                    to: "done".into(),
+                },
+            ],
             spawns: vec![],
             spawn_chance: 1.0,
         };

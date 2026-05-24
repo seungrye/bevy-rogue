@@ -1,3 +1,5 @@
+#![enable(implicit_some)]
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  안개 속의 발자국 — 프롤로그 퀘스트
 //
@@ -5,25 +7,25 @@
 //
 //  ─── 플로우 ───────────────────────────────────────────────────────────────
 //    dormant
-//      └─[on_interact]──► weapon_hunt
+//      └─[Interact]──► weapon_hunt
 //    weapon_hunt  (무기 선택 아이템 3종 던전1 스폰)
-//      ├─[auto: 대검]────► soldier_test_sword
-//      ├─[auto: 단검]────► soldier_test_daggers
-//      └─[auto: 활+횃불]─► soldier_test_bowtorch
+//      ├─[Auto: 대검]────► soldier_test_sword
+//      ├─[Auto: 단검]────► soldier_test_daggers
+//      └─[Auto: 활+횃불]─► soldier_test_bowtorch
 //    soldier_test_* (병사가 선택을 '읽음' → 가치관 플래그 설정)
-//      └─[on_interact(마지막 줄)]──► crest_hunt
+//      └─[Interact]──► crest_hunt
 //    crest_hunt  (가문 문장 던전1 스폰)
-//      └─[auto: HasItem(family_crest)]──► awakening_ready
+//      └─[Auto: HasItem(family_crest)]──► awakening_ready
 //    awakening_ready
-//      └─[on_interact(마지막 줄)] Branch ─► stark_dawn | targaryen_dawn | nightswatch_dawn
+//      └─[Interact] 우선순위 ─► stark_dawn | targaryen_dawn | nightswatch_dawn
 //    stark_dawn / targaryen_dawn / nightswatch_dawn
-//      └─[on_interact(마지막 줄)]: 각성 보상 지급 + KillNpc + 엔드 페이즈
+//      └─[Interact]: 각성 보상 지급 + KillNpc + 엔드 페이즈
 //    stark_end / targaryen_end / nightswatch_end  (terminal)
 //
 //  ─── 각성 조건 ───────────────────────────────────────────────────────────
 //    스타크:     weapon="greatsword" AND values="honor"
 //    타르가르옌: weapon="bowtorch"   AND values="survival"
-//    나이트워치: 그 외 (단검, 또는 혼합 조합)
+//    나이트워치: 그 외 (단검, 또는 혼합 조합) — unconditional fallback
 //
 //  ─── 스폰 아이템 ─────────────────────────────────────────────────────────
 //    weapon_hunt 페이즈: 던전1에 대검·단검·활횃불 3종
@@ -46,8 +48,6 @@ QuestDef(
                 "나는 그저 부상당한 병사가 아니라오. 당신을 기다려 왔지.",
                 "저 폐허 속 무기 더미에서 어떤 것에 손이 가는지 봐야 하겠소. 그게 당신이 누구인지 알려줄 테니.",
             ],
-            on_interact: [AdvancePhase("weapon_hunt")],
-            auto_advance: [],
             objective: Some("부상당한 병사의 말을 들었다. 근처 폐허(던전)에서 무기를 찾아야 한다."),
         ),
 
@@ -56,34 +56,6 @@ QuestDef(
             dialog: [
                 "폐허 안 무기 더미를 찾아보시오. 당신의 손이 무엇을 원하는지 확인해야 하오.",
                 "서두르지 않아도 되오. 선택이 당신을 드러낼 테니.",
-            ],
-            on_interact: [],
-            auto_advance: [
-                AutoAdvance(
-                    condition: HasItem("prologue_greatsword"),
-                    next_phase: "soldier_test_sword",
-                    // 대검을 집는 순간 나머지 두 무기는 월드에서 사라진다
-                    actions: [
-                        DespawnWorldItem("prologue_daggers"),
-                        DespawnWorldItem("prologue_bowtorch"),
-                    ],
-                ),
-                AutoAdvance(
-                    condition: HasItem("prologue_daggers"),
-                    next_phase: "soldier_test_daggers",
-                    actions: [
-                        DespawnWorldItem("prologue_greatsword"),
-                        DespawnWorldItem("prologue_bowtorch"),
-                    ],
-                ),
-                AutoAdvance(
-                    condition: HasItem("prologue_bowtorch"),
-                    next_phase: "soldier_test_bowtorch",
-                    actions: [
-                        DespawnWorldItem("prologue_greatsword"),
-                        DespawnWorldItem("prologue_daggers"),
-                    ],
-                ),
             ],
             objective: Some("던전 폐허 안 무기 더미에서 무기를 집어라. 세 가지 중 하나를 선택하게 된다."),
         ),
@@ -95,12 +67,6 @@ QuestDef(
                 "그 폐허 어귀, 쓰러진 병사가 있었을 거요. 당신은 어떻게 했소?",
                 "...묻지 않아도 알겠소. 대검을 드는 자는 다가가오. 자비와 명예 — 그게 당신의 길이오.",
             ],
-            on_interact: [
-                SetFlag(flag: "weapon", value: "greatsword"),
-                SetFlag(flag: "values", value: "honor"),
-                AdvancePhase("crest_hunt"),
-            ],
-            auto_advance: [],
             objective: Some("병사에게 돌아가 이야기를 마저 들어라."),
         ),
 
@@ -111,12 +77,6 @@ QuestDef(
                 "그 폐허 어귀, 쓰러진 병사가 있었을 거요. 당신은 어떻게 했소?",
                 "...말하지 않아도 알겠소. 단검을 드는 자는 따져보오. 무엇을 얻어낼 수 있는지 — 실리야말로 살아남는 자의 덕목이지.",
             ],
-            on_interact: [
-                SetFlag(flag: "weapon", value: "daggers"),
-                SetFlag(flag: "values", value: "pragmatism"),
-                AdvancePhase("crest_hunt"),
-            ],
-            auto_advance: [],
             objective: Some("병사에게 돌아가 이야기를 마저 들어라."),
         ),
 
@@ -127,12 +87,6 @@ QuestDef(
                 "그 폐허 어귀, 쓰러진 병사가 있었을 거요. 당신은 어떻게 했소?",
                 "...알겠소. 활을 드는 자는 지나치오. 필요한 것만 챙기고. 생존이 전부일 때 자비는 사치라오.",
             ],
-            on_interact: [
-                SetFlag(flag: "weapon", value: "bowtorch"),
-                SetFlag(flag: "values", value: "survival"),
-                AdvancePhase("crest_hunt"),
-            ],
-            auto_advance: [],
             objective: Some("병사에게 돌아가 이야기를 마저 들어라."),
         ),
 
@@ -142,13 +96,6 @@ QuestDef(
                 "이제... 폐허 깊은 곳을 봐야 하오.",
                 "오래된 문장, 잊혀진 이름. 그것이 당신을 부를 것이오.",
                 "당신의 것이 거기 있소. 찾으면 다시 내게 오시오.",
-            ],
-            on_interact: [],
-            auto_advance: [
-                AutoAdvance(
-                    condition: HasItem("family_crest"),
-                    next_phase: "awakening_ready",
-                ),
             ],
             objective: Some("폐허 깊은 곳에서 가문 문장 유물을 찾아라."),
         ),
@@ -160,26 +107,6 @@ QuestDef(
                 "이제 기억나는 것이 있소? 그 문양... 당신의 것이오.",
                 "눈을 감으시오. 그리고 당신 안의 목소리를 들으시오.",
             ],
-            on_interact: [
-                Branch(
-                    condition: And([
-                        FlagIs(flag: "weapon", value: "greatsword"),
-                        FlagIs(flag: "values", value: "honor"),
-                    ]),
-                    if_true: [AdvancePhase("stark_dawn")],
-                    if_false: [
-                        Branch(
-                            condition: And([
-                                FlagIs(flag: "weapon", value: "bowtorch"),
-                                FlagIs(flag: "values", value: "survival"),
-                            ]),
-                            if_true: [AdvancePhase("targaryen_dawn")],
-                            if_false: [AdvancePhase("nightswatch_dawn")],
-                        ),
-                    ],
-                ),
-            ],
-            auto_advance: [],
             objective: Some("가문 문장을 들고 병사에게 돌아가라."),
         ),
 
@@ -190,23 +117,11 @@ QuestDef(
                 "당신은 명예를 알고, 자비를 택하며, 강함으로 약자를 지키는 자요.",
                 "기억하시오 — 당신의 이름을.",
             ],
-            on_interact: [
-                Log("서릿발 같은 기억이 밀려온다. 북쪽의 바람, 회색빛 성벽, 늑대의 울음소리..."),
-                Log("나는 북부의 파수꾼. 에다드 스타크다."),
-                Log("겨울이 오고 있다."),
-                GiveItem("ice_sword"),
-                SetFlag(flag: "character", value: "stark"),
-                KillNpc("wounded_soldier"),
-                AdvancePhase("stark_end"),
-            ],
-            auto_advance: [],
             objective: Some("각성의 순간이다."),
         ),
 
         "stark_end": QuestPhaseDef(
             dialog: [],
-            on_interact: [],
-            auto_advance: [],
             objective: Some("나는 에다드 스타크다. 킹스랜딩의 음모를 파헤쳐야 한다."),
         ),
 
@@ -217,23 +132,11 @@ QuestDef(
                 "당신은 살아남기 위해 무엇이든 하는 자요. 그것이 약함이 아니오 — 용의 본성이지.",
                 "기억하시오 — 당신의 피를.",
             ],
-            on_interact: [
-                Log("뜨거운 기억이 넘실댄다. 용의 울음, 불길 속에서 태어난 기억..."),
-                Log("불꽃이 나를 태우지 않는다. 나는 용의 어머니."),
-                Log("불과 피. 그것이 나의 가문이다."),
-                GiveItem("dragon_egg"),
-                SetFlag(flag: "character", value: "targaryen"),
-                KillNpc("wounded_soldier"),
-                AdvancePhase("targaryen_end"),
-            ],
-            auto_advance: [],
             objective: Some("각성의 순간이다."),
         ),
 
         "targaryen_end": QuestPhaseDef(
             dialog: [],
-            on_interact: [],
-            auto_advance: [],
             objective: Some("나는 대너리스 타르가르옌이다. 에소스를 횡단하며 군대를 모아야 한다."),
         ),
 
@@ -244,26 +147,92 @@ QuestDef(
                 "당신은 명예도 생존도, 그 어느 쪽도 단순하지 않은 자요. 그런 자가 장벽을 지키는 법이오.",
                 "기억하시오 — 당신의 서약을.",
             ],
-            on_interact: [
+            objective: Some("각성의 순간이다."),
+        ),
+
+        "nightswatch_end": QuestPhaseDef(
+            dialog: [],
+            objective: Some("나는 존 스노우다. 장벽 너머 백귀의 위협을 막아야 한다."),
+        ),
+    },
+
+    transitions: [
+        // 병사와 첫 대화 → 무기 탐색
+        Transition(from: "dormant", trigger: Interact, to: "weapon_hunt"),
+
+        // 무기 선택 — 집는 순간 나머지 두 무기는 월드에서 사라진다 (Auto)
+        Transition(from: "weapon_hunt", trigger: Auto,
+            when: HasItem("prologue_greatsword"),
+            actions: [DespawnWorldItem("prologue_daggers"), DespawnWorldItem("prologue_bowtorch")],
+            to: "soldier_test_sword"),
+        Transition(from: "weapon_hunt", trigger: Auto,
+            when: HasItem("prologue_daggers"),
+            actions: [DespawnWorldItem("prologue_greatsword"), DespawnWorldItem("prologue_bowtorch")],
+            to: "soldier_test_daggers"),
+        Transition(from: "weapon_hunt", trigger: Auto,
+            when: HasItem("prologue_bowtorch"),
+            actions: [DespawnWorldItem("prologue_greatsword"), DespawnWorldItem("prologue_daggers")],
+            to: "soldier_test_bowtorch"),
+
+        // 병사가 선택을 읽음 → 가치관 플래그 설정 후 문장 수색으로
+        Transition(from: "soldier_test_sword", trigger: Interact,
+            actions: [SetFlag(flag: "weapon", value: "greatsword"), SetFlag(flag: "values", value: "honor")],
+            to: "crest_hunt"),
+        Transition(from: "soldier_test_daggers", trigger: Interact,
+            actions: [SetFlag(flag: "weapon", value: "daggers"), SetFlag(flag: "values", value: "pragmatism")],
+            to: "crest_hunt"),
+        Transition(from: "soldier_test_bowtorch", trigger: Interact,
+            actions: [SetFlag(flag: "weapon", value: "bowtorch"), SetFlag(flag: "values", value: "survival")],
+            to: "crest_hunt"),
+
+        // 가문 문장 획득 → 각성 직전
+        Transition(from: "crest_hunt", trigger: Auto, when: HasItem("family_crest"), to: "awakening_ready"),
+
+        // 각성 분기 (우선순위: 스타크 > 타르가르옌 > 나이트워치 fallback)
+        Transition(from: "awakening_ready", trigger: Interact,
+            when: And([FlagIs(flag: "weapon", value: "greatsword"), FlagIs(flag: "values", value: "honor")]),
+            to: "stark_dawn"),
+        Transition(from: "awakening_ready", trigger: Interact,
+            when: And([FlagIs(flag: "weapon", value: "bowtorch"), FlagIs(flag: "values", value: "survival")]),
+            to: "targaryen_dawn"),
+        Transition(from: "awakening_ready", trigger: Interact, to: "nightswatch_dawn"),
+
+        // 각성 A: 스타크
+        Transition(from: "stark_dawn", trigger: Interact,
+            actions: [
+                Log("서릿발 같은 기억이 밀려온다. 북쪽의 바람, 회색빛 성벽, 늑대의 울음소리..."),
+                Log("나는 북부의 파수꾼. 에다드 스타크다."),
+                Log("겨울이 오고 있다."),
+                GiveItem("ice_sword"),
+                SetFlag(flag: "character", value: "stark"),
+                KillNpc("wounded_soldier"),
+            ],
+            to: "stark_end"),
+
+        // 각성 B: 타르가르옌
+        Transition(from: "targaryen_dawn", trigger: Interact,
+            actions: [
+                Log("뜨거운 기억이 넘실댄다. 용의 울음, 불길 속에서 태어난 기억..."),
+                Log("불꽃이 나를 태우지 않는다. 나는 용의 어머니."),
+                Log("불과 피. 그것이 나의 가문이다."),
+                GiveItem("dragon_egg"),
+                SetFlag(flag: "character", value: "targaryen"),
+                KillNpc("wounded_soldier"),
+            ],
+            to: "targaryen_end"),
+
+        // 각성 C: 나이트워치
+        Transition(from: "nightswatch_dawn", trigger: Interact,
+            actions: [
                 Log("찬 바람이 불어온다. 끝없는 장벽, 검은 망토의 무게, 그리고 하얀 늑대..."),
                 Log("검은 까마귀가 어깨에 앉는다. 나는 밤의 경비대원."),
                 Log("존 스노우. 이제 기억한다. 고스트, 네가 여기 있었군."),
                 GiveItem("ghost_wolf"),
                 SetFlag(flag: "character", value: "jon_snow"),
                 KillNpc("wounded_soldier"),
-                AdvancePhase("nightswatch_end"),
             ],
-            auto_advance: [],
-            objective: Some("각성의 순간이다."),
-        ),
-
-        "nightswatch_end": QuestPhaseDef(
-            dialog: [],
-            on_interact: [],
-            auto_advance: [],
-            objective: Some("나는 존 스노우다. 장벽 너머 백귀의 위협을 막아야 한다."),
-        ),
-    },
+            to: "nightswatch_end"),
+    ],
 
     spawns: [
         // weapon_hunt 페이즈: 무기 선택 3종
