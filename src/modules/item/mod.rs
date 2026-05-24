@@ -1544,7 +1544,11 @@ mod tests {
         let loadout: StartLoadout = ron::de::from_str(&text).expect("start_loadout.ron 파싱 실패");
         assert_eq!(loadout.gold, 50);
         assert_eq!(loadout.items, vec!["sword", "spear", "bow"]);
-        assert_eq!(loadout.consumables, vec![("health_potion".to_string(), 10)]);
+        assert_eq!(loadout.consumables, vec![
+            ("health_potion".to_string(), 10),
+            ("trap_kit".to_string(), 3),
+            ("disarm_tool".to_string(), 1),
+        ]);
     }
 
     #[test]
@@ -1784,9 +1788,19 @@ mod tests {
 
     #[test]
     fn 소비아이템_ron은_회복효과를_가진_체력물약을_로드한다() {
-        assert_eq!(qi().consumables.len(), 1);
+        // 체력 물약 + 함정 키트 + 해제 도구(§B-2) 가 모두 로드된다.
+        assert_eq!(qi().consumables.len(), 3);
         let potion = qi().consumable(ConsumableKind::HEALTH_POTION).unwrap();
         assert!(matches!(potion.effect, ConsumableEffect::Heal(8)));
+    }
+
+    #[test]
+    fn 소비아이템_ron은_함정키트와_해제도구를_효과없이_로드한다() {
+        // §B-2 아이템은 회복 효과가 없어(Heal(0)) 장비 패널 회복 경로로는 소비되지 않는다.
+        let kit = qi().consumable(ConsumableKind("trap_kit")).expect("함정 키트 로드");
+        assert!(matches!(kit.effect, ConsumableEffect::Heal(0)));
+        let tool = qi().consumable(ConsumableKind("disarm_tool")).expect("해제 도구 로드");
+        assert!(matches!(tool.effect, ConsumableEffect::Heal(0)));
     }
 
     #[test]

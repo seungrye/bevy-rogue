@@ -152,7 +152,13 @@ fn handle_equipment_input(
             let ci = cursor - eq_len;
             if ci < inventory.consumables.len() {
                 let (ck, _) = inventory.consumables[ci];
-                if inventory.use_consumable(ck) {
+                // 회복 효과가 없는 소모품(함정 키트/해제 도구 등)은 장비 패널의
+                // "사용(회복)" 경로로는 소비하지 않는다. 전용 단축키로만 쓴다.
+                if ck.heal_amount(&items) <= 0 {
+                    log.send(LogMessage(format!(
+                        "{}은(는) 여기서 사용할 수 없다.", ck.display_name(&items)
+                    )));
+                } else if inventory.use_consumable(ck) {
                     if let Ok(mut stats) = player_query.get_single_mut() {
                         let heal = ck.heal_amount(&items);
                         stats.hp = (stats.hp + heal).min(stats.max_hp);
@@ -805,6 +811,21 @@ mod tests {
         app.update();
         assert!(app.world.get::<CombatStats>(player).unwrap().hp > 1);
         assert!(app.world.resource::<PlayerInventory>().consumables.is_empty());
+    }
+
+    #[test]
+    fn 회복효과없는_소모품은_장비패널_엔터로_소비되지_않는다() {
+        // 함정 키트(§B-2, Heal(0))는 장비 패널에서 엔터를 눌러도 소모되지 않는다
+        // — 전용 단축키로만 쓰인다.
+        let mut app = 키_입력_하네스();
+        app.add_systems(Update, handle_equipment_input);
+        app.world.resource_mut::<EquipmentPanelOpen>().0 = true;
+        app.world.resource_mut::<PlayerInventory>().add_consumable(ConsumableKind("trap_kit"));
+        let player = app.world.spawn((Player, CombatStats { hp: 1, max_hp: 100, mp: 0, max_mp: 0, attack: 1, defense: 0 })).id();
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
+        app.update();
+        assert_eq!(app.world.get::<CombatStats>(player).unwrap().hp, 1, "HP 변화 없음");
+        assert_eq!(app.world.resource::<PlayerInventory>().consumables.len(), 1, "키트 소비 안 됨");
     }
 
     #[test]

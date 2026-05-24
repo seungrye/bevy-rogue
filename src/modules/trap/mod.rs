@@ -79,6 +79,13 @@ pub struct Trap {
     pub hidden: bool,
 }
 
+/// 플레이어가 설치한 "아군" 함정 마커(§B-2). 이 마커가 붙은 함정은
+/// 몬스터 진입에만 발동하고 플레이어 자신은 밟아도 발동하지 않는다.
+/// 함정 컴포넌트/발동 로직은 기존 `Trap` 을 그대로 재사용하고, 발동 주체
+/// 구분만 이 마커로 한다(특수 케이스 예외처리 대신 마커로 일관 처리).
+#[derive(Component, Debug)]
+pub struct PlayerTrap;
+
 // ── 이벤트 ───────────────────────────────────────────────────────────────────
 
 /// 함정을 스폰하라는 요청. 생성기/퀘스트(`PlaceTraps`) 등이 발행한다.
@@ -142,11 +149,46 @@ pub fn random_teleport_destination(
     candidates.choose(rng).copied()
 }
 
+// ── 순수 판정 함수: 플레이어 함정 설치/해제 (§B-2) ────────────────────────────
+
+/// 플레이어 함정을 `(tx, ty)` 에 설치할 수 있는지 판정한다(순수 함수).
+///
+/// - 맵 범위 안이며 통과 가능한(`is_walkable`) 타일이어야 한다(벽/물 불가).
+/// - 몬스터·주민 등 다른 엔티티가 점유하지 않아야 한다(`occupied`).
+/// 점유/지형 판정만 떼어 단독 테스트할 수 있게 한 순수 함수다.
+pub fn can_place_trap(
+    map: &Map,
+    occupied: &std::collections::HashSet<(usize, usize)>,
+    tx: usize, ty: usize,
+) -> bool {
+    if tx >= map.width || ty >= map.height {
+        return false;
+    }
+    if !map.get_tile(tx, ty).is_walkable() {
+        return false;
+    }
+    !occupied.contains(&(tx, ty))
+}
+
+/// 해제 성공 여부를 판정한다(순수 함수).
+///
+/// 해제 도구(`has_tool`)를 들고 있으면 항상 확정 성공. 도구가 없으면
+/// `roll`(0.0..1.0) 이 `DISARM_CHANCE_NO_TOOL` 미만일 때만 성공한다.
+pub fn disarm_succeeds(has_tool: bool, roll: f32) -> bool {
+    has_tool || roll < DISARM_CHANCE_NO_TOOL
+}
+
+/// 해제 도구 없이 맨손으로 해제를 시도할 때의 성공 확률.
+pub const DISARM_CHANCE_NO_TOOL: f32 = 0.5;
+
 /// 함정 노출 거리(체비쇼프). 이 거리 이하로 플레이어가 접근하면 숨김 함정이 드러난다.
 pub const REVEAL_DIST: i32 = 1;
 
 /// 함정 글리프의 Z. 타일(0.0) 위, 아이템(0.3) 아래에 깔아 바닥 표식처럼 보이게 한다.
 const Z_TRAP: f32 = 0.25;
+
+mod player_trap;
+pub use player_trap::PlayerTrapPlugin;
 
 // ── 플러그인 ─────────────────────────────────────────────────────────────────
 
@@ -194,13 +236,14 @@ fn handle_spawn_trap(
 
 /// 함정 한 개를 (tx, ty) 에 엔티티로 스폰한다. 숨김 함정은 글리프를 감춘다
 /// (Visibility::Hidden). 자연 스폰·퀘스트가 공유하는 단일 생성 경로.
+/// 스폰한 엔티티 id 를 돌려줘 호출부가 마커(예: PlayerTrap)를 덧붙일 수 있게 한다.
 fn spawn_trap_entity(
     commands: &mut Commands,
     font: &Handle<Font>,
     kind: TrapKind,
     tx: usize, ty: usize,
     hidden: bool,
-) {
+) -> Entity {
     let coord = tile_to_world_coords(tx, ty);
     commands.spawn((
         Text2dBundle {
@@ -214,7 +257,7 @@ fn spawn_trap_entity(
             ..default()
         },
         Trap { kind, tile_x: tx, tile_y: ty, hidden },
-    ));
+    )).id()
 }
 
 /// 매 턴(`PlayerActedEvent`) 플레이어·몬스터 위치와 함정 타일을 비교해 발동시킨다.
@@ -225,7 +268,7 @@ fn spawn_trap_entity(
 fn trigger_traps(
     mut commands: Commands,
     mut events: EventReader<PlayerActedEvent>,
-    mut trap_query: Query<(Entity, &mut Trap, &mut Visibility)>,
+    mut trap_query: Query<(Entity, &mut Trap, &mut Visibility, Has<PlayerTrap>)>,
     mut player_query: Query<(Entity, &mut Transform, &mut CombatStats), With<Player>>,
     monster_query: Query<&Monster>,
     mut elemental: EventWriter<ElementalApplyEvent>,
@@ -243,9 +286,10 @@ fn trigger_traps(
 
     let mut rng = rand::thread_rng();
 
-    for (trap_entity, mut trap, mut vis) in trap_query.iter_mut() {
-        // 플레이어 발동 우선 판정.
-        let player_on = player_info
+    for (trap_entity, mut trap, mut vis, is_player_trap) in trap_query.iter_mut() {
+        // 플레이어 발동 우선 판정. 단, 플레이어가 설치한 아군 함정(PlayerTrap)은
+        // 플레이어 자신을 발동시키지 않는다(§B-2 — 몬스터 진입 시에만 발동).
+        let player_on = !is_player_trap && player_info
             .map(|(_, (px, py))| trap_triggers_at(trap.tile_x, trap.tile_y, px, py))
             .unwrap_or(false);
         // 몬스터 발동 — 같은 타일의 살아있는 몬스터가 있으면 발동.

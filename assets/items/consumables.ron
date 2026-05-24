@@ -11,4 +11,25 @@
         pickup_message: "체력 물약을 획득했다!",
         effect: Heal(8),
     ),
+    // 함정 키트(§B-2) — 회수형. T 키로 정면 타일에 플레이어 함정 설치, 해제 성공 시 회수.
+    // Heal(0): 함정 설치 전용이라 장비 패널의 "사용(회복)" 경로에서는 소비되지 않는다.
+    ConsumableDef(
+        id: "trap_kit",
+        display_name: "함정 키트",
+        glyph_ascii: "T",
+        glyph_unicode: "\u{2692}",
+        glyph_game_icon: "\u{2692}",
+        pickup_message: "함정 키트를 획득했다!",
+        effect: Heal(0),
+    ),
+    // 해제 도구(§B-2) — 보유 시 함정 해제 확정. 그 자체로는 회복 효과가 없다(Heal(0)).
+    ConsumableDef(
+        id: "disarm_tool",
+        display_name: "해제 도구",
+        glyph_ascii: "Y",
+        glyph_unicode: "\u{2702}",
+        glyph_game_icon: "\u{2702}",
+        pickup_message: "해제 도구를 획득했다!",
+        effect: Heal(0),
+    ),
 ]

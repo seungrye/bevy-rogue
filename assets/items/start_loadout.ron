@@ -9,5 +9,5 @@ StartLoadout(
     weapon: None,
     armor: None,
     items: ["sword", "spear", "bow"],
-    consumables: [("health_potion", 10)],
+    consumables: [("health_potion", 10), ("trap_kit", 3), ("disarm_tool", 1)],
 )
