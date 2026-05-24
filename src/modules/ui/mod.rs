@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 pub mod equipment;
 pub mod game_over;
+pub mod guide_panel;
 pub mod help;
 pub mod hud;
 pub mod minimap;
@@ -20,6 +21,7 @@ impl Plugin for GameUiPlugin {
         app.add_plugins(minimap::MinimapPlugin)
             .add_plugins(equipment::EquipmentPlugin)
             .add_plugins(game_over::GameOverPlugin)
+            .add_plugins(guide_panel::GuidePanelPlugin)
             .add_plugins(help::HelpPlugin)
             .add_plugins(hud::StatusHudPlugin)
             .add_plugins(quest_panel::QuestPanelPlugin)

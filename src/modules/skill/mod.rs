@@ -10,7 +10,7 @@ use crate::modules::{
     },
     player::{Player, Facing},
     ranged::RangedTargeting,
-    ui::{help::HelpPanelOpen, shop::ShopPanelOpen, LogMessage},
+    ui::{help::HelpPanelOpen, shop::ShopPanelOpen, guide_panel::GuidePanelOpen, LogMessage},
     item::EquipmentPanelOpen,
 };
 
@@ -163,11 +163,12 @@ struct PanelGuards<'w> {
     equipment_open: Res<'w, EquipmentPanelOpen>,
     shop_open: Res<'w, ShopPanelOpen>,
     help_open: Res<'w, HelpPanelOpen>,
+    guide_open: Res<'w, GuidePanelOpen>,
 }
 
 impl PanelGuards<'_> {
     fn any_open(&self) -> bool {
-        self.equipment_open.0 || self.shop_open.0 || self.help_open.0
+        self.equipment_open.0 || self.shop_open.0 || self.help_open.0 || self.guide_open.0
     }
 }
 
@@ -562,6 +563,7 @@ mod tests {
             app.init_resource::<EquipmentPanelOpen>();
             app.init_resource::<ShopPanelOpen>();
             app.init_resource::<HelpPanelOpen>();
+            app.init_resource::<GuidePanelOpen>();
             app.init_resource::<RangedTargeting>();
             app.init_resource::<MonsterTiles>();
             app.init_resource::<OccupiedTiles>();

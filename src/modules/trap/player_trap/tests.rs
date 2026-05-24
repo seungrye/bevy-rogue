@@ -168,6 +168,7 @@ use crate::modules::map::{OccupiedTiles, MonsterTiles};
 use crate::modules::item::EquipmentPanelOpen;
 use crate::modules::ui::help::HelpPanelOpen;
 use crate::modules::ui::shop::ShopPanelOpen;
+use crate::modules::ui::guide_panel::GuidePanelOpen;
 
 struct PlaceHarness {
     app: App,
@@ -185,6 +186,7 @@ impl PlaceHarness {
         app.init_resource::<EquipmentPanelOpen>();
         app.init_resource::<ShopPanelOpen>();
         app.init_resource::<HelpPanelOpen>();
+        app.init_resource::<GuidePanelOpen>();
         app.add_event::<PlayerActedEvent>();
         app.add_event::<LogMessage>();
         app.insert_resource(MapResource(full_floor_map(20, 20)));
@@ -357,6 +359,7 @@ impl DisarmHarness {
         app.init_resource::<EquipmentPanelOpen>();
         app.init_resource::<ShopPanelOpen>();
         app.init_resource::<HelpPanelOpen>();
+        app.init_resource::<GuidePanelOpen>();
         app.add_event::<PlayerActedEvent>();
         app.add_event::<LogMessage>();
 

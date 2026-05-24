@@ -7,7 +7,7 @@ use crate::modules::{
     },
     combat::{CombatStats, Defeated, Speed},
     item::EquipmentPanelOpen,
-    ui::{help::HelpPanelOpen, shop::ShopPanelOpen},
+    ui::{help::HelpPanelOpen, shop::ShopPanelOpen, guide_panel::GuidePanelOpen},
     elemental::ElementalStatus,
 };
 use bevy::prelude::*;
@@ -237,6 +237,21 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, map_res:
     });
 }
 
+/// 이동/클릭 입력을 막아야 하는 모달 패널 상태 묶음. (시스템 파라미터 16개 제한 회피용)
+#[derive(bevy::ecs::system::SystemParam)]
+struct PanelGuards<'w> {
+    equipment_open: Res<'w, EquipmentPanelOpen>,
+    shop_open: Res<'w, ShopPanelOpen>,
+    help_open: Res<'w, HelpPanelOpen>,
+    guide_open: Res<'w, GuidePanelOpen>,
+}
+
+impl PanelGuards<'_> {
+    fn any_open(&self) -> bool {
+        self.equipment_open.0 || self.shop_open.0 || self.help_open.0 || self.guide_open.0
+    }
+}
+
 /// 키보드 이동과 대기 입력을 읽어 플레이어 행동 하나로 변환한다.
 ///
 /// 모달 UI 패널이 열려 있으면 이동 처리를 의도적으로 멈춘다. 패널 조작 명령이
@@ -254,12 +269,10 @@ fn player_movement(
     mut acted: EventWriter<PlayerActedEvent>,
     mut bump: EventWriter<BumpTileEvent>,
     mut attack: EventWriter<AttackMonsterEvent>,
-    equipment_open: Res<EquipmentPanelOpen>,
-    shop_open: Res<ShopPanelOpen>,
-    help_open: Res<HelpPanelOpen>,
+    panels: PanelGuards,
     ranged: Res<crate::modules::ranged::RangedTargeting>,
 ) {
-    if equipment_open.0 || shop_open.0 || help_open.0 { return; }
+    if panels.any_open() { return; }
     if ranged.active { return; }
     let Ok((entity, transform)) = player_query.get_single() else { return };
 
@@ -400,13 +413,11 @@ fn on_mouse_click(
     player_query: Query<&Transform, (With<Player>, Without<Defeated>)>,
     map_res: Res<MapResource>,
     mut player_path: ResMut<PlayerPath>,
-    equipment_open: Res<EquipmentPanelOpen>,
-    shop_open: Res<ShopPanelOpen>,
-    help_open: Res<HelpPanelOpen>,
+    panels: PanelGuards,
     ranged: Res<crate::modules::ranged::RangedTargeting>,
 ) {
     if !mouse_input.just_pressed(MouseButton::Left) { return; }
-    if equipment_open.0 || shop_open.0 || help_open.0 { return; }
+    if panels.any_open() { return; }
     if ranged.active { return; }  // 원격 모드 중에는 ranged 시스템이 마우스 처리
 
     let Ok(window) = windows.get_single() else { return };
@@ -649,6 +660,7 @@ mod tests {
         app.insert_resource(EquipmentPanelOpen(false));
         app.insert_resource(ShopPanelOpen(false));
         app.insert_resource(HelpPanelOpen(false));
+        app.insert_resource(GuidePanelOpen(false));
         app.init_resource::<crate::modules::ranged::RangedTargeting>();
         app.add_event::<PlayerActedEvent>();
         app.add_event::<BumpTileEvent>();
@@ -797,6 +809,7 @@ mod tests {
             app.insert_resource(EquipmentPanelOpen(false));
             app.insert_resource(ShopPanelOpen(false));
             app.insert_resource(HelpPanelOpen(false));
+            app.insert_resource(GuidePanelOpen(false));
             app.init_resource::<RangedTargeting>();
             app.add_event::<PlayerActedEvent>();
             app.add_event::<BumpTileEvent>();
@@ -1658,6 +1671,7 @@ mod tests {
             app.insert_resource(EquipmentPanelOpen(false));
             app.insert_resource(ShopPanelOpen(false));
             app.insert_resource(HelpPanelOpen(false));
+            app.insert_resource(GuidePanelOpen(false));
             app.init_resource::<RangedTargeting>();
             app.add_systems(Update, on_mouse_click);
             Self { app }

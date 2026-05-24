@@ -21,7 +21,7 @@ use crate::modules::{
     player::{Player, Facing},
     combat::Defeated,
     item::{PlayerInventory, ConsumableKind},
-    ui::{LogMessage, help::HelpPanelOpen, shop::ShopPanelOpen},
+    ui::{LogMessage, help::HelpPanelOpen, shop::ShopPanelOpen, guide_panel::GuidePanelOpen},
     item::EquipmentPanelOpen,
 };
 use super::{Trap, TrapKind, PlayerTrap, spawn_trap_entity, can_place_trap, disarm_succeeds};
@@ -68,8 +68,8 @@ pub fn consumable_count(inv: &PlayerInventory, id: &'static str) -> u32 {
 // ── 설치 ─────────────────────────────────────────────────────────────────────
 
 /// 모달 패널이 열려 있으면 설치/해제 입력을 막는다(스킬 모듈과 동일 가드).
-fn any_panel_open(eq: &EquipmentPanelOpen, shop: &ShopPanelOpen, help: &HelpPanelOpen) -> bool {
-    eq.0 || shop.0 || help.0
+fn any_panel_open(eq: &EquipmentPanelOpen, shop: &ShopPanelOpen, help: &HelpPanelOpen, guide: &GuidePanelOpen) -> bool {
+    eq.0 || shop.0 || help.0 || guide.0
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -79,6 +79,7 @@ fn handle_place_trap(
     eq: Res<EquipmentPanelOpen>,
     shop: Res<ShopPanelOpen>,
     help: Res<HelpPanelOpen>,
+    guide: Res<GuidePanelOpen>,
     mut inventory: ResMut<PlayerInventory>,
     map_res: Res<MapResource>,
     occupied: Res<OccupiedTiles>,
@@ -88,7 +89,7 @@ fn handle_place_trap(
     mut acted: EventWriter<PlayerActedEvent>,
     mut log: EventWriter<LogMessage>,
 ) {
-    if any_panel_open(&eq, &shop, &help) { return; }
+    if any_panel_open(&eq, &shop, &help, &guide) { return; }
     if !keyboard.just_pressed(KEY_PLACE_TRAP) { return; }
     let Ok((transform, facing)) = player_q.get_single() else { return };
 
@@ -157,13 +158,14 @@ fn handle_disarm_trap(
     eq: Res<EquipmentPanelOpen>,
     shop: Res<ShopPanelOpen>,
     help: Res<HelpPanelOpen>,
+    guide: Res<GuidePanelOpen>,
     mut inventory: ResMut<PlayerInventory>,
     player_q: Query<&Transform, (With<Player>, Without<Defeated>)>,
     trap_q: Query<(Entity, &Trap)>,
     mut acted: EventWriter<PlayerActedEvent>,
     mut log: EventWriter<LogMessage>,
 ) {
-    if any_panel_open(&eq, &shop, &help) { return; }
+    if any_panel_open(&eq, &shop, &help, &guide) { return; }
     if !keyboard.just_pressed(KEY_DISARM_TRAP) { return; }
     let Ok(transform) = player_q.get_single() else { return };
     let (px, py) = world_to_tile_coords(transform.translation);
