@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>아이템 티어 / 레어도 / 드롭 — bevy-rogue</title>
+<style>
+  :root {
+    --bg: #14161b; --panel: #1d2027; --line: #2c2f38;
+    --fg: #d6d9e0; --muted: #8b909c; --accent: #5aa9e6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: var(--bg); color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+    line-height: 1.5;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0 0 18px; }
+  code { background: #2c2f38; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+  .tabs button {
+    background: #2a2e38; color: var(--fg); border: 1px solid #3a3d47;
+    border-radius: 6px; padding: 8px 14px; cursor: pointer; font-size: 14px;
+  }
+  .tabs button.active { background: var(--accent); color: #0d1117; border-color: var(--accent); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
+  .view { display: none; }
+  .view.active { display: block; }
+  h2 { font-size: 17px; margin: 0 0 12px; }
+  .desc { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+
+  /* tier bars */
+  .barrow { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .barlabel { width: 150px; font-size: 13px; text-align: right; }
+  .bartrack { position: relative; flex: 1; height: 22px; background: #181a20; border-radius: 4px; }
+  .barfill { position: absolute; top: 0; height: 100%; border-radius: 4px; opacity: .85; }
+  .barval { position: absolute; right: 8px; top: 2px; font-size: 12px; font-family: monospace; color: #fff; }
+  .tierhdr { font-weight: 700; margin: 16px 0 8px; font-size: 14px; }
+
+  /* rarity */
+  .raritybar { display: flex; height: 56px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }
+  .rseg { display: flex; flex-direction: column; align-items: center; justify-content: center; color: #0d1117; font-weight: 700; font-size: 13px; }
+  .rseg small { font-weight: 500; font-size: 11px; opacity: .8; }
+  .rtable { margin-top: 18px; border-collapse: collapse; width: 100%; max-width: 620px; }
+  .rtable th, .rtable td { border: 1px solid var(--line); padding: 7px 10px; font-size: 13px; text-align: left; }
+  .rtable th { background: #23262e; }
+  .swatch { display:inline-block; width:14px; height:14px; border-radius:3px; vertical-align:middle; margin-right:6px; }
+
+  /* drop weights */
+  .slider-row { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; }
+  input[type=range] { flex: 1; max-width: 420px; }
+  .level-readout { font-family: monospace; font-size: 14px; }
+  .wbar-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .wbar-label { width: 120px; font-size: 13px; }
+  .wbar-track { position: relative; flex: 1; max-width: 480px; height: 26px; background: #181a20; border-radius: 4px; }
+  .wbar-fill { height: 100%; border-radius: 4px; transition: width .15s; }
+  .wbar-val { position: absolute; left: 8px; top: 3px; font-size: 12px; font-family: monospace; }
+  .gate { color: #e8603c; }
+  .wtable { margin-top: 22px; border-collapse: collapse; font-size: 12px; }
+  .wtable th, .wtable td { border: 1px solid var(--line); padding: 5px 9px; text-align: center; font-family: monospace; }
+  .wtable th { background: #23262e; font-family: inherit; }
+  .wtable td.hl { background: #5aa9e633; font-weight: 700; }
+  .footnote { font-size: 12px; color: var(--muted); margin-top: 16px; }
+</style>
+</head>
+<body>
+  <h1>아이템 티어 / 레어도 / 드롭</h1>
+  <p class="sub">파밍 밸런스 한눈에. 출처: <code>src/modules/item/mod.rs</code> + <code>assets/items/weapons.ron</code> / <code>armors.ron</code></p>
+
+  <div class="tabs">
+    <button data-view="tiers" class="active">(a) 티어별 스탯 범위</button>
+    <button data-view="rarity">(b) 레어도 임계</button>
+    <button data-view="drops">(c) 레벨별 드롭 가중치</button>
+  </div>
+
+  <!-- (a) tiers -->
+  <div class="panel view active" id="view-tiers">
+    <h2>티어별 무기·방어구 스탯 범위</h2>
+    <p class="desc">각 막대는 드롭 시 롤되는 <code>[min, max]</code> 범위. 무기=공격력, 방어구=방어보너스. tier 1~5.</p>
+    <div id="tiers-body"></div>
+  </div>
+
+  <!-- (b) rarity -->
+  <div class="panel view" id="view-rarity">
+    <h2>레어도 백분위 임계</h2>
+    <p class="desc">레어도는 롤된 스탯이 <code>[min, max]</code> 안에서 차지하는 백분위 <code>p = (rolled−min)/(max−min)</code> 로 결정.
+    높게 롤될수록 높은 등급. 임계는 <code>Rarity::from_roll</code> 그대로.</p>
+    <div class="raritybar" id="raritybar"></div>
+    <table class="rtable" id="raritytable"></table>
+    <p class="footnote">참고: <code>max ≤ min</code> 이면 분모 0 → 백분위 0 → 일반(Common) 처리.</p>
+  </div>
+
+  <!-- (c) drops -->
+  <div class="panel view" id="view-drops">
+    <h2>레벨별 티어 드롭 가중치</h2>
+    <p class="desc">
+      플레이어 레벨 L 의 "티어 밴드 중심" <code>center = clamp(1 + (L−1)/3, 1, 5)</code> 기준으로,
+      <code>d = item_tier − center</code> 에 따라 가중치가 정해진다(<code>tier_weight</code>). 슬라이더로 레벨을 바꿔 보세요.
+    </p>
+    <div class="slider-row">
+      <label>레벨</label>
+      <input type="range" id="level" min="1" max="20" value="1">
+      <span class="level-readout" id="levelReadout"></span>
+    </div>
+    <div id="weightbars"></div>
+    <table class="wtable" id="weightmatrix"></table>
+    <p class="footnote">
+      가중치 표(<code>tier_weight</code>): d≥+2 → <span class="gate">0.0 (게이트)</span>, +1 → 0.5, 0 → 1.0, −1 → 0.6, −2 → 0.3, ≤−3 → 0.1.
+      가중치 0 인 티어는 추첨 후보에서 제외됩니다.
+    </p>
+  </div>
+
+<script>
+(function () {
+  // ── 데이터: weapons.ron / armors.ron 그대로 ──
+  const weapons = [
+    {n:'단검', t:1, mn:3, mx:6}, {n:'몽둥이', t:1, mn:4, mx:7}, {n:'검', t:1, mn:5, mx:9},
+    {n:'창', t:2, mn:8, mx:12}, {n:'활', t:2, mn:7, mx:11}, {n:'도끼', t:2, mn:9, mx:14},
+    {n:'쇠뇌', t:3, mn:12, mx:17}, {n:'지팡이', t:3, mn:11, mx:16}, {n:'전투도끼', t:3, mn:13, mx:18},
+    {n:'대검', t:4, mn:17, mx:24}, {n:'전쟁해머', t:4, mn:16, mx:22}, {n:'마법활', t:4, mn:15, mx:21},
+    {n:'성검', t:5, mn:24, mx:34}, {n:'용의창', t:5, mn:22, mx:32}, {n:'천둥활', t:5, mn:21, mx:31},
+  ];
+  const armors = [
+    {n:'천 갑옷', t:1, mn:1, mx:2}, {n:'가죽 갑옷', t:1, mn:2, mx:4},
+    {n:'경갑', t:2, mn:3, mx:5}, {n:'사슬 갑옷', t:2, mn:4, mx:7},
+    {n:'비늘 갑옷', t:3, mn:6, mx:9}, {n:'기사 갑옷', t:3, mn:7, mx:11},
+    {n:'판금 갑옷', t:4, mn:10, mx:14}, {n:'용병 갑주', t:4, mn:9, mx:13},
+    {n:'성기사 갑옷', t:5, mn:14, mx:20}, {n:'용비늘 갑주', t:5, mn:17, mx:24},
+  ];
+  const tierColor = ['', '#9aa0a6', '#5db85d', '#5a9fe6', '#a76ce0', '#e8b84d']; // index by tier
+
+  // ── (a) tiers ──
+  function buildTiers() {
+    const body = document.getElementById('tiers-body');
+    const maxW = Math.max(...weapons.map(w=>w.mx));
+    const maxA = Math.max(...armors.map(a=>a.mx));
+    let html = '';
+    function section(title, list, maxVal) {
+      let s = `<div class="tierhdr">${title} <span style="color:var(--muted);font-weight:400">(막대 폭 = 스탯 범위, 끝 숫자 = max)</span></div>`;
+      for (let t=1; t<=5; t++) {
+        for (const it of list.filter(x=>x.t===t)) {
+          const left = (it.mn / maxVal) * 100;
+          const width = ((it.mx - it.mn) / maxVal) * 100;
+          s += `<div class="barrow">
+            <div class="barlabel">T${it.t} · ${it.n}</div>
+            <div class="bartrack">
+              <div class="barfill" style="left:${left}%;width:${Math.max(width,0.8)}%;background:${tierColor[it.t]}"></div>
+              <div class="barval">${it.mn}–${it.mx}</div>
+            </div>
+          </div>`;
+        }
+      }
+      return s;
+    }
+    html += section('무기 (공격력)', weapons, maxW);
+    html += section('방어구 (방어보너스)', armors, maxA);
+    body.innerHTML = html;
+  }
+
+  // ── (b) rarity ──
+  const rarities = [
+    {ko:'일반', en:'Common',    lo:0.00, hi:0.40, col:'rgb(178,178,178)'},
+    {ko:'고급', en:'Uncommon',  lo:0.40, hi:0.70, col:'rgb(77,230,77)'},
+    {ko:'희귀', en:'Rare',      lo:0.70, hi:0.90, col:'rgb(77,128,255)'},
+    {ko:'영웅', en:'Epic',      lo:0.90, hi:0.98, col:'rgb(178,77,255)'},
+    {ko:'전설', en:'Legendary', lo:0.98, hi:1.00, col:'rgb(255,204,51)'},
+  ];
+  function buildRarity() {
+    const bar = document.getElementById('raritybar');
+    bar.innerHTML = rarities.map(r =>
+      `<div class="rseg" style="background:${r.col};flex:${(r.hi-r.lo)}">
+         <div>${r.ko}</div><small>${Math.round(r.lo*100)}–${Math.round(r.hi*100)}%</small>
+       </div>`).join('');
+    const t = document.getElementById('raritytable');
+    t.innerHTML = '<tr><th>등급</th><th>백분위 p 구간</th><th>표시 색 (RGB 0–255)</th></tr>' +
+      rarities.map(r => {
+        const cmp = r.hi === 1.00 ? `p ≥ ${r.lo.toFixed(2)}` :
+                    r.lo === 0.00 ? `p &lt; ${r.hi.toFixed(2)}` :
+                    `${r.lo.toFixed(2)} ≤ p &lt; ${r.hi.toFixed(2)}`;
+        return `<tr>
+          <td><span class="swatch" style="background:${r.col}"></span>${r.ko} <span style="color:var(--muted)">(${r.en})</span></td>
+          <td>${cmp}</td>
+          <td>${r.col}</td>
+        </tr>`;
+      }).join('');
+  }
+
+  // ── (c) drops ──
+  function tierBandCenter(level) {
+    const raw = 1 + Math.floor((level - 1) / 3);
+    return Math.max(1, Math.min(5, raw));
+  }
+  function tierWeight(itemTier, level) {
+    const d = itemTier - tierBandCenter(level);
+    if (d >= 2) return 0.0;
+    if (d === 1) return 0.5;
+    if (d === 0) return 1.0;
+    if (d === -1) return 0.6;
+    if (d === -2) return 0.3;
+    return 0.1; // d <= -3
+  }
+  function updateDrops() {
+    const level = parseInt(document.getElementById('level').value);
+    const center = tierBandCenter(level);
+    document.getElementById('levelReadout').textContent = `L${level}  ·  밴드 중심 = T${center}`;
+    const weights = [1,2,3,4,5].map(t => tierWeight(t, level));
+    const total = weights.reduce((a,b)=>a+b, 0);
+    const bars = document.getElementById('weightbars');
+    bars.innerHTML = [1,2,3,4,5].map((t,i) => {
+      const w = weights[i];
+      const pct = total > 0 ? (w/total*100) : 0;
+      const widthPct = w * 100; // bar scaled so weight 1.0 = full-ish
+      const gated = w === 0;
+      return `<div class="wbar-row">
+        <div class="wbar-label">T${t}${t===center?' ◀ 중심':''}</div>
+        <div class="wbar-track">
+          <div class="wbar-fill" style="width:${Math.min(widthPct,100)}%;background:${gated?'#3a2020':tierColor[t]}"></div>
+          <div class="wbar-val">${gated ? '<span class="gate">게이트 (0.0)</span>' : `가중치 ${w.toFixed(1)}  ·  확률 ${(pct).toFixed(0)}%`}</div>
+        </div>
+      </div>`;
+    }).join('');
+  }
+  function buildWeightMatrix() {
+    const t = document.getElementById('weightmatrix');
+    let html = '<tr><th>레벨</th><th>중심</th><th>T1</th><th>T2</th><th>T3</th><th>T4</th><th>T5</th></tr>';
+    const sampleLevels = [1,3,4,6,7,9,10,12,13,16,20];
+    for (const L of sampleLevels) {
+      const c = tierBandCenter(L);
+      html += `<tr><td>${L}</td><td>T${c}</td>` +
+        [1,2,3,4,5].map(ti => {
+          const w = tierWeight(ti, L);
+          return `<td class="${ti===c?'hl':''}">${w.toFixed(1)}</td>`;
+        }).join('') + '</tr>';
+    }
+    t.innerHTML = html;
+  }
+
+  // ── tabs ──
+  document.querySelectorAll('.tabs button').forEach(b => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('active'));
+      document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+      b.classList.add('active');
+      document.getElementById('view-' + b.dataset.view).classList.add('active');
+    });
+  });
+
+  buildTiers();
+  buildRarity();
+  buildWeightMatrix();
+  document.getElementById('level').addEventListener('input', updateDrops);
+  updateDrops();
+})();
+</script>
+</body>
+</html>

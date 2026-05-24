@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>방향 시야 (Directional FOV) — bevy-rogue</title>
+<style>
+  :root {
+    --bg: #14161b;
+    --panel: #1d2027;
+    --line: #2c2f38;
+    --fg: #d6d9e0;
+    --muted: #8b909c;
+    --accent: #5aa9e6;
+    --front: #3a6ea5;
+    --back: #6b4a8a;
+    --wall: #4a4d57;
+    --player: #f0c453;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    background: var(--bg); color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+    line-height: 1.5;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0 0 18px; }
+  .wrap { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 16px;
+  }
+  canvas { display: block; image-rendering: pixelated; cursor: crosshair; border-radius: 6px; }
+  .controls { max-width: 360px; }
+  .controls h2 { font-size: 15px; margin: 0 0 8px; color: var(--accent); }
+  .controls p { font-size: 13px; color: var(--muted); margin: 0 0 12px; }
+  kbd {
+    background: #2c2f38; border: 1px solid #3a3d47; border-radius: 4px;
+    padding: 1px 6px; font-size: 12px; font-family: monospace;
+  }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  button {
+    background: #2a2e38; color: var(--fg); border: 1px solid #3a3d47;
+    border-radius: 6px; padding: 6px 10px; cursor: pointer; font-size: 13px;
+  }
+  button:hover { background: #343948; }
+  button.active { background: var(--accent); color: #0d1117; border-color: var(--accent); }
+  .legend { font-size: 13px; }
+  .legend div { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .sw { width: 16px; height: 16px; border-radius: 3px; flex: 0 0 auto; border: 1px solid #00000040; }
+  .stat { font-family: monospace; font-size: 13px; color: var(--muted); margin-top: 10px; }
+  code { background: #2c2f38; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .note { font-size: 12px; color: var(--muted); border-left: 3px solid var(--front); padding-left: 10px; margin-top: 14px;}
+</style>
+</head>
+<body>
+  <h1>방향 시야 (Directional FOV)</h1>
+  <p class="sub">facing 방향으로 큰 반원(FOV_FRONT), 등 뒤로 작은 반원(FOV_BACK) + 시선(LoS, 벽 차단). 잠입 시스템의 핵심.<br>
+  출처: <code>src/modules/map/mod.rs</code> — <code>is_in_view</code> / <code>is_line_of_sight_clear</code> / <code>FOV_FRONT=8</code> / <code>FOV_BACK=3</code></p>
+
+  <div class="wrap">
+    <div class="panel">
+      <canvas id="grid" width="672" height="560"></canvas>
+    </div>
+
+    <div class="panel controls">
+      <h2>조작</h2>
+      <p>
+        <kbd>방향키</kbd> 또는 아래 버튼으로 <b>facing</b> 변경 (8방향).<br>
+        그리드를 <b>클릭</b>하면 그 칸의 벽을 켜고/끄기.<br>
+        플레이어를 드래그(또는 <kbd>Shift</kbd>+클릭)하면 위치 이동.
+      </p>
+
+      <div class="row">
+        <button data-fx="0" data-fy="1">↑ 위</button>
+        <button data-fx="0" data-fy="-1">↓ 아래</button>
+        <button data-fx="-1" data-fy="0">← 왼쪽</button>
+        <button data-fx="1" data-fy="0">→ 오른쪽</button>
+      </div>
+      <div class="row">
+        <button data-fx="1" data-fy="1">↗</button>
+        <button data-fx="-1" data-fy="1">↖</button>
+        <button data-fx="1" data-fy="-1">↘</button>
+        <button data-fx="-1" data-fy="-1">↙</button>
+        <button data-fx="0" data-fy="0">● 정지(전방향)</button>
+      </div>
+
+      <div class="row">
+        <button id="clearWalls">벽 모두 지우기</button>
+        <button id="demoWalls">예시 벽 배치</button>
+      </div>
+
+      <div class="legend">
+        <div><span class="sw" style="background:var(--front)"></span> 정면 가시 타일 (반경 ≤ 8)</div>
+        <div><span class="sw" style="background:var(--back)"></span> 후면 가시 타일 (반경 ≤ 3)</div>
+        <div><span class="sw" style="background:var(--wall)"></span> 벽 (이동·시야 차단)</div>
+        <div><span class="sw" style="background:var(--player)"></span> 플레이어 + facing 화살표</div>
+        <div><span class="sw" style="background:#23262e"></span> 보이지 않는 바닥</div>
+      </div>
+
+      <div class="stat" id="stat"></div>
+
+      <div class="note">
+        규칙: <code>front = dot(t−p, facing) ≥ 0</code> (수직 dot==0 도 정면). 정면이면 반경 8, 후면이면 반경 3.
+        <code>dist² ≤ r²</code> <b>그리고</b> Bresenham 시선이 벽에 막히지 않아야 가시.
+        facing이 (0,0)이면 방향 개념 없이 전방향 원형(반경 8)으로 폴백.
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  const FOV_FRONT = 8, FOV_BACK = 3;
+  const COLS = 42, ROWS = 35, TILE = 16;
+  const canvas = document.getElementById('grid');
+  const ctx = canvas.getContext('2d');
+
+  // map[y][x] = true => wall
+  const walls = Array.from({length: ROWS}, () => Array(COLS).fill(false));
+  let px = Math.floor(COLS/2), py = Math.floor(ROWS/2);
+  let fx = 0, fy = 1; // facing: note canvas y is flipped vs code, handled at draw
+
+  // --- 코드 그대로의 LoS (Bresenham) ---
+  function blocksSight(x, y) {
+    if (x < 0 || x >= COLS || y < 0 || y >= ROWS) return true;
+    return walls[y][x];
+  }
+  function losClear(x0, y0, x1, y1) {
+    let dx = Math.abs(x1-x0), dy = Math.abs(y1-y0);
+    let sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+    let err = dx - dy, x = x0, y = y0;
+    while (true) {
+      if (x < 0 || x >= COLS || y < 0 || y >= ROWS) return false;
+      if (x === x1 && y === y1) return true;
+      if ((x !== x0 || y !== y0) && blocksSight(x, y)) return false;
+      const e2 = 2*err;
+      if (e2 > -dy) { err -= dy; x += sx; }
+      if (e2 < dx)  { err += dx; y += sy; }
+    }
+  }
+  // --- 코드 그대로의 is_in_view ---
+  function inView(tx, ty) {
+    const dx = tx - px, dy = ty - py;
+    let radius;
+    if (fx === 0 && fy === 0) {
+      radius = FOV_FRONT;
+    } else if (dx*fx + dy*fy >= 0) {
+      radius = FOV_FRONT; // 정면 (dot >= 0)
+    } else {
+      radius = FOV_BACK;  // 후면
+    }
+    if (dx*dx + dy*dy > radius*radius) return false;
+    return losClear(px, py, tx, ty);
+  }
+
+  function draw() {
+    ctx.fillStyle = getCss('--bg');
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    let visCount = 0;
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        const sx = x*TILE, sy = y*TILE;
+        if (walls[y][x]) {
+          ctx.fillStyle = getCss('--wall');
+        } else if (x === px && y === py) {
+          ctx.fillStyle = '#23262e';
+        } else if (inView(x, y)) {
+          visCount++;
+          const dx = x - px, dy = y - py;
+          const front = (fx===0&&fy===0) || (dx*fx + dy*fy >= 0);
+          ctx.fillStyle = front ? getCss('--front') : getCss('--back');
+        } else {
+          ctx.fillStyle = '#23262e';
+        }
+        ctx.fillRect(sx, sy, TILE-1, TILE-1);
+      }
+    }
+
+    // player
+    const cx = px*TILE + TILE/2, cy = py*TILE + TILE/2;
+    ctx.fillStyle = getCss('--player');
+    ctx.beginPath();
+    ctx.arc(cx, cy, TILE*0.42, 0, Math.PI*2);
+    ctx.fill();
+    // facing arrow
+    if (fx !== 0 || fy !== 0) {
+      const len = Math.hypot(fx, fy);
+      const ax = fx/len, ay = fy/len;
+      ctx.strokeStyle = '#0d1117';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + ax*TILE*1.3, cy + ay*TILE*1.3);
+      ctx.stroke();
+      // arrowhead
+      const hx = cx + ax*TILE*1.3, hy = cy + ay*TILE*1.3;
+      const a = Math.atan2(ay, ax);
+      ctx.beginPath();
+      ctx.moveTo(hx, hy);
+      ctx.lineTo(hx - 6*Math.cos(a-0.5), hy - 6*Math.sin(a-0.5));
+      ctx.lineTo(hx - 6*Math.cos(a+0.5), hy - 6*Math.sin(a+0.5));
+      ctx.closePath();
+      ctx.fillStyle = '#0d1117';
+      ctx.fill();
+    }
+
+    const facingLabel = (fx===0&&fy===0) ? '(0,0) 전방향' : `(${fx}, ${fy})`;
+    document.getElementById('stat').textContent =
+      `facing = ${facingLabel}  ·  가시 타일 = ${visCount}  ·  플레이어 = (${px}, ${py})`;
+  }
+
+  function getCss(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+  // --- 상호작용 ---
+  let dragging = false;
+  function cellFromEvent(e) {
+    const r = canvas.getBoundingClientRect();
+    const x = Math.floor((e.clientX - r.left) * (canvas.width / r.width) / TILE);
+    const y = Math.floor((e.clientY - r.top) * (canvas.height / r.height) / TILE);
+    return [Math.max(0, Math.min(COLS-1, x)), Math.max(0, Math.min(ROWS-1, y))];
+  }
+  canvas.addEventListener('mousedown', (e) => {
+    const [x, y] = cellFromEvent(e);
+    if (e.shiftKey || (x === px && y === py)) {
+      dragging = true; px = x; py = y; walls[y][x] = false;
+    } else {
+      walls[y][x] = !walls[y][x];
+    }
+    draw();
+  });
+  canvas.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const [x, y] = cellFromEvent(e);
+    px = x; py = y; walls[y][x] = false; draw();
+  });
+  window.addEventListener('mouseup', () => dragging = false);
+
+  document.querySelectorAll('button[data-fx]').forEach(b => {
+    b.addEventListener('click', () => {
+      fx = parseInt(b.dataset.fx); fy = parseInt(b.dataset.fy); draw();
+    });
+  });
+  document.getElementById('clearWalls').addEventListener('click', () => {
+    for (let y=0;y<ROWS;y++) for (let x=0;x<COLS;x++) walls[y][x]=false;
+    draw();
+  });
+  document.getElementById('demoWalls').addEventListener('click', () => {
+    for (let y=0;y<ROWS;y++) for (let x=0;x<COLS;x++) walls[y][x]=false;
+    // a wall segment in front to show LoS occlusion
+    for (let y = py-4; y <= py+1; y++) if (y>=0&&y<ROWS) walls[y][px+3]=true;
+    for (let x = px-2; x <= px+5; x++) if (x>=0&&x<COLS) walls[py-5][x]=true;
+    draw();
+  });
+
+  window.addEventListener('keydown', (e) => {
+    const map = {ArrowUp:[0,1], ArrowDown:[0,-1], ArrowLeft:[-1,0], ArrowRight:[1,0]};
+    // Note: code uses +y = up. ArrowUp -> facing.y = +1 (toward top of screen),
+    // and screen top is row 0, so we negate for drawing consistency:
+    if (map[e.key]) {
+      e.preventDefault();
+      // We want pressing Up to point the arrow visually up. Screen up = -1 in canvas dy.
+      const m = {ArrowUp:[0,-1], ArrowDown:[0,1], ArrowLeft:[-1,0], ArrowRight:[1,0]};
+      fx = m[e.key][0]; fy = m[e.key][1];
+      draw();
+    }
+  });
+
+  // initial facing arrow points "down" on screen by default (fy=1 -> drawn downward)
+  draw();
+})();
+</script>
+</body>
+</html>

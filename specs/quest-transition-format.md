@@ -25,7 +25,7 @@
 - [x] `src/modules/quest/mod.rs` — 구조체 + 실행 로직(`check_auto_advance`, `execute_actions`) + 검증(`validate_quest_def`) + 테스트
 - [x] `src/modules/villager/mod.rs` — NPC 상호작용(첫 매칭 Interact transition 실행), `interact_can_advance`, terminal 판정, 글리프
 - [x] `src/modules/ui/quest_panel.rs` — 위치 힌트(Auto transition), giver 대화 힌트
-- [x] `assets/quests/*.ron` — 10개 파일 모두 마이그레이션
+- [x] `assets/quests/*.ron` — 전 퀘스트 파일을 새 포맷으로 마이그레이션 (이후 추가된 퀘스트도 동일 포맷 사용)
 - [x] `specs/quest.md`, `specs/villager.md` — 문서 갱신
 
 ## 엣지 케이스
@@ -67,4 +67,4 @@ QuestDef(
 - `src/modules/quest/mod.rs` — 구조체 + 실행 로직 + 검증
 - `src/modules/villager/mod.rs` — NPC 상호작용
 - `src/modules/ui/quest_panel.rs` — 퀘스트 패널 + 글리프
-- `assets/quests/*.ron` — 10개 파일 모두 마이그레이션
+- `assets/quests/*.ron` — 전 퀘스트 파일 마이그레이션

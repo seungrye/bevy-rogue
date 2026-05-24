@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>좌표계: 타일 그리드 ↔ Bevy 월드 — bevy-rogue</title>
+<style>
+  :root {
+    --bg: #14161b; --panel: #1d2027; --line: #2c2f38;
+    --fg: #d6d9e0; --muted: #8b909c; --accent: #5aa9e6; --warn: #e8b84d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: var(--bg); color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+    line-height: 1.5;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0 0 18px; }
+  code { background: #2c2f38; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .wrap { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
+  canvas { display: block; border-radius: 6px; cursor: crosshair; }
+  .side { max-width: 380px; }
+  h2 { font-size: 15px; margin: 0 0 8px; color: var(--accent); }
+  .formula { background: #181a20; border: 1px solid var(--line); border-radius: 6px; padding: 12px; font-family: monospace; font-size: 12.5px; margin-bottom: 14px; white-space: pre-wrap; }
+  .kv { font-family: monospace; font-size: 13px; }
+  .kv b { color: var(--warn); }
+  table { border-collapse: collapse; margin-top: 8px; font-size: 13px; }
+  th, td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
+  th { background: #23262e; }
+  .readout { background:#181a20;border:1px solid var(--line);border-radius:6px;padding:12px;font-family:monospace;font-size:13px;margin-top:14px; }
+  .readout .row { margin-bottom: 4px; }
+  .readout .lbl { color: var(--muted); }
+  .footnote { font-size: 12px; color: var(--muted); margin-top: 14px; }
+</style>
+</head>
+<body>
+  <h1>좌표계: 타일 그리드 ↔ Bevy 월드 픽셀</h1>
+  <p class="sub">맵 80×50, <code>TILE_SIZE = 16</code>. 그리드 좌표 <code>(x,y)</code> 와 Bevy 월드 좌표 <code>(wx,wy)</code> 의 변환.<br>
+  출처: <code>src/modules/map/mod.rs</code> — <code>tile_to_world_coords</code> / <code>world_to_tile_coords</code> / <code>MAP_WIDTH=80</code> / <code>MAP_HEIGHT=50</code></p>
+
+  <div class="wrap">
+    <div class="panel">
+      <canvas id="cv" width="560" height="420"></canvas>
+      <p class="footnote">축소도 (실제 80×50의 일부 격자만 표시). 칸에 마우스를 올리면 변환값이 갱신됩니다.<br>
+      Bevy 월드는 <b>+y가 위쪽</b>, 원점(0,0)은 맵 중앙. 타일 (x,y)는 <b>좌하단이 (0,0)</b> 방향(코드의 y는 위로 증가).</p>
+    </div>
+
+    <div class="panel side">
+      <h2>변환 공식</h2>
+      <div class="formula">ow = (80 * 16)/2 - 16/2 = 632
+oh = (50 * 16)/2 - 16/2 = 392
+
+tile_to_world(x, y):
+  wx = x*16 - ow
+  wy = y*16 - oh
+
+world_to_tile(wx, wy):
+  x = floor((wx + ow + 8) / 16)
+  y = floor((wy + oh + 8) / 16)
+  x = clamp(x, 0, 79)
+  y = clamp(y, 0, 49)</div>
+
+      <h2>상수</h2>
+      <table>
+        <tr><th>이름</th><th>값</th></tr>
+        <tr><td><code>MAP_WIDTH</code></td><td>80</td></tr>
+        <tr><td><code>MAP_HEIGHT</code></td><td>50</td></tr>
+        <tr><td><code>TILE_SIZE</code></td><td>16.0</td></tr>
+        <tr><td>offset_w (ow)</td><td>632.0</td></tr>
+        <tr><td>offset_h (oh)</td><td>392.0</td></tr>
+      </table>
+
+      <h2 style="margin-top:16px;">기준점 (검증값)</h2>
+      <table>
+        <tr><th>타일 (x,y)</th><th>월드 (wx,wy)</th></tr>
+        <tr><td>(0, 0) 좌하단</td><td>(−632, −392)</td></tr>
+        <tr><td>(79, 49) 우상단</td><td>(+632, +392)</td></tr>
+        <tr><td>(40, 25) 중앙 부근</td><td>(8, 8)</td></tr>
+      </table>
+
+      <div class="readout" id="readout">
+        <div class="row"><span class="lbl">hover 타일:</span> —</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  const MAP_W = 80, MAP_H = 50, TILE = 16;
+  const ow = (MAP_W * TILE)/2 - TILE/2; // 632
+  const oh = (MAP_H * TILE)/2 - TILE/2; // 392
+
+  function tileToWorld(x, y) { return [x*TILE - ow, y*TILE - oh]; }
+  function worldToTile(wx, wy) {
+    let x = Math.floor((wx + ow + TILE/2)/TILE);
+    let y = Math.floor((wy + oh + TILE/2)/TILE);
+    return [Math.max(0,Math.min(MAP_W-1,x)), Math.max(0,Math.min(MAP_H-1,y))];
+  }
+
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+  // we draw a small 14x10 sub-grid representing tile coords with screen y flipped (code y up = screen up)
+  const GC = 14, GR = 10, CELL = 38, OX = 20, OY = 16;
+
+  function screenForTile(tx, ty) {
+    // tile y increases upward in code; screen y increases downward, so flip
+    const sx = OX + tx*CELL;
+    const sy = OY + (GR-1 - ty)*CELL;
+    return [sx, sy];
+  }
+
+  let hover = null;
+
+  function draw() {
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+    ctx.fillRect(0,0,cv.width,cv.height);
+
+    // grid cells
+    for (let ty=0; ty<GR; ty++) {
+      for (let tx=0; tx<GC; tx++) {
+        const [sx, sy] = screenForTile(tx, ty);
+        const isHover = hover && hover[0]===tx && hover[1]===ty;
+        ctx.fillStyle = isHover ? '#2e3a4a' : '#1c1f27';
+        ctx.fillRect(sx, sy, CELL-2, CELL-2);
+        ctx.strokeStyle = '#2c2f38';
+        ctx.strokeRect(sx, sy, CELL-2, CELL-2);
+        // label tile coords small
+        ctx.fillStyle = isHover ? '#cfe3ff' : '#565b66';
+        ctx.font = '10px monospace';
+        ctx.fillText(`${tx},${ty}`, sx+4, sy+13);
+      }
+    }
+
+    // origin marker (world 0,0) — between tiles; mark center of grid region
+    // axes from a chosen origin tile cluster: draw axes through screen center of sub-grid
+    const originTile = [7, 5]; // arbitrary anchor inside sub-grid for axis drawing
+    const [oxs, oys] = screenForTile(originTile[0], originTile[1]);
+    const ax = oxs + (CELL-2)/2, ay = oys + (CELL-2)/2;
+
+    // x axis (world +x to the right)
+    ctx.strokeStyle = '#5aa9e6';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(OX-6, ay); ctx.lineTo(OX+GC*CELL, ay); ctx.stroke();
+    // y axis (world +y up)
+    ctx.beginPath(); ctx.moveTo(ax, OY+GR*CELL); ctx.lineTo(ax, OY-6); ctx.stroke();
+    // arrowheads
+    ctx.fillStyle = '#5aa9e6';
+    ctx.beginPath(); ctx.moveTo(OX+GC*CELL, ay); ctx.lineTo(OX+GC*CELL-8, ay-4); ctx.lineTo(OX+GC*CELL-8, ay+4); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(ax, OY-6); ctx.lineTo(ax-4, OY+2); ctx.lineTo(ax+4, OY+2); ctx.fill();
+    ctx.font = '12px monospace';
+    ctx.fillText('+x (world)', OX+GC*CELL-72, ay-8);
+    ctx.fillText('+y (world)', ax+6, OY+6);
+
+    document.title = document.title; // noop
+  }
+
+  function setReadout(tx, ty) {
+    const [wx, wy] = tileToWorld(tx, ty);
+    const back = worldToTile(wx, wy);
+    document.getElementById('readout').innerHTML = `
+      <div class="row"><span class="lbl">타일:</span> (${tx}, ${ty})</div>
+      <div class="row"><span class="lbl">→ 월드:</span> tile_to_world = (${wx}, ${wy})</div>
+      <div class="row"><span class="lbl">→ 다시 타일:</span> world_to_tile = (${back[0]}, ${back[1]}) ${back[0]===tx&&back[1]===ty?'✓ 왕복 일치':''}</div>
+    `;
+  }
+
+  cv.addEventListener('mousemove', (e) => {
+    const r = cv.getBoundingClientRect();
+    const mx = (e.clientX - r.left) * (cv.width / r.width);
+    const my = (e.clientY - r.top) * (cv.height / r.height);
+    // invert screenForTile
+    const tx = Math.round((mx - OX) / CELL);
+    const tyScreen = Math.round((my - OY) / CELL);
+    const ty = (GR-1) - tyScreen;
+    if (tx>=0 && tx<GC && ty>=0 && ty<GR) {
+      hover = [tx, ty];
+      setReadout(tx, ty);
+    } else {
+      hover = null;
+    }
+    draw();
+  });
+
+  setReadout(0, 0);
+  draw();
+})();
+</script>
+</body>
+</html>

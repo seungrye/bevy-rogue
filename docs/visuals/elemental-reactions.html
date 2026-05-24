@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>원소 반응 매트릭스 — bevy-rogue</title>
+<style>
+  :root {
+    --bg: #14161b; --panel: #1d2027; --line: #2c2f38;
+    --fg: #d6d9e0; --muted: #8b909c; --accent: #5aa9e6;
+    --fire: #e8603c; --ice: #4db6e8; --poison: #7bc043; --lightning: #e8c84d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: var(--bg); color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+    line-height: 1.5;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0 0 18px; }
+  code { background: #2c2f38; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .wrap { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
+  table { border-collapse: collapse; }
+  th, td { border: 1px solid var(--line); padding: 0; text-align: center; }
+  th { background: #23262e; font-size: 13px; padding: 8px 10px; }
+  .el { font-weight: 700; }
+  .el-fire { color: var(--fire); } .el-ice { color: var(--ice); }
+  .el-poison { color: var(--poison); } .el-lightning { color: var(--lightning); }
+  .cell { width: 120px; height: 64px; cursor: pointer; transition: transform .08s; }
+  .cell:hover { transform: scale(1.04); }
+  .cell .rname { font-weight: 700; font-size: 14px; }
+  .cell .rdmg { font-size: 11px; opacity: .85; }
+  .cell.none { color: #4a4d57; background: #181a20; font-size: 12px; cursor: default; }
+  .diag { background: #181a20; color: #4a4d57; font-size: 11px; }
+  .detail { max-width: 320px; min-height: 200px; }
+  .detail h2 { font-size: 16px; margin: 0 0 4px; }
+  .detail .pair { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+  .detail .big { font-size: 20px; font-weight: 800; margin-bottom: 8px; }
+  .detail .eff { font-size: 14px; margin: 6px 0; }
+  .chip { display:inline-block; padding:2px 8px; border-radius: 999px; font-size:12px; background:#2c2f38; margin-right:6px; }
+  .placeholder { color: var(--muted); font-size: 13px; }
+  .footnote { font-size: 12px; color: var(--muted); margin-top: 16px; max-width: 560px; }
+  .legend { font-size: 13px; margin-top: 14px; }
+  .legend span { margin-right: 14px; }
+</style>
+</head>
+<body>
+  <h1>원소 반응 매트릭스</h1>
+  <p class="sub">두 원소가 같은 대상에 겹치면 즉시 반응이 발동하고 두 원소가 모두 소모된다.<br>
+  출처: <code>src/modules/elemental/mod.rs</code> — <code>Reaction::from_pair</code> / <code>apply_elements</code></p>
+
+  <div class="wrap">
+    <div class="panel">
+      <table id="matrix"></table>
+      <div class="legend">
+        <span class="el el-fire">● 불 (Fire)</span>
+        <span class="el el-ice">● 얼음 (Ice)</span>
+        <span class="el el-poison">● 독 (Poison)</span>
+        <span class="el el-lightning">● 번개 (Lightning)</span>
+      </div>
+    </div>
+
+    <div class="panel detail" id="detail">
+      <p class="placeholder">표의 셀을 클릭하면 반응 상세가 표시됩니다.</p>
+    </div>
+  </div>
+
+  <p class="footnote">
+    단일 원소 기본 효과(반응 없이 단독): 불 <code>3턴</code>·매턴 −2, 독 <code>5턴</code>·매턴 −1, 얼음 <code>4턴</code>·이동속도 ×0.5(최소 0.25), 번개 <code>1턴</code>·즉발만.
+    반응 피해/효과는 <code>apply_elements</code>의 분기와 정확히 일치합니다. 기절은 비-플레이어 대상에만 부여됩니다(플레이어는 피해만).
+  </p>
+
+<script>
+(function () {
+  const elements = [
+    {key:'Fire', ko:'불', cls:'el-fire'},
+    {key:'Ice', ko:'얼음', cls:'el-ice'},
+    {key:'Poison', ko:'독', cls:'el-poison'},
+    {key:'Lightning', ko:'번개', cls:'el-lightning'},
+  ];
+
+  // 코드 from_pair + apply_elements 분기 그대로
+  const reactions = {
+    'Fire+Ice':       {name:'융해', en:'Melt',        dmg:15, color:'#d98c6a', eff:'순수 피해 15. 두 원소 즉시 소모.'},
+    'Fire+Poison':    {name:'독기', en:'ToxicFume',   dmg:10, color:'#b0a04a', eff:'순수 피해 10. 두 원소 즉시 소모.'},
+    'Ice+Lightning':  {name:'파쇄', en:'Shatter',     dmg:20, color:'#6aa8d9', eff:'최대 단일 피해 20. 두 원소 즉시 소모.'},
+    'Ice+Poison':     {name:'동상', en:'Frostbite',   dmg:5,  color:'#7fae9a', eff:'피해 5 + 비-플레이어 2턴 행동불능(기절).'},
+    'Fire+Lightning': {name:'플라즈마', en:'Plasma',  dmg:8,  color:'#d9a24a', eff:'피해 8 + 비-플레이어 3턴 행동불능(기절).'},
+    'Poison+Lightning':{name:'전기독', en:'Electrotoxin', dmg:8, color:'#9ac04a', eff:'피해 8 + 강화 독(6턴) 재부여.'},
+  };
+
+  function lookup(a, b) {
+    return reactions[`${a}+${b}`] || reactions[`${b}+${a}`] || null;
+  }
+
+  const table = document.getElementById('matrix');
+  // header row
+  let head = '<tr><th></th>';
+  for (const e of elements) head += `<th class="el ${e.cls}">${e.ko}</th>`;
+  head += '</tr>';
+  table.innerHTML = head;
+
+  for (const ra of elements) {
+    const tr = document.createElement('tr');
+    const th = document.createElement('th');
+    th.className = 'el ' + ra.cls;
+    th.textContent = ra.ko;
+    tr.appendChild(th);
+    for (const rb of elements) {
+      const td = document.createElement('td');
+      if (ra.key === rb.key) {
+        td.className = 'cell diag';
+        td.textContent = '— 동일 원소';
+      } else {
+        const r = lookup(ra.key, rb.key);
+        if (r) {
+          td.className = 'cell';
+          td.style.background = r.color + '22';
+          td.style.borderLeft = '3px solid ' + r.color;
+          td.innerHTML = `<div class="rname" style="color:${r.color}">${r.name}</div><div class="rdmg">피해 ${r.dmg}</div>`;
+          td.addEventListener('click', () => showDetail(ra, rb, r));
+        } else {
+          td.className = 'cell none';
+          td.textContent = '반응 없음';
+        }
+      }
+      tr.appendChild(td);
+    }
+    table.appendChild(tr);
+  }
+
+  function showDetail(a, b, r) {
+    const d = document.getElementById('detail');
+    d.innerHTML = `
+      <div class="big" style="color:${r.color}">${r.name} <span style="font-size:14px;color:var(--muted)">(${r.en})</span></div>
+      <div class="pair">
+        <span class="chip ${a.cls}">${a.ko}</span> +
+        <span class="chip ${b.cls}">${b.ko}</span>
+        <span style="color:var(--muted)"> (순서 무관)</span>
+      </div>
+      <div class="eff"><b>피해:</b> ${r.dmg}</div>
+      <div class="eff"><b>효과:</b> ${r.eff}</div>
+      <div class="eff" style="color:var(--muted);font-size:12px;margin-top:14px;">
+        발동 시 기존 원소와 새 원소가 모두 제거됩니다. 플레이어가 이 반응으로 HP ≤ 0 이 되면 사망 처리.
+      </div>
+    `;
+  }
+})();
+</script>
+</body>
+</html>

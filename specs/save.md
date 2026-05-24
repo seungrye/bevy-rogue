@@ -25,9 +25,11 @@
 | `global_turn` | `u64` | 누적 턴 |
 | `player_tile` | `[usize; 2]` | 플레이어 타일 |
 | `player_hp/max_hp/mp/max_mp/attack/defense` | `i32` | 스탯 |
+| `player_progress` | `PlayerProgress` | 레벨·XP·처치 수 (`#[serde(default)]`) |
 | `inventory` | `PlayerInventory` | 아이템·소모품·금화 |
 | `equipment` | `PlayerEquipment` | 장착 |
 | `quest_state` | `QuestState` | 퀘스트 진행 |
+| `active_quests` | `HashSet<String>` | 이번 런 활성 퀘스트 — `spawn_chance` 재롤 방지 (`#[serde(default)]`) |
 | `current_zone` | `ZoneId` | 현재 존 |
 | `zone_revealed` | `HashMap<ZoneId, String>` | 존별 탐험 (비트팩 → Base64) |
 | `zone_persistence` | `HashMap<ZoneId, ZoneSnapshot>` | 혈흔·몬스터 슬롯 |

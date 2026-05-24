@@ -46,19 +46,9 @@ pub trait MapGenerator: Send + Sync {
 
 ### 구현된 생성기
 
-| 생성기 | 등록 이름 | 유형 | 결과 느낌 |
-|--------|-----------|------|-----------|
-| `BspGenerator` | `bsp` | 던전 | 규칙적 방 분할, 깔끔한 복도 (depth 6, 최소 8×8) |
-| `SimpleRoomsGenerator` | `simple_rooms` | 던전 | 다양한 크기의 방 랜덤 배치 |
-| `DrunkardWalkGenerator` | `drunkard` | 동굴 | 굴곡진 유기적 통로 |
-| `CellularAutomataGenerator` | `cellular_automata` | 동굴 | 자연 침식 느낌의 불규칙 동굴 |
-| `DlaGenerator` | `dla` | 동굴 | 중심에서 뻗어나가는 침식 구조 |
-| `BspIndoorGenerator` | `bsp_indoor` | 실내 | BSP 소규모 적용한 평면도 |
-| `PrefabGenerator` | `prefab` | 실내 | 손제작 방 청사진 조합 |
-| `OrganicVillageGenerator` | `organic_village` | 마을 | 유기적 배치 건물군 |
-| `GridVillageGenerator` | `grid_village` | 마을 | 격자 도로망 + 블록 건물 |
-| `ForestGenerator` | `forest` | 숲 | 나무 군집 사이 좁은 길 |
-| `PerlinNoiseGenerator` | `perlin` | 숲 | 펄린 노이즈 자연 지형 |
+총 **23종**이 `MapGeneratorRegistry` 에 등록된다. 등록 이름·유형·느낌 전체 표는
+[`docs/map.md`](../docs/map.md#생성-알고리즘) 가 정본. 물 타일(Water/Sand)을 쓰는
+수상 생성기와 v2 확장(미로/도시/바다/WFC) 설계는 [`map-generation-v2.md`](map-generation-v2.md) 참고.
 
 ### DLA 성능
 DLA 는 매 파티클마다 전체 타일 (16,000) 선형 스캔 시 5,600 파티클 ×
@@ -102,11 +92,14 @@ pub fn random_floor_tile_anywhere(
 
 ## 몬스터 시야 (FOV)
 
-몬스터가 무조건 추적 대신 시야 반경 + LOS 로 탐지.
+몬스터가 무조건 추적 대신 **방향 기반 두-반원 시야** + LOS 로 탐지.
+방향 FOV 모델(`Facing`, `FOV_FRONT`/`FOV_BACK`, `is_in_view`)은
+[`stealth-and-directional-fov.md`](stealth-and-directional-fov.md) 참고.
 
 ### 시야 판정
-거리 ≤ `vision_radius` AND Bresenham LOS 통과 (`is_line_of_sight_clear`
-공유).
+`is_in_view(monster_pos, facing, tile, vision_radius, FOV_BACK, map)` —
+정면 반경 `vision_radius`, 후면 반경 `FOV_BACK`, Bresenham LOS 통과
+(`is_line_of_sight_clear` 공유). 등 뒤·벽 너머 플레이어는 미탐지.
 
 ### AI 상태
 - `Idle` — 미인지. 무작위 배회 (30% 제자리).
