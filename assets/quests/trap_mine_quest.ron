@@ -1,0 +1,125 @@
+#![enable(implicit_some)]
+
+// ─────────────────────────────────────────────────────────────────
+// trap_mine_quest — 가시밭 갱도
+//
+// 함정 공략(해제) 퀘스트. 함정 기능(trap 모듈)을 정면으로 활용한다.
+//   - giver: 농부(farmer) — villager 레지스트리에 존재하고, 기존 어떤
+//     퀘스트의 giver 도 아니다(겹침 없음: burgomaster/merchant/elder/
+//     alchemist/jorah/samwell/bastian/grace/catelyn/old_man/ellen/
+//     wounded_soldier 가 이미 giver). quest_for_giver 1:1 가정 충족.
+//   - 테마: 농부의 밭 아래 폐갱. 예전 광부 일가가 가보(광부의 로켓)를
+//     지키려 갱도에 함정을 잔뜩 깔아두고 떠났다. 농부가 로켓을 되찾아
+//     달라 부탁한다.
+//   - 수락 시: 해제 도구(disarm_tool)·올빼미 안경(scout_lens)·함정 키트
+//     (trap_kit)를 건네며 T(설치)/Y(해제) 사용을 자연스럽게 안내한 뒤,
+//     PlaceTraps(숨김 Spike/Poison 다수)로 갱도에 위험 구역을 만들고
+//     폐갱(Named "trap_mine") 포탈을 dla 생성기로 연다.
+//   - 플레이어는 안경으로 함정을 보고 Y(해제 도구)로 해제하며 통과해
+//     광부의 로켓(miners_locket)을 회수한다.
+//   - 회수(HasItem)하면 자동으로 귀환 단계로, 농부에게 전달하면 보상.
+//
+// 사용 기능(전부 기존 메커니즘 재사용 — 신규 코드 없음):
+//   QuestAction:    ClearFlag, GiveItem, GiveItems, PlaceTraps,
+//                   OpenPortal, ClosePortal, RemoveItem, Log
+//   QuestCondition: HasItem
+//   QuestSpawn:     zone(Named) + phase 조건
+//   TrapKind:       Spike(가시), Poison(독) — 숨김 함정
+// ─────────────────────────────────────────────────────────────────
+QuestDef(
+    id: "trap_mine_quest",
+    title: "가시밭 갱도",
+    giver_npc: "farmer",
+    initial_phase: "not_started",
+    spawn_chance: 0.6,
+
+    phases: {
+        // ── 1단계: 의뢰 ────────────────────────────────────────
+        "not_started": QuestPhaseDef(
+            dialog: [
+                "여보게, 잠깐만. 밭일 말고 다른 부탁이 하나 있다네.",
+                "내 밭 아래엔 오래된 폐갱이 있어. 예전 광부 일가가 파다 버린 곳이지.",
+                "그 사람들이 떠나면서 갱도에 함정을 잔뜩 깔아놨다네. 가시며 독이며...",
+                "거기 우리 할머니 가보인 '광부의 로켓'이 떨어져 있는 걸 봤는데, 무서워서 못 가져왔어.",
+                "자네라면 어떻게든 해보지 않겠나? 위험한 일이라 도구는 내가 다 챙겨줌세.",
+                "어떤가, 맡아주겠나?",
+            ],
+            objective: Some("농부의 부탁 — 폐갱의 가보를 되찾을까."),
+        ),
+
+        // ── 2단계: 갱도 탐사 중 ─────────────────────────────────
+        "delving": QuestPhaseDef(
+            dialog: [
+                "아직 로켓을 못 찾았나? 서두르지 말게. 함정부터 살피게나.",
+                "올빼미 안경을 끼면 깔린 함정이 보일 걸세. 가까이 가면 드러나거든.",
+                "위험한 건 해제 도구(Y 키)로 풀어내고, 못 풀 곳은 빙 둘러 가게.",
+                "정 막히면 함정 키트(T 키)로 자네만의 함정을 깔아 길목을 막아도 좋아.",
+            ],
+            objective: Some("폐갱에 들어가 광부의 로켓을 회수하라. 깔린 함정은 안경으로 보고 Y(해제 도구)로 풀어라."),
+        ),
+
+        // ── 3단계: 회수 완료, 농부에게 귀환 ─────────────────────
+        "recovered": QuestPhaseDef(
+            dialog: [
+                "오, 돌아왔구먼! 그래, 로켓은 찾았나?",
+                "이거야, 이거! 할머니 얼굴이 그대로 들어 있어. 고맙네, 정말 고마워.",
+            ],
+            objective: Some("광부의 로켓을 농부에게 전달하라."),
+        ),
+
+        // ── 4단계: 완료 (보상) ─────────────────────────────────
+        "done": QuestPhaseDef(
+            dialog: [
+                "자네 덕에 마음의 짐을 덜었네. 약속한 사례일세, 받아두게.",
+                "그 도구들은 자네가 그냥 갖게. 앞으로 또 쓸 일이 있을 거야.",
+                "함정이란 게 무섭기만 한 줄 알았는데, 잘 다루면 무기가 되더구먼. 자네를 보고 배웠네.",
+            ],
+            objective: Some("폐갱 탐사 완료! 가보를 되찾았다."),
+        ),
+    },
+
+    transitions: [
+        // 수락 → 도구 지급(안내) + 갱도에 숨김 함정 배치 + 폐갱 포탈 개방
+        Transition(from: "not_started", trigger: Interact,
+            actions: [
+                ClearFlag("trap_mine_cleared"),
+                GiveItem("scout_lens"),
+                Log("농부: 이 올빼미 안경을 끼게. 끼면 땅에 깔린 함정이 붉게 비쳐 보일 걸세."),
+                GiveItem("disarm_tool"),
+                Log("농부: 이건 해제 도구일세. Y 키를 누르면 눈앞의 함정을 풀 수 있어."),
+                GiveItems(item: "trap_kit", count: 3),
+                Log("농부: 함정 키트도 세 개 넣었네. T 키로 자네만의 함정을 깔 수 있지. 길목을 막을 때 쓰게."),
+                OpenPortal(zone: "trap_mine", generator: "dla", placement: Border),
+                PlaceTraps(kind: Spike, count: 6, hidden: true),
+                PlaceTraps(kind: Poison, count: 4, hidden: true),
+                Log("농부: 포탈을 열어뒀네. 조심해서 들어가게. 한 발 한 발 살피면서!"),
+            ],
+            to: "delving"),
+
+        // 로켓 회수 시 자동으로 귀환 단계로
+        Transition(from: "delving", trigger: Auto,
+            when: HasItem("miners_locket"),
+            to: "recovered"),
+
+        // 귀환 → 로켓 반납 + 함정 정리(포탈 닫기) + 보상
+        Transition(from: "recovered", trigger: Interact,
+            actions: [
+                RemoveItem("miners_locket"),
+                Log("농부: 정말 고맙네. 약속은 약속이지."),
+                GiveItems(item: "health_potion", count: 4),
+                GiveItem("eternal_gem"),
+                ClosePortal("trap_mine"),
+                ClearFlag("trap_mine_cleared"),
+            ],
+            to: "done"),
+    ],
+
+    spawns: [
+        // 광부의 로켓 — 탐사 진행 중일 때 폐갱에 스폰
+        QuestSpawn(
+            phase: "delving",
+            item: "miners_locket",
+            zone: Named("trap_mine"),
+        ),
+    ],
+)

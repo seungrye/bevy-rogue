@@ -294,4 +294,13 @@
         pickup_message: "올빼미 안경을 받았다. 끼면 경비병의 시선이 붉게 비쳐 보인다.",
         image_path: "scene/open-chest.png",
     ),
+    QuestItemDef(
+        id: "miners_locket",
+        display_name: "광부의 로켓",
+        glyph_ascii: "0",
+        glyph_unicode: "\u{2641}",
+        glyph_game_icon: "\u{2641}",
+        pickup_message: "광부의 로켓을 되찾았다. 빛바랜 초상화가 안에서 흔들린다.",
+        image_path: "scene/open-chest.png",
+    ),
 ]

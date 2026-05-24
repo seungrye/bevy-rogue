@@ -1202,7 +1202,7 @@ mod tests {
     fn 퀘스트_NPC_마커는_giver_매칭으로만_표시된다() {
         // 퀘스트 NPC만 마커. 새 모델: quest_registry 에서 giver_npc 매칭.
         // (test 환경에선 quest_registry 가 없으므로 villager id 기반으로 시뮬.)
-        let regular_id = "farmer";  // villagers.ron 에서 어느 quest 의 giver 도 아님
+        let regular_id = "child";   // villagers.ron 에서 어느 quest 의 giver 도 아님
         let quest_id = "ellen";     // herb_quest.ron 의 giver_npc
         // helper: quest RON 들에서 giver_npc 후보 set 조회
         let mut givers = std::collections::HashSet::new();

@@ -1705,9 +1705,9 @@ mod tests {
     }
 
     #[test]
-    fn 퀘스트아이템_ron은_32종을_모두_로드한다() {
+    fn 퀘스트아이템_ron은_33종을_모두_로드한다() {
         let registry = qi();
-        assert_eq!(registry.quest_items.len(), 32, "quest_items.ron 에 32 종이 정의되어야 한다");
+        assert_eq!(registry.quest_items.len(), 33, "quest_items.ron 에 33 종이 정의되어야 한다");
     }
 
     #[test]

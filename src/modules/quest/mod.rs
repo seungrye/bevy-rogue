@@ -883,8 +883,16 @@ pub fn item_id_to_kind(id: &str, quest_items: &crate::modules::item::QuestItemRe
         "bow"                 => Some(ItemKind::Weapon(crate::modules::item::WeaponKind::BOW)),
         "leather_armor"       => Some(ItemKind::Armor(crate::modules::item::ArmorKind::LEATHER_ARMOR)),
         "health_potion"       => Some(ItemKind::Consumable(crate::modules::item::ConsumableKind::HEALTH_POTION)),
-        // 그 외는 quest item registry 에서 조회 — 알려진 quest item ID 면 QuestItemKind 반환
-        other => quest_items.intern_quest_item(other).map(|s| ItemKind::QuestItem(QuestItemKind(s))),
+        // 그 외는 레지스트리에서 조회한다. quest item → consumable → weapon → armor
+        // 순으로 시도해 첫 매칭 kind 를 반환한다. 이렇게 해야 퀘스트가 trap_kit/
+        // disarm_tool 같은 일반 소모품·장비도 GiveItem/RemoveItem 으로 다룰 수 있다.
+        other => quest_items.intern_quest_item(other).map(|s| ItemKind::QuestItem(QuestItemKind(s)))
+            .or_else(|| quest_items.intern_consumable(other)
+                .map(|s| ItemKind::Consumable(crate::modules::item::ConsumableKind(s))))
+            .or_else(|| quest_items.intern_weapon(other)
+                .map(|s| ItemKind::Weapon(crate::modules::item::WeaponKind(s))))
+            .or_else(|| quest_items.intern_armor(other)
+                .map(|s| ItemKind::Armor(crate::modules::item::ArmorKind(s)))),
     }
 }
 
@@ -959,6 +967,22 @@ mod tests {
         assert_eq!(item_id_to_kind("eternal_gem", qi()),        Some(ItemKind::QuestItem(QuestItemKind("eternal_gem"))));
         assert_eq!(item_id_to_kind("philosophers_stone", qi()), Some(ItemKind::QuestItem(QuestItemKind("philosophers_stone"))));
         assert!(item_id_to_kind("unknown", qi()).is_none());
+    }
+
+    #[test]
+    fn 퀘스트가_참조하는_일반소모품과_장비ID도_레지스트리에서_kind로_매핑된다() {
+        // 퀘스트가 trap_kit/disarm_tool 같은 일반 소모품이나 일반 무기·방어구를
+        // GiveItem/RemoveItem 으로 지급할 수 있도록, item_id_to_kind 가 quest item
+        // 이외의 소모품/무기/방어구 레지스트리도 순서대로 조회해 매핑한다.
+        use crate::modules::item::{ConsumableKind, WeaponKind, ArmorKind};
+        let _ = qi();
+        // 소모품 분기 (health_potion 이외)
+        assert_eq!(item_id_to_kind("trap_kit", qi()),    Some(ItemKind::Consumable(ConsumableKind("trap_kit"))));
+        assert_eq!(item_id_to_kind("disarm_tool", qi()), Some(ItemKind::Consumable(ConsumableKind("disarm_tool"))));
+        // 무기 분기 (sword/spear/bow 이외)
+        assert_eq!(item_id_to_kind("dagger", qi()),      Some(ItemKind::Weapon(WeaponKind("dagger"))));
+        // 방어구 분기 (leather_armor 이외)
+        assert_eq!(item_id_to_kind("plate_armor", qi()), Some(ItemKind::Armor(ArmorKind("plate_armor"))));
     }
 
     #[test]
@@ -2865,5 +2889,181 @@ mod tests {
         blown_state.set_phase("infiltration_quest", "done_blown");
         assert!(eval_condition(&gate, &inv, &world, &blown_state, qi()),
             "첫 잠입을 탐지된 채 끝내도(완료이므로) 열려야 한다");
+    }
+
+    // ── trap_mine_quest (함정 공략 퀘스트) 콘텐츠 검증 ─────────────────────────
+
+    /// 실제 함정 공략 퀘스트 RON 파일을 로드한다.
+    fn load_trap_mine_quest() -> QuestDef {
+        let text = std::fs::read_to_string("assets/quests/trap_mine_quest.ron")
+            .expect("trap_mine_quest.ron 이 존재해야 한다");
+        ron::de::from_str::<QuestDef>(&text)
+            .expect("trap_mine_quest.ron 이 파싱돼야 한다")
+    }
+
+    #[test]
+    fn 함정공략퀘스트는_파싱되고_시맨틱검증을_통과한다() {
+        let def = load_trap_mine_quest();
+        assert_eq!(def.id, "trap_mine_quest");
+        // giver 가 기존 어떤 퀘스트와도 겹치지 않는 농부여야 한다.
+        assert_eq!(def.giver_npc, "farmer", "giver 는 기존 퀘스트와 겹치지 않는 농부여야 한다");
+        let errors = validate_quest_def(&def, qi());
+        assert!(errors.is_empty(), "시맨틱 검증 통과해야 한다: {:?}", errors);
+    }
+
+    #[test]
+    fn 함정공략퀘스트의_giver는_다른_퀘스트의_giver와_겹치지_않는다() {
+        // quest_for_giver 가 1:1 을 가정하므로, 모든 퀘스트를 모아 farmer 를
+        // giver 로 쓰는 퀘스트가 trap_mine_quest 하나뿐임을 확인한다.
+        let mut reg = QuestRegistry::default();
+        for (path, def) in load_all_quest_defs() {
+            assert!(
+                reg.quests.insert(def.id.clone(), def).is_none(),
+                "{}: 퀘스트 id 가 중복된다", path
+            );
+        }
+        let farmer_givers: Vec<&str> = reg.quests.values()
+            .filter(|q| q.giver_npc == "farmer")
+            .map(|q| q.id.as_str())
+            .collect();
+        assert_eq!(farmer_givers, vec!["trap_mine_quest"],
+            "농부를 giver 로 쓰는 퀘스트는 trap_mine_quest 하나뿐이어야 한다");
+    }
+
+    #[test]
+    fn 함정공략퀘스트의_광부로켓ID가_kind로_매핑된다() {
+        let _ = qi();
+        assert_eq!(
+            item_id_to_kind("miners_locket", qi()),
+            Some(ItemKind::QuestItem(QuestItemKind("miners_locket"))),
+        );
+    }
+
+    #[test]
+    fn 함정공략퀘스트_수락전이는_숨김함정을_배치하고_폐갱포탈을_등록생성기로_연다() {
+        use crate::modules::trap::TrapKind;
+        let def = load_trap_mine_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "not_started" && t.trigger == TriggerKind::Interact)
+            .expect("수락 전이가 있어야 한다");
+
+        // 숨김 가시 함정 다수 배치
+        assert!(
+            t.actions.iter().any(|a| matches!(a,
+                QuestAction::PlaceTraps { kind: TrapKind::Spike, count, hidden: true } if *count >= 1)),
+            "수락 시 숨김 가시 함정을 배치해야 한다",
+        );
+        // 숨김 독 함정 다수 배치
+        assert!(
+            t.actions.iter().any(|a| matches!(a,
+                QuestAction::PlaceTraps { kind: TrapKind::Poison, count, hidden: true } if *count >= 1)),
+            "수락 시 숨김 독 함정을 배치해야 한다",
+        );
+        // 폐갱 포탈 — 등록된 생성기(dla)로 연다.
+        let gen = t.actions.iter().find_map(|a| match a {
+            QuestAction::OpenPortal { zone, generator, .. } if zone == "trap_mine" => Some(generator.as_str()),
+            _ => None,
+        }).expect("trap_mine 포탈을 여는 OpenPortal 이 있어야 한다");
+        assert_eq!(gen, "dla", "폐갱은 dla 생성기로 열어야 한다");
+    }
+
+    #[test]
+    fn 함정공략퀘스트_수락전이는_해제도구와_안내도구를_지급한다() {
+        // 핍진성: 도구를 건네며 T/Y 사용을 안내한다. 함정 해제/표시/설치 도구가
+        // 모두 지급되어야 플레이어가 갑자기 메커니즘을 알게 되는 어색함이 없다.
+        let def = load_trap_mine_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "not_started" && t.trigger == TriggerKind::Interact)
+            .expect("수락 전이가 있어야 한다");
+        assert!(
+            t.actions.iter().any(|a| matches!(a, QuestAction::GiveItem(id) if id == "disarm_tool")),
+            "수락 시 해제 도구(disarm_tool)를 지급해야 한다",
+        );
+        assert!(
+            t.actions.iter().any(|a| matches!(a, QuestAction::GiveItem(id) if id == "scout_lens")),
+            "수락 시 함정 표시용 올빼미 안경(scout_lens)을 지급해야 한다",
+        );
+        assert!(
+            t.actions.iter().any(|a| matches!(a, QuestAction::GiveItems { item, count } if item == "trap_kit" && *count >= 1)),
+            "수락 시 함정 키트(trap_kit)를 지급해야 한다",
+        );
+    }
+
+    #[test]
+    fn 함정공략퀘스트는_광부로켓을_폐갱_탐사페이즈에_스폰한다() {
+        use crate::modules::zone::ZoneId;
+        let def = load_trap_mine_quest();
+        let spawn = def.spawns.iter()
+            .find(|s| s.item == "miners_locket")
+            .expect("광부 로켓 스폰이 있어야 한다");
+        assert_eq!(spawn.zone, ZoneId::Named("trap_mine".into()), "폐갱 구역에 스폰돼야 한다");
+        assert_eq!(spawn.phase, "delving", "탐사 진행 페이즈에 스폰돼야 한다");
+    }
+
+    #[test]
+    fn 함정공략퀘스트는_로켓을_회수하면_자동으로_귀환단계로_전진한다() {
+        let def = load_trap_mine_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "delving" && t.trigger == TriggerKind::Auto)
+            .expect("탐사 중 자동 전이가 있어야 한다");
+        assert_eq!(t.to, "recovered", "회수 시 귀환(recovered) 단계로 가야 한다");
+
+        // 로켓을 가졌을 때만 조건이 충족되어야 한다.
+        let cond = t.when.as_ref().expect("회수 자동 전이에 HasItem 조건이 있어야 한다");
+        let world = make_world();
+        let state = QuestState::default();
+        let empty = PlayerInventory::default();
+        assert!(!eval_condition(cond, &empty, &world, &state, qi()),
+            "로켓이 없으면 전진하지 않아야 한다");
+        let with_locket = make_inventory_with(&["miners_locket"]);
+        assert!(eval_condition(cond, &with_locket, &world, &state, qi()),
+            "로켓을 회수하면 전진 조건이 충족돼야 한다");
+    }
+
+    #[test]
+    fn 함정공략퀘스트_완료전이는_로켓반납과_포탈정리와_보상지급으로_done에_도달한다() {
+        let def = load_trap_mine_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "recovered" && t.trigger == TriggerKind::Interact)
+            .expect("완료 전이가 있어야 한다");
+        assert_eq!(t.to, "done", "전달하면 완료(done)에 도달해야 한다");
+        assert!(
+            t.actions.iter().any(|a| matches!(a, QuestAction::RemoveItem(id) if id == "miners_locket")),
+            "완료 시 로켓을 반납해야 한다",
+        );
+        assert!(
+            t.actions.iter().any(|a| matches!(a, QuestAction::ClosePortal(z) if z == "trap_mine")),
+            "완료 시 폐갱 포탈을 닫아 정리해야 한다",
+        );
+        assert!(
+            t.actions.iter().any(|a| matches!(a, QuestAction::GiveItem(id) if id == "eternal_gem"))
+                || t.actions.iter().any(|a| matches!(a, QuestAction::GiveItems { .. })),
+            "완료 시 보상을 지급해야 한다",
+        );
+    }
+
+    #[test]
+    fn 함정공략퀘스트_수락전이의_PlaceTraps가_실제_함정스폰_이벤트로_실행된다() {
+        use crate::modules::trap::TrapKind;
+        // RON 의 수락 전이 액션을 그대로 execute_actions 로 실행해, PlaceTraps 가
+        // SpawnTrapEvent 로 발행되는지(가시/독 모두) end-to-end 로 확인한다.
+        let def = load_trap_mine_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "not_started" && t.trigger == TriggerKind::Interact)
+            .expect("수락 전이가 있어야 한다");
+        let mut app = execute_actions_app(t.actions.clone());
+        app.update();
+
+        let events = app.world.resource::<Events<SpawnTrapEvent>>();
+        let mut cursor = events.get_reader();
+        let kinds: Vec<TrapKind> = cursor.read(events).map(|e| e.kind).collect();
+        assert!(kinds.contains(&TrapKind::Spike), "가시 함정 스폰 이벤트가 발행돼야 한다");
+        assert!(kinds.contains(&TrapKind::Poison), "독 함정 스폰 이벤트가 발행돼야 한다");
+        // 함정이 모두 숨김으로 배치되는지(역직렬화·전달 일관성) 확인.
+        let mut cursor2 = app.world.resource::<Events<SpawnTrapEvent>>().get_reader();
+        assert!(
+            cursor2.read(app.world.resource::<Events<SpawnTrapEvent>>()).all(|e| e.hidden),
+            "퀘스트가 깐 함정은 모두 숨김이어야 한다",
+        );
     }
 }
