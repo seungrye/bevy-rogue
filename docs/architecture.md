@@ -16,7 +16,8 @@ RapierPhysicsPlugin → MapPlugin → PlayerPlugin → CombatPlugin → MonsterP
 | `map` | 맵 리소스·타일 렌더링·가시성·방향 시야(FOV), 23종 절차 생성 알고리즘, GlobalSeed |
 | `player` | 플레이어 엔티티, 방향키/WASD 이동(LERP 애니메이션), Facing 기반 FOV 계산, 카메라 추적 |
 | `combat` | 전투 판정(`calc_damage`), CombatStats 컴포넌트, 피해·사망 처리 |
-| `monster` | 몬스터 스폰·AI·리스폰 타이머, 방향 시야 기반 추적, 잠입 가드(`guard_stats`/`SpawnGuards`) |
+| `monster` | 몬스터 스폰·AI·리스폰 타이머, 방향 시야 기반 추적, 잠입 가드(`guard_stats`/`SpawnGuards`), 플레이어 광량 반영 탐지 보정 |
+| `lighting` | 조명/그림자 — 광원(`LightSource`) 반경 기반 타일 광량(`LightMap`), 어둠 디밍 + 어둠 은신(가드 탐지 반경 감소) |
 | `combat_feedback` | 피격 시 핏자국(BloodStain)·핏방울 파티클·피격 섬광 이펙트 |
 | `elemental` | 무기/몬스터 원소 속성, 원소 반응(융해·파쇄 등), 지속피해·기절·둔화 상태 |
 | `projectile` | 화살 등 투사체 발사·비행·충돌(Rapier 센서), 명중 시 피해·원소 부여 |
@@ -41,6 +42,17 @@ RapierPhysicsPlugin → MapPlugin → PlayerPlugin → CombatPlugin → MonsterP
 순수 함수 `is_in_view(...)`가 거리·반원·LoS(Bresenham)를 판정하며, 플레이어 `update_fov`와
 몬스터 탐지가 공유한다. `Facing`이 0 벡터면 전방향 원형으로 폴백.
 설계 상세는 [`specs/stealth-and-directional-fov.md`](../specs/stealth-and-directional-fov.md).
+
+## 조명/그림자
+
+광원(`LightSource { radius }`) 반경 기반의 2단계 광량(`LightLevel::Bright/Dark`)을
+`lighting` 모듈이 단일 정본 `LightMap` 리소스에 매 프레임 계산한다(`update_light_map`).
+플레이어는 기본 시야광(`PLAYER_LIGHT_RADIUS`)을 자동 보유하고, 횃불(`SpawnTorchEvent`)도
+같은 컴포넌트로 표현된다. 순수 함수 `light_level(tile, sources)`(반경 경계 포함)로 광량을
+계산하고, 같은 `LightMap` 을 **렌더(어둠 디밍, `apply_light_dimming`/`tile_render_color`)** 와
+**탐지(가드 시야)** 양쪽이 공유한다. 잠입 연계: 어둠 타일은 `effective_vision_radius` 로
+가드 탐지 반경이 `DARK_VISION_PENALTY` 만큼 줄어(은신 보너스), `monster_turn`·`danger_tiles`
+(위험 오버레이)에 일관 반영된다. 설계는 [`specs/additional-systems.md`](../specs/additional-systems.md) §C.
 
 ## 맵 생성 및 시드 체계
 

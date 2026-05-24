@@ -19,6 +19,7 @@ use crate::modules::{
     map::GlobalTurn,
     elemental::{Element, ElementalApplyEvent, ElementalStatus, Stunned, weapon_element},
     quest::{QuestCondition, QuestState, eval_condition},
+    lighting::{LightMap, LightLevel, effective_vision_radius},
 };
 
 const Z_MONSTER: f32 = 0.8;
@@ -207,22 +208,28 @@ pub struct GuardVisionOverlay;
 /// 가드(적대 엔티티)들의 방향 시야가 닿는 "위험 타일" 집합을 계산하는 순수 함수.
 ///
 /// 각 가드 `(pos, facing, vision_radius)` 에 대해 맵의 모든 타일 중
-/// `is_in_view(gpos, gfacing, tile, vision_radius, FOV_BACK, map)` 인 타일을 모아
+/// `is_in_view(gpos, gfacing, tile, eff_radius, FOV_BACK, map)` 인 타일을 모아
 /// 합집합으로 반환한다. 정면(facing 쪽)은 멀리, 등 뒤는 가깝게(FOV_BACK) 보는
 /// Phase 1 방향 시야를 그대로 재사용하므로 등 뒤·벽 너머 타일은 제외된다.
-/// 가드가 없으면 빈 집합을 반환한다.
+///
+/// `eff_radius` 는 **그 타일의 광량**으로 보정한 유효 반경(`effective_vision_radius`)
+/// 이다 — 어두운 타일은 가드가 더 가까워야만 위험으로 표시돼, 탐지(monster_turn)와
+/// 같은 광량 규칙을 오버레이도 그대로 따른다(일관성). 광량은 `light_at` 클로저로
+/// 주입해 순수성을 유지한다. 가드가 없으면 빈 집합을 반환한다.
 pub fn danger_tiles(
     guards: &[((usize, usize), IVec2, i32)],
     map: &Map,
+    light_at: impl Fn(usize, usize) -> LightLevel,
 ) -> HashSet<(usize, usize)> {
     let mut out = HashSet::new();
     for &((gx, gy), facing, vision_radius) in guards {
         for ty in 0..map.height {
             for tx in 0..map.width {
+                let eff_radius = effective_vision_radius(vision_radius, light_at(tx, ty));
                 if is_in_view(
                     gx as i32, gy as i32, facing,
                     tx as i32, ty as i32,
-                    vision_radius, FOV_BACK, map,
+                    eff_radius, FOV_BACK, map,
                 ) {
                     out.insert((tx, ty));
                 }
@@ -249,6 +256,7 @@ fn update_guard_vision_overlay(
     mut commands: Commands,
     map_res: Res<MapResource>,
     inventory: Res<PlayerInventory>,
+    light_map: Res<LightMap>,
     monster_query: Query<(&Monster, &Facing, &CombatStats)>,
     overlay_query: Query<Entity, With<GuardVisionOverlay>>,
 ) {
@@ -268,7 +276,8 @@ fn update_guard_vision_overlay(
         .map(|(m, facing, _)| ((m.tile_x, m.tile_y), facing.0, m.vision_radius))
         .collect();
 
-    for (tx, ty) in danger_tiles(&guards, map) {
+    // 오버레이도 탐지와 같은 광량 정본(LightMap)을 써, 어두운 타일은 위험에서 제외.
+    for (tx, ty) in danger_tiles(&guards, map, |x, y| light_map.at(x, y)) {
         let coord = tile_to_world_coords(tx, ty);
         commands.spawn((
             SpriteBundle {
@@ -290,6 +299,9 @@ pub struct MonsterPlugin;
 impl Plugin for MonsterPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MonsterRegistry>()
+            // 탐지(monster_turn)·오버레이가 읽는 광량 정본. LightingPlugin 이 이미
+            // 등록하지만 monster 단독 테스트/구성에서도 동작하도록 여기서도 보장한다.
+            .init_resource::<LightMap>()
             .add_event::<PlayerDetectedEvent>()
             .add_event::<SpawnGuardEvent>()
             .add_event::<SpawnMonsterEvent>()
@@ -749,6 +761,7 @@ fn monster_turn(
     mut elemental_writer: EventWriter<ElementalApplyEvent>,
     mut detected_writer: EventWriter<PlayerDetectedEvent>,
     registry: Res<MonsterRegistry>,
+    light_map: Res<LightMap>,
 ) {
     if events.read().next().is_none() { return; }
 
@@ -758,6 +771,10 @@ fn monster_turn(
     let (px, py) = player_moving
         .map(|m| world_to_tile_coords(m.target))
         .unwrap_or_else(|| world_to_tile_coords(player_transform.translation));
+
+    // 플레이어가 선 타일의 광량 — 어둠이면 가드 탐지 반경이 줄어든다(은신 보너스).
+    // 렌더와 같은 LightMap 정본을 읽어 디밍과 탐지가 동일한 광량을 쓴다.
+    let player_light = light_map.at(px, py);
 
     let mut occupied: HashSet<(usize, usize)> = monster_query.iter()
         .filter(|(_, _, stats, _, _, _)| stats.hp > 0)
@@ -777,8 +794,10 @@ fn monster_turn(
 
         occupied.remove(&(monster.tile_x, monster.tile_y));
 
-        // 시야 갱신 (몬스터 facing 기준 방향 시야)
-        if can_see_player(monster.tile_x, monster.tile_y, px, py, monster.vision_radius, facing.0, map) {
+        // 시야 갱신 (몬스터 facing 기준 방향 시야).
+        // 플레이어 광량으로 탐지 반경을 보정 — 어둠이면 더 가까워야만 들킨다.
+        let detect_radius = effective_vision_radius(monster.vision_radius, player_light);
+        if can_see_player(monster.tile_x, monster.tile_y, px, py, detect_radius, facing.0, map) {
             monster.alert_turns = MAX_ALERT_TURNS;
             // 기존 alert/추적/전투 흐름은 그대로 두고, 탐지 사실만 추가로 알린다(B안).
             // 잠입 퀘스트가 활성이면 quest 모듈이 stealth_blown 플래그를 세운다.
@@ -1650,9 +1669,17 @@ mod tests {
 
     // --- monster_turn ---
 
+    /// 맵 전체를 밝게(Bright) 채운 LightMap — 기존 탐지 테스트가 광량 보정 없이
+    /// (base 반경 그대로) 동작하도록, 별도 광량 의도가 없는 기본 하네스에 쓴다.
+    fn bright_light_map(w: usize, h: usize) -> LightMap {
+        LightMap { width: w, height: h, levels: vec![LightLevel::Bright; w * h] }
+    }
+
     fn turn_app(map: Map) -> App {
+        let (w, h) = (map.width, map.height);
         let mut app = App::new();
         app.insert_resource(MapResource(map));
+        app.insert_resource(bright_light_map(w, h));
         app.add_event::<PlayerActedEvent>();
         app.add_event::<LogMessage>();
         app.add_event::<CombatFeedbackEvent>();
@@ -2196,6 +2223,40 @@ mod tests {
         assert_eq!(detected_count(&app), 0, "등 뒤 먼 플레이어는 미탐지 → 이벤트 없음");
     }
 
+    /// 광량을 지정해(전부 어둠/밝음) monster_turn 을 돌리는 하네스.
+    fn turn_app_with_light(map: Map, all_bright: bool) -> App {
+        let (w, h) = (map.width, map.height);
+        let mut app = turn_app(map);
+        let level = if all_bright { LightLevel::Bright } else { LightLevel::Dark };
+        app.insert_resource(LightMap { width: w, height: h, levels: vec![level; w * h] });
+        app
+    }
+
+    #[test]
+    fn 어둠속_플레이어는_같은_거리에서도_가드에게_탐지되지_않는다() {
+        // 가드(5,5)가 +x 를 보고 플레이어(11,5)는 정면 6칸. base 반경 6 이면 밝을 땐
+        // 탐지, 어둠이면 유효 반경 2 로 줄어 미탐지가 된다.
+        let mut app = turn_app_with_light(full_floor_map(), false);
+        spawn_player(&mut app, (11, 5));
+        let m = spawn_monster(&mut app, "고블린", (5, 5), 6);
+        app.world.get_mut::<Facing>(m).unwrap().0 = IVec2::new(1, 0);
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert_eq!(detected_count(&app), 0, "어둠 속 6칸 거리는 유효 반경 2 로 줄어 미탐지");
+    }
+
+    #[test]
+    fn 밝은곳_플레이어는_같은_거리에서_가드에게_탐지된다() {
+        // 위와 동일 배치인데 밝으면 base 반경 6 그대로라 정면 6칸이 탐지된다.
+        let mut app = turn_app_with_light(full_floor_map(), true);
+        spawn_player(&mut app, (11, 5));
+        let m = spawn_monster(&mut app, "고블린", (5, 5), 6);
+        app.world.get_mut::<Facing>(m).unwrap().0 = IVec2::new(1, 0);
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert_eq!(detected_count(&app), 1, "밝은 곳 6칸 거리는 base 반경 6 으로 탐지");
+    }
+
     // --- handle_spawn_guards ---
 
     fn guard_spawn_app(map: Map) -> App {
@@ -2652,7 +2713,7 @@ mod tests {
         // 가드(5,5)가 오른쪽(+x)을 보면 정면 타일(8,5)이 위험 타일에 포함된다.
         let map = open_map(20, 20);
         let guards = [((5usize, 5usize), IVec2::new(1, 0), 8)];
-        let tiles = danger_tiles(&guards, &map);
+        let tiles = danger_tiles(&guards, &map, |_, _| LightLevel::Bright);
         assert!(tiles.contains(&(8, 5)), "정면 반경 내 타일은 위험 타일이어야 한다");
         assert!(tiles.contains(&(5, 5)), "가드 자기 타일도 시야에 포함된다");
     }
@@ -2662,7 +2723,7 @@ mod tests {
         // 가드(10,5)가 오른쪽(+x)을 보면, 등 뒤(-x)로 FOV_BACK(3)을 넘는 (5,5)는 제외.
         let map = open_map(20, 20);
         let guards = [((10usize, 5usize), IVec2::new(1, 0), 8)];
-        let tiles = danger_tiles(&guards, &map);
+        let tiles = danger_tiles(&guards, &map, |_, _| LightLevel::Bright);
         assert!(!tiles.contains(&(5, 5)), "등 뒤로 FOV_BACK 을 넘는 타일은 제외되어야 한다");
     }
 
@@ -2672,7 +2733,7 @@ mod tests {
         let mut map = open_map(20, 20);
         for y in 0..20 { map.set_tile(7, y, TileKind::Wall); }
         let guards = [((5usize, 5usize), IVec2::new(1, 0), 10)];
-        let tiles = danger_tiles(&guards, &map);
+        let tiles = danger_tiles(&guards, &map, |_, _| LightLevel::Bright);
         assert!(tiles.contains(&(6, 5)), "벽 앞 타일은 보인다");
         assert!(!tiles.contains(&(9, 5)), "벽 너머 타일은 시야가 막혀 제외되어야 한다");
     }
@@ -2685,7 +2746,7 @@ mod tests {
             ((5usize, 5usize), IVec2::new(1, 0), 6),
             ((30usize, 5usize), IVec2::new(-1, 0), 6),
         ];
-        let tiles = danger_tiles(&guards, &map);
+        let tiles = danger_tiles(&guards, &map, |_, _| LightLevel::Bright);
         assert!(tiles.contains(&(8, 5)), "첫 가드 정면 타일 포함");
         assert!(tiles.contains(&(27, 5)), "둘째 가드 정면 타일 포함");
     }
@@ -2694,7 +2755,7 @@ mod tests {
     fn 가드가_없으면_위험타일은_빈_집합이다() {
         let map = open_map(20, 20);
         let guards: [((usize, usize), IVec2, i32); 0] = [];
-        let tiles = danger_tiles(&guards, &map);
+        let tiles = danger_tiles(&guards, &map, |_, _| LightLevel::Bright);
         assert!(tiles.is_empty(), "가드가 없으면 위험 타일도 없다");
     }
 
@@ -2707,7 +2768,9 @@ mod tests {
     /// 오버레이 시스템 + 필요한 리소스를 갖춘 App. AssetServer(Image) 는 SpriteBundle 용.
     fn overlay_app(map: Map, has_lens: bool) -> App {
         let mut app = asset_app();
+        let (w, h) = (map.width, map.height);
         app.insert_resource(MapResource(map));
+        app.insert_resource(bright_light_map(w, h));
         let mut inv = PlayerInventory::default();
         if has_lens { inv.items.push(scout_lens_item()); }
         app.insert_resource(inv);

@@ -4,6 +4,7 @@ pub mod elemental;
 pub mod projectile;
 pub mod core;
 pub mod item;
+pub mod lighting;
 pub mod map;
 pub mod monster;
 pub mod player;
