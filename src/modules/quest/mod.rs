@@ -3066,4 +3066,313 @@ mod tests {
             "퀘스트가 깐 함정은 모두 숨김이어야 한다",
         );
     }
+
+    // ── dragon_hunt_quest (보스 토벌 퀘스트) 콘텐츠 검증 ──────────────────────
+
+    /// 실제 보스 토벌 퀘스트 RON 파일을 로드한다.
+    fn load_dragon_hunt_quest() -> QuestDef {
+        let text = std::fs::read_to_string("assets/quests/dragon_hunt_quest.ron")
+            .expect("dragon_hunt_quest.ron 이 존재해야 한다");
+        ron::de::from_str::<QuestDef>(&text)
+            .expect("dragon_hunt_quest.ron 이 파싱돼야 한다")
+    }
+
+    #[test]
+    fn 보스토벌퀘스트는_파싱되고_시맨틱검증을_통과한다() {
+        let def = load_dragon_hunt_quest();
+        assert_eq!(def.id, "dragon_hunt_quest");
+        // giver 가 기존 어떤 퀘스트와도 겹치지 않는 수렵단장이어야 한다.
+        assert_eq!(def.giver_npc, "huntmaster", "giver 는 새 주민 수렵단장이어야 한다");
+        let errors = validate_quest_def(&def, qi());
+        assert!(errors.is_empty(), "시맨틱 검증 통과해야 한다: {:?}", errors);
+    }
+
+    #[test]
+    fn 보스토벌퀘스트의_마룡심장ID가_kind로_매핑된다() {
+        let _ = qi();
+        assert_eq!(
+            item_id_to_kind("wyrm_heart", qi()),
+            Some(ItemKind::QuestItem(QuestItemKind("wyrm_heart"))),
+        );
+    }
+
+    #[test]
+    fn 보스토벌퀘스트_수락전이는_둥지포탈을_등록생성기로_열고_보스와_부하를_스폰한다() {
+        let def = load_dragon_hunt_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "not_started" && t.trigger == TriggerKind::Interact)
+            .expect("수락 전이가 있어야 한다");
+        // 둥지 포탈 — 등록된 생성기(bsp)로 연다.
+        let gen = t.actions.iter().find_map(|a| match a {
+            QuestAction::OpenPortal { zone, generator, .. } if zone == "wyrm_lair" => Some(generator.as_str()),
+            _ => None,
+        }).expect("wyrm_lair 포탈을 여는 OpenPortal 이 있어야 한다");
+        assert_eq!(gen, "bsp", "둥지는 bsp 생성기로 열어야 한다");
+        // 보스(frost_wyrm)를 둥지에 스폰해야 한다.
+        assert!(
+            t.actions.iter().any(|a| matches!(a,
+                QuestAction::SpawnMonster { id, count } if id == "frost_wyrm" && *count >= 1)),
+            "수락 시 보스 서리 마룡을 스폰해야 한다",
+        );
+        // 부하도 함께 스폰한다("보스 + 부하" 패턴).
+        assert!(
+            t.actions.iter().any(|a| matches!(a,
+                QuestAction::SpawnMonster { id, .. } if id == "troll")),
+            "수락 시 부하 몬스터도 함께 스폰해야 한다",
+        );
+    }
+
+    #[test]
+    fn 보스토벌퀘스트가_스폰하는_보스id는_몬스터레지스트리에_실재한다() {
+        // SpawnMonster 가 참조하는 모든 monster id 가 monsters.ron 에 존재해야
+        // 런타임에 handle_spawn_monster 의 by_id 조회가 성공한다.
+        let monster_reg = crate::modules::monster::build_test_registry();
+        let def = load_dragon_hunt_quest();
+        let spawned_ids: Vec<&str> = def.transitions.iter()
+            .flat_map(|t| t.actions.iter())
+            .filter_map(|a| match a {
+                QuestAction::SpawnMonster { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(!spawned_ids.is_empty(), "SpawnMonster 액션이 있어야 한다");
+        for id in spawned_ids {
+            assert!(
+                monster_reg.by_id(id).is_some(),
+                "SpawnMonster 가 참조하는 monster id '{}' 가 monsters.ron 에 없다", id
+            );
+        }
+    }
+
+    #[test]
+    fn 보스토벌퀘스트는_마룡심장을_둥지_토벌페이즈에_스폰한다() {
+        use crate::modules::zone::ZoneId;
+        let def = load_dragon_hunt_quest();
+        let spawn = def.spawns.iter()
+            .find(|s| s.item == "wyrm_heart")
+            .expect("마룡 심장 스폰이 있어야 한다");
+        assert_eq!(spawn.zone, ZoneId::Named("wyrm_lair".into()), "둥지 구역에 스폰돼야 한다");
+        assert_eq!(spawn.phase, "hunting", "토벌 진행 페이즈에 스폰돼야 한다");
+    }
+
+    #[test]
+    fn 보스토벌퀘스트는_심장을_회수하면_자동으로_귀환단계로_전진한다() {
+        let def = load_dragon_hunt_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "hunting" && t.trigger == TriggerKind::Auto)
+            .expect("토벌 중 자동 전이가 있어야 한다");
+        assert_eq!(t.to, "slain", "회수 시 귀환(slain) 단계로 가야 한다");
+
+        let cond = t.when.as_ref().expect("회수 자동 전이에 HasItem 조건이 있어야 한다");
+        let world = make_world();
+        let state = QuestState::default();
+        let empty = PlayerInventory::default();
+        assert!(!eval_condition(cond, &empty, &world, &state, qi()),
+            "심장이 없으면 전진하지 않아야 한다");
+        let with_heart = make_inventory_with(&["wyrm_heart"]);
+        assert!(eval_condition(cond, &with_heart, &world, &state, qi()),
+            "심장을 회수하면 전진 조건이 충족돼야 한다");
+    }
+
+    #[test]
+    fn 보스토벌퀘스트_완료전이는_심장반납과_포탈정리와_보상지급으로_done에_도달한다() {
+        let def = load_dragon_hunt_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "slain" && t.trigger == TriggerKind::Interact)
+            .expect("완료 전이가 있어야 한다");
+        assert_eq!(t.to, "done", "전달하면 완료(done)에 도달해야 한다");
+        assert!(
+            t.actions.iter().any(|a| matches!(a, QuestAction::RemoveItem(id) if id == "wyrm_heart")),
+            "완료 시 심장을 반납해야 한다",
+        );
+        assert!(
+            t.actions.iter().any(|a| matches!(a, QuestAction::ClosePortal(z) if z == "wyrm_lair")),
+            "완료 시 둥지 포탈을 닫아 정리해야 한다",
+        );
+        assert!(
+            t.actions.iter().any(|a| matches!(a, QuestAction::GiveItem(_) | QuestAction::GiveItems { .. })),
+            "완료 시 보상을 지급해야 한다",
+        );
+    }
+
+    #[test]
+    fn 보스토벌퀘스트_수락전이의_SpawnMonster가_실제_몬스터스폰_이벤트로_실행된다() {
+        // RON 의 수락 전이 액션을 그대로 execute_actions 로 실행해, SpawnMonster 가
+        // SpawnMonsterEvent 로 발행되는지 end-to-end 로 확인한다(보스 + 부하).
+        let def = load_dragon_hunt_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "not_started" && t.trigger == TriggerKind::Interact)
+            .expect("수락 전이가 있어야 한다");
+        let mut app = execute_actions_app(t.actions.clone());
+        app.update();
+
+        let events = app.world.resource::<Events<SpawnMonsterEvent>>();
+        let mut cursor = events.get_reader();
+        let payloads: Vec<(String, u32)> = cursor.read(events)
+            .map(|e| (e.id.clone(), e.count)).collect();
+        assert!(payloads.iter().any(|(id, c)| id == "frost_wyrm" && *c == 1),
+            "보스 서리 마룡 1마리 스폰 이벤트가 발행돼야 한다: {:?}", payloads);
+        assert!(payloads.iter().any(|(id, _)| id == "troll"),
+            "부하 몬스터 스폰 이벤트도 발행돼야 한다: {:?}", payloads);
+    }
+
+    #[test]
+    fn 보스토벌퀘스트의_giver_수렵단장은_다른_퀘스트의_giver와_겹치지_않는다() {
+        let mut reg = QuestRegistry::default();
+        for (path, def) in load_all_quest_defs() {
+            assert!(
+                reg.quests.insert(def.id.clone(), def).is_none(),
+                "{}: 퀘스트 id 가 중복된다", path
+            );
+        }
+        let givers: Vec<&str> = reg.quests.values()
+            .filter(|q| q.giver_npc == "huntmaster")
+            .map(|q| q.id.as_str())
+            .collect();
+        assert_eq!(givers, vec!["dragon_hunt_quest"],
+            "수렵단장을 giver 로 쓰는 퀘스트는 dragon_hunt_quest 하나뿐이어야 한다");
+    }
+
+    // ── buried_dungeon_quest (지형폭발 던전 개방 퀘스트) 콘텐츠 검증 ───────────
+
+    /// 실제 지형폭발 던전 개방 퀘스트 RON 파일을 로드한다.
+    fn load_buried_dungeon_quest() -> QuestDef {
+        let text = std::fs::read_to_string("assets/quests/buried_dungeon_quest.ron")
+            .expect("buried_dungeon_quest.ron 이 존재해야 한다");
+        ron::de::from_str::<QuestDef>(&text)
+            .expect("buried_dungeon_quest.ron 이 파싱돼야 한다")
+    }
+
+    #[test]
+    fn 폭발던전퀘스트는_파싱되고_시맨틱검증을_통과한다() {
+        let def = load_buried_dungeon_quest();
+        assert_eq!(def.id, "buried_dungeon_quest");
+        // giver 는 유일한 비-giver 였던 아이(child)여야 한다.
+        assert_eq!(def.giver_npc, "child", "giver 는 아이여야 한다");
+        let errors = validate_quest_def(&def, qi());
+        assert!(errors.is_empty(), "시맨틱 검증 통과해야 한다: {:?}", errors);
+    }
+
+    #[test]
+    fn 폭발던전퀘스트의_봉인성물ID가_kind로_매핑된다() {
+        let _ = qi();
+        assert_eq!(
+            item_id_to_kind("sealed_relic", qi()),
+            Some(ItemKind::QuestItem(QuestItemKind("sealed_relic"))),
+        );
+    }
+
+    #[test]
+    fn 폭발던전퀘스트_수락전이는_지형폭발을_일으키고_숨겨진던전을_등록생성기로_연다() {
+        let def = load_buried_dungeon_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "not_started" && t.trigger == TriggerKind::Interact)
+            .expect("수락 전이가 있어야 한다");
+        // 지형을 파괴하는(terrain:true) 폭발 + 엔티티 범위 피해.
+        assert!(
+            t.actions.iter().any(|a| matches!(a,
+                QuestAction::Explode { radius, terrain: true, entity_damage }
+                    if *radius >= 1 && *entity_damage >= 1)),
+            "수락 시 지형을 파괴하고 범위 피해를 주는 폭발이 일어나야 한다",
+        );
+        // 드러난 숨겨진 던전 — 등록된 생성기(cellular_automata)로 연다.
+        let gen = t.actions.iter().find_map(|a| match a {
+            QuestAction::OpenPortal { zone, generator, .. } if zone == "buried_dungeon" => Some(generator.as_str()),
+            _ => None,
+        }).expect("buried_dungeon 포탈을 여는 OpenPortal 이 있어야 한다");
+        assert_eq!(gen, "cellular_automata", "숨겨진 던전은 cellular_automata 생성기로 열어야 한다");
+    }
+
+    #[test]
+    fn 폭발던전퀘스트의_폭발은_던전개방보다_먼저_실행된다() {
+        // 서사 일관성: 폭발(지형 변화)이 먼저 일어나고 그 결과로 던전이 드러난다.
+        let def = load_buried_dungeon_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "not_started" && t.trigger == TriggerKind::Interact)
+            .expect("수락 전이가 있어야 한다");
+        let explode_idx = t.actions.iter().position(|a| matches!(a, QuestAction::Explode { .. }))
+            .expect("Explode 액션이 있어야 한다");
+        let portal_idx = t.actions.iter().position(|a| matches!(a,
+            QuestAction::OpenPortal { zone, .. } if zone == "buried_dungeon"))
+            .expect("OpenPortal 액션이 있어야 한다");
+        assert!(explode_idx < portal_idx, "폭발이 던전 개방보다 먼저 실행돼야 한다");
+    }
+
+    #[test]
+    fn 폭발던전퀘스트는_봉인성물을_던전_탐사페이즈에_스폰한다() {
+        use crate::modules::zone::ZoneId;
+        let def = load_buried_dungeon_quest();
+        let spawn = def.spawns.iter()
+            .find(|s| s.item == "sealed_relic")
+            .expect("봉인된 성물 스폰이 있어야 한다");
+        assert_eq!(spawn.zone, ZoneId::Named("buried_dungeon".into()), "드러난 던전에 스폰돼야 한다");
+        assert_eq!(spawn.phase, "exploring", "탐사 진행 페이즈에 스폰돼야 한다");
+    }
+
+    #[test]
+    fn 폭발던전퀘스트는_성물을_회수하면_자동으로_귀환단계로_전진한다() {
+        let def = load_buried_dungeon_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "exploring" && t.trigger == TriggerKind::Auto)
+            .expect("탐사 중 자동 전이가 있어야 한다");
+        assert_eq!(t.to, "recovered", "회수 시 귀환(recovered) 단계로 가야 한다");
+
+        let cond = t.when.as_ref().expect("회수 자동 전이에 HasItem 조건이 있어야 한다");
+        let world = make_world();
+        let state = QuestState::default();
+        let empty = PlayerInventory::default();
+        assert!(!eval_condition(cond, &empty, &world, &state, qi()),
+            "성물이 없으면 전진하지 않아야 한다");
+        let with_relic = make_inventory_with(&["sealed_relic"]);
+        assert!(eval_condition(cond, &with_relic, &world, &state, qi()),
+            "성물을 회수하면 전진 조건이 충족돼야 한다");
+    }
+
+    #[test]
+    fn 폭발던전퀘스트_완료전이는_성물반납과_포탈정리와_보상지급으로_done에_도달한다() {
+        let def = load_buried_dungeon_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "recovered" && t.trigger == TriggerKind::Interact)
+            .expect("완료 전이가 있어야 한다");
+        assert_eq!(t.to, "done", "보여주면 완료(done)에 도달해야 한다");
+        assert!(
+            t.actions.iter().any(|a| matches!(a, QuestAction::RemoveItem(id) if id == "sealed_relic")),
+            "완료 시 성물을 반납해야 한다",
+        );
+        assert!(
+            t.actions.iter().any(|a| matches!(a, QuestAction::ClosePortal(z) if z == "buried_dungeon")),
+            "완료 시 던전 포탈을 닫아 정리해야 한다",
+        );
+        assert!(
+            t.actions.iter().any(|a| matches!(a, QuestAction::GiveItem(_) | QuestAction::GiveItems { .. })),
+            "완료 시 보상을 지급해야 한다",
+        );
+    }
+
+    #[test]
+    fn 폭발던전퀘스트_수락전이의_Explode가_실제_폭발이벤트로_실행된다() {
+        // RON 의 수락 전이 액션을 그대로 execute_actions 로 실행해, Explode 가
+        // ExplosionEvent 로 발행되는지 end-to-end 로 확인한다.
+        // execute_actions_app 의 trigger_pos 는 (5,5).
+        let def = load_buried_dungeon_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "not_started" && t.trigger == TriggerKind::Interact)
+            .expect("수락 전이가 있어야 한다");
+        let mut app = execute_actions_app(t.actions.clone());
+        app.update();
+
+        let events = app.world.resource::<Events<ExplosionEvent>>();
+        let mut cursor = events.get_reader();
+        let evs: Vec<(usize, usize, i32, bool, i32)> = cursor.read(events)
+            .map(|e| (e.center.0, e.center.1, e.radius, e.terrain, e.entity_damage)).collect();
+        assert_eq!(evs.len(), 1, "폭발 이벤트가 한 번 발행돼야 한다");
+        let (cx, cy, radius, terrain, dmg) = evs[0];
+        assert_eq!((cx, cy), (5, 5), "트리거 위치가 폭발 중심이어야 한다");
+        assert!(radius >= 1 && dmg >= 1, "폭발은 유효한 반경과 피해를 가져야 한다");
+        assert!(terrain, "지형을 파괴하는 폭발이어야 한다");
+
+        // 같은 수락 전이가 던전 포탈도 함께 열었는지 확인한다.
+        assert_eq!(app.world.resource::<Events<SpawnQuestPortalEvent>>().len(), 1,
+            "폭발 후 숨겨진 던전 포탈이 열려야 한다");
+    }
 }

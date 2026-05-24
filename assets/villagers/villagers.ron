@@ -235,6 +235,15 @@
         speed: 0.5,
     ),
     VillagerDef(
+        id: "huntmaster",
+        name: "수렵단장",
+        color: (0.70, 0.30, 0.25),
+        // dragon_hunt_quest(서리 마룡 토벌)의 giver. 현상금을 걸고 토벌대를
+        // 꾸리는 노련한 사냥꾼. 퀘스트 NPC 이므로 일반 대사는 비운다.
+        dialogs: [],
+        speed: 0.6,
+    ),
+    VillagerDef(
         id: "old_man",
         name: "노인",
         color: (0.65, 0.65, 0.75),

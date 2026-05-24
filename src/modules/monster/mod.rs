@@ -2397,12 +2397,27 @@ mod tests {
     }
 
     #[test]
-    fn 몬스터RON을_읽으면_세_종류가_적재된다() {
+    fn 몬스터RON을_읽으면_일반_세_종과_보스_한_종이_적재된다() {
         let reg = build_test_registry();
-        assert_eq!(reg.monsters.len(), 3, "goblin/orc/troll 세 종");
+        // goblin/orc/troll 3종 + 보스 frost_wyrm 1종 = 4종.
+        assert_eq!(reg.monsters.len(), 4, "goblin/orc/troll + 보스 frost_wyrm");
         assert!(reg.by_id("goblin").is_some());
         assert!(reg.by_id("orc").is_some());
         assert!(reg.by_id("troll").is_some());
+        assert!(reg.by_id("frost_wyrm").is_some(), "보스 서리 마룡이 적재돼야 한다");
+    }
+
+    #[test]
+    fn 보스_서리마룡은_quest_only이고_고HP_고공격_얼음원소다() {
+        // dragon_hunt_quest 전용 보스 — 자연 스폰되지 않고 SpawnMonster 로만 등장.
+        let reg = build_test_registry();
+        let w = reg.by_id("frost_wyrm").expect("서리 마룡 정의가 있어야 한다");
+        assert!(w.quest_only, "보스는 quest_only 여야 자연 스폰되지 않는다");
+        assert_eq!((w.display_name.as_str(), w.glyph.as_str()), ("서리 마룡", "D"));
+        assert_eq!((w.hp, w.attack, w.defense, w.vision_radius), (60, 14, 6, 10));
+        assert_eq!(w.speed, 0.8);
+        assert_eq!(w.color, (0.55, 0.85, 1.0));
+        assert_eq!(w.element_enum(), Some(Element::Ice), "서리 마룡은 얼음 원소");
     }
 
     #[test]

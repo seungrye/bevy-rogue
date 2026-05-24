@@ -303,4 +303,22 @@
         pickup_message: "광부의 로켓을 되찾았다. 빛바랜 초상화가 안에서 흔들린다.",
         image_path: "scene/open-chest.png",
     ),
+    QuestItemDef(
+        id: "wyrm_heart",
+        display_name: "마룡의 심장",
+        glyph_ascii: "$",
+        glyph_unicode: "\u{2665}",
+        glyph_game_icon: "\u{2665}",
+        pickup_message: "마룡의 심장을 손에 넣었다. 식어가는 박동 속에 아직 서릿발 같은 한기가 감돈다.",
+        image_path: "scene/open-chest.png",
+    ),
+    QuestItemDef(
+        id: "sealed_relic",
+        display_name: "봉인된 성물",
+        glyph_ascii: "+",
+        glyph_unicode: "\u{271D}",
+        glyph_game_icon: "\u{271D}",
+        pickup_message: "봉인된 성물을 회수했다. 무너진 던전의 먼지 속에서 은은한 빛을 머금고 있다.",
+        image_path: "scene/open-chest.png",
+    ),
 ]

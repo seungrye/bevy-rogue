@@ -1,0 +1,115 @@
+#![enable(implicit_some)]
+
+// ─────────────────────────────────────────────────────────────────
+// dragon_hunt_quest — 서리 마룡 토벌
+//
+// 보스 토벌 퀘스트. "보스가 보물을 지킨다" 구조 (잠입 퀘스트와 같은
+// 전리품-회수 메커니즘 재사용 — QuestCondition 에 "몬스터 처치"가 없으므로
+// 보스를 돌파해 보물을 집으면 HasItem 으로 완료된다).
+//   - giver: 수렵단장(huntmaster) — villager 레지스트리에 새로 추가된 NPC.
+//     기존 어떤 퀘스트의 giver 도 아니다(겹침 없음). quest_for_giver 1:1 충족.
+//   - 테마: 마을을 위협하는 서리 마룡이 산속 둥지에 보물(마룡의 심장)을 깔고
+//     앉아 있다. 수렵단장이 현상금을 걸고 토벌을 의뢰한다.
+//   - 수락 시: OpenPortal(둥지 Named "wyrm_lair", bsp 생성기) +
+//     SpawnMonster(보스 frost_wyrm 1 + 부하 troll 2)로 둥지를 채운다.
+//   - 둥지(wyrm_lair)에 보물(wyrm_heart)을 스폰 → 플레이어가 마룡을 돌파해
+//     심장을 집으면 HasItem 으로 자동 완료 단계로 → 수렵단장에게 귀환해 보상.
+//
+// 사용 기능(전부 기존 메커니즘 재사용 — 신규 코드 없음):
+//   QuestAction:    ClearFlag, GiveItem, OpenPortal, SpawnMonster,
+//                   GiveItems, RemoveItem, ClosePortal, Log
+//   QuestCondition: HasItem
+//   QuestSpawn:     zone(Named) + phase 조건
+// ─────────────────────────────────────────────────────────────────
+QuestDef(
+    id: "dragon_hunt_quest",
+    title: "서리 마룡 토벌",
+    giver_npc: "huntmaster",
+    initial_phase: "not_started",
+    spawn_chance: 0.6,
+
+    phases: {
+        // ── 1단계: 토벌 의뢰 ───────────────────────────────────
+        "not_started": QuestPhaseDef(
+            dialog: [
+                "자네가 그 떠돌이 검사로군. 마침 잘 왔네. 내가 수렵단장일세.",
+                "산 위 동굴에 서리 마룡이 똬리를 틀었어. 숨만 내쉬어도 사람이 얼어붙는다네.",
+                "벌써 사냥꾼 셋을 잃었지. 놈은 제 둥지에 보물을 깔고 앉아 절대 떠나지 않아.",
+                "그 보물 한가운데에 '마룡의 심장'이 박혀 있다더군. 놈의 약점이자 토벌의 증표야.",
+                "정공법으로 베든, 빈틈을 노려 심장만 빼오든 상관없네. 살아서 가져오기만 하게.",
+                "현상금은 두둑이 걸어뒀어. 토벌대에 들겠나?",
+            ],
+            objective: Some("수렵단장의 토벌 의뢰를 받아볼까."),
+        ),
+
+        // ── 2단계: 토벌 진행 중 ────────────────────────────────
+        "hunting": QuestPhaseDef(
+            dialog: [
+                "아직 둥지에서 돌아오지 못했나? 무리하지 말게, 살아 돌아오는 게 먼저야.",
+                "마룡의 숨결은 정면이 가장 위험해. 옆구리로 파고들게.",
+                "심장만 빼와도 토벌로 친다네. 굳이 끝장을 보려다 얼어죽지 말게.",
+            ],
+            objective: Some("마룡의 둥지로 들어가 마룡의 심장을 회수하라. 서리 마룡과 부하들을 돌파해야 한다."),
+        ),
+
+        // ── 3단계: 회수 완료, 수렵단장에게 귀환 ────────────────
+        "slain": QuestPhaseDef(
+            dialog: [
+                "돌아왔군! 그 한기... 설마 정말로?",
+                "마룡의 심장이라니. 아직도 차갑게 뛰는군. 자네, 해냈어.",
+            ],
+            objective: Some("마룡의 심장을 수렵단장에게 가져가라."),
+        ),
+
+        // ── 4단계: 완료 (보상) ─────────────────────────────────
+        "done": QuestPhaseDef(
+            dialog: [
+                "마을을 짓누르던 그림자가 걷혔네. 이건 약속한 현상금일세, 받아두게.",
+                "자네 같은 토벌꾼이 있어 우리가 발 뻗고 잔다네. 두고두고 회자될 무용담이야.",
+                "또 사나운 놈이 나타나면 제일 먼저 자네를 찾겠네. 부디 그때도 살아 있게나.",
+            ],
+            objective: Some("토벌 완료! 서리 마룡을 처치하고 마을의 위협을 걷어냈다."),
+        ),
+    },
+
+    transitions: [
+        // 수락 → 무기 지급 + 둥지 포탈 개방 + 보스/부하 스폰
+        Transition(from: "not_started", trigger: Interact,
+            actions: [
+                ClearFlag("wyrm_slain"),
+                GiveItem("health_potion"),
+                Log("수렵단장: 이 회복약을 챙기게. 마룡의 한기에 버티려면 필요할 거야."),
+                OpenPortal(zone: "wyrm_lair", generator: "bsp", placement: Border),
+                SpawnMonster(id: "frost_wyrm", count: 1),
+                SpawnMonster(id: "troll", count: 2),
+                Log("수렵단장: 둥지로 가는 길을 열었네. 놈은 제 보물 위에서 자네를 기다릴 걸세."),
+            ],
+            to: "hunting"),
+
+        // 마룡의 심장 회수 시 자동으로 귀환 단계로
+        Transition(from: "hunting", trigger: Auto,
+            when: HasItem("wyrm_heart"),
+            to: "slain"),
+
+        // 귀환 → 심장 반납 + 둥지 정리(포탈 닫기) + 보상
+        Transition(from: "slain", trigger: Interact,
+            actions: [
+                RemoveItem("wyrm_heart"),
+                Log("수렵단장: 약속은 약속이지. 토벌대를 대표해 자네에게 사례하네."),
+                GiveItems(item: "health_potion", count: 5),
+                GiveItem("eternal_gem"),
+                ClosePortal("wyrm_lair"),
+                ClearFlag("wyrm_slain"),
+            ],
+            to: "done"),
+    ],
+
+    spawns: [
+        // 마룡의 심장 — 토벌 진행 중일 때 둥지에 스폰 (보스가 지키는 전리품)
+        QuestSpawn(
+            phase: "hunting",
+            item: "wyrm_heart",
+            zone: Named("wyrm_lair"),
+        ),
+    ],
+)

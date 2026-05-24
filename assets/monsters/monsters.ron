@@ -59,4 +59,24 @@
         spawn_condition: None,
         quest_only: false,
     ),
+    // ── 보스: 서리 마룡 ──────────────────────────────────────────────
+    // dragon_hunt_quest(서리 마룡 토벌) 전용 보스. 자연 스폰 안 됨(quest_only).
+    // QuestAction::SpawnMonster("frost_wyrm") 로만 둥지에 등장한다. 고HP·고공격·
+    // 얼음 원소의 거대 용으로, 둥지에서 보물(마룡의 심장)을 지킨다.
+    MonsterDef(
+        id: "frost_wyrm",
+        display_name: "서리 마룡",
+        glyph: "D",
+        color: (0.55, 0.85, 1.0),
+        hp: 60,
+        attack: 14,
+        defense: 6,
+        vision_radius: 10,
+        speed: 0.8,
+        element: Some("ice"),
+        spawn_weight: 1.0,
+        zones: [],
+        spawn_condition: None,
+        quest_only: true,
+    ),
 ]

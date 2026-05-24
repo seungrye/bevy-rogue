@@ -1,0 +1,116 @@
+#![enable(implicit_some)]
+
+// ─────────────────────────────────────────────────────────────────
+// buried_dungeon_quest — 무너진 봉인
+//
+// 지형폭발로 숨겨진 던전 개방 퀘스트. QuestAction::Explode 를 정면으로
+// 활용한다 (사용자 원안: "물건이 폭발하면서 지형이 변하고 숨겨진 던전이
+// 드러난다").
+//   - giver: 아이(child) — villager 레지스트리의 유일한 비-giver NPC.
+//     기존 어떤 퀘스트의 giver 도 아니다(겹침 없음). quest_for_giver 1:1 충족.
+//   - 테마: 아이가 마을 우물 옆 무너진 돌무더기 아래에서 빛을 봤다며 데려간다.
+//     아이의 할머니가 남긴 폭약 자루가 막힌 입구를 무너뜨려 숨겨진 던전을 연다.
+//   - 수락 시: Explode{radius, terrain:true, entity_damage}로 트리거 위치(아이/
+//     플레이어 좌표) 기준 막힌 입구(파괴가능 지형)를 폭파 + Log 연출, 이어
+//     OpenPortal 로 드러난 숨겨진 던전(Named "buried_dungeon", cellular_automata)
+//     을 연다. 폭발이 범위 피해(entity_damage)를 준다는 점을 대사에 반영한다.
+//   - 던전 안의 봉인된 성물(sealed_relic)을 회수 → HasItem 으로 자동 완료
+//     단계로 → 아이에게 돌아가 보상.
+//
+// 사용 기능(전부 기존 메커니즘 재사용 — 신규 코드 없음):
+//   QuestAction:    ClearFlag, Explode, OpenPortal, GiveItems, GiveItem,
+//                   RemoveItem, ClosePortal, Log
+//   QuestCondition: HasItem
+//   QuestSpawn:     zone(Named) + phase 조건
+// ─────────────────────────────────────────────────────────────────
+QuestDef(
+    id: "buried_dungeon_quest",
+    title: "무너진 봉인",
+    giver_npc: "child",
+    initial_phase: "not_started",
+    spawn_chance: 0.55,
+
+    phases: {
+        // ── 1단계: 의뢰 ────────────────────────────────────────
+        "not_started": QuestPhaseDef(
+            dialog: [
+                "아저씨! 아저씨! 잠깐만요, 비밀 하나 알려드릴게요.",
+                "마을 우물 옆 돌무더기 아래에 반짝이는 게 있어요. 진짜로 봤어요!",
+                "근데 돌이 너무 커서 못 들어가요. 어른들은 안 믿어주고요.",
+                "할머니가 남긴 폭약 자루가 있는데... 저는 무서워서 못 터뜨려요. 펑! 하면 다칠 수도 있대요.",
+                "아저씨가 멀찍이서 터뜨려 주면 안 돼요? 가까이 있는 건 다 날아간댔어요. 조심하셔야 해요!",
+                "도와주실 거죠? 네?",
+            ],
+            objective: Some("아이의 부탁 — 돌무더기를 폭파해 숨겨진 곳을 열어볼까."),
+        ),
+
+        // ── 2단계: 던전 탐사 중 ────────────────────────────────
+        "exploring": QuestPhaseDef(
+            dialog: [
+                "우와, 진짜 펑! 했어요! 먼지가 엄청 났어요!",
+                "그 안에 반짝이던 거, 아직 못 찾았어요? 분명 안쪽에 있을 거예요.",
+                "조심하세요, 폭발 때 근처 게 다 날아갔으니까 길이 위험할지도 몰라요.",
+            ],
+            objective: Some("드러난 숨겨진 던전에 들어가 봉인된 성물을 회수하라."),
+        ),
+
+        // ── 3단계: 회수 완료, 아이에게 귀환 ────────────────────
+        "recovered": QuestPhaseDef(
+            dialog: [
+                "찾았어요?! 어디 봐요, 어디!",
+                "우와아... 진짜 반짝여요. 제 말이 맞았죠? 거봐요!",
+            ],
+            objective: Some("봉인된 성물을 아이에게 보여주러 가라."),
+        ),
+
+        // ── 4단계: 완료 (보상) ─────────────────────────────────
+        "done": QuestPhaseDef(
+            dialog: [
+                "이거 아저씨 가지세요! 저는 비밀을 찾은 걸로 충분해요. 할머니도 기뻐하실 거예요.",
+                "아, 맞다. 할머니가 모아둔 보물도 여기 있었어요. 같이 나눠 가져요!",
+                "다음엔 또 다른 비밀 장소 알려드릴게요. 저만 아는 곳이 엄청 많거든요!",
+            ],
+            objective: Some("탐사 완료! 폭파로 드러난 던전에서 봉인된 성물을 되찾았다."),
+        ),
+    },
+
+    transitions: [
+        // 수락 → 막힌 입구 폭파(지형 파괴 + 범위 피해) + 연출 + 숨겨진 던전 포탈 개방
+        Transition(from: "not_started", trigger: Interact,
+            actions: [
+                ClearFlag("buried_dungeon_opened"),
+                Log("아이: 자, 도화선에 불 붙였어요! 멀리, 멀리 물러나세요!"),
+                Explode(radius: 4, terrain: true, entity_damage: 8),
+                Log("콰아앙! 돌무더기가 무너지며 흙먼지 너머로 어두운 통로가 드러난다. 폭압이 주변을 휩쓸었다."),
+                OpenPortal(zone: "buried_dungeon", generator: "cellular_automata", placement: Border),
+                Log("아이: 봤죠?! 진짜 길이 생겼어요! 안에 반짝이는 거 꼭 가져와요!"),
+            ],
+            to: "exploring"),
+
+        // 봉인된 성물 회수 시 자동으로 귀환 단계로
+        Transition(from: "exploring", trigger: Auto,
+            when: HasItem("sealed_relic"),
+            to: "recovered"),
+
+        // 귀환 → 성물 반납 + 던전 정리(포탈 닫기) + 보상
+        Transition(from: "recovered", trigger: Interact,
+            actions: [
+                RemoveItem("sealed_relic"),
+                Log("아이: 헤헤, 약속은 약속이에요! 이거 받으세요!"),
+                GiveItems(item: "health_potion", count: 3),
+                GiveItem("eternal_gem"),
+                ClosePortal("buried_dungeon"),
+                ClearFlag("buried_dungeon_opened"),
+            ],
+            to: "done"),
+    ],
+
+    spawns: [
+        // 봉인된 성물 — 탐사 진행 중일 때 드러난 던전에 스폰
+        QuestSpawn(
+            phase: "exploring",
+            item: "sealed_relic",
+            zone: Named("buried_dungeon"),
+        ),
+    ],
+)
