@@ -10,6 +10,7 @@ pub mod player;
 pub mod quest;
 pub mod ranged;
 pub mod save;
+pub mod skill;
 pub mod ui;
 pub mod villager;
 pub mod zone;
