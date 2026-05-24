@@ -78,6 +78,7 @@ fn update_dialog_box(
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)]
     use super::*;
 
     /// AssetServer 가 필요한 UI 렌더 시스템용 App 하네스.

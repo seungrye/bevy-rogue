@@ -1,5 +1,5 @@
+#![allow(non_snake_case)]
 use super::*;
-use bevy::prelude::*;
 use rand::SeedableRng;
 use crate::modules::map::{Map, MapResource, MapType, Rect, TileKind, UsedSpawnTiles};
 use crate::modules::combat::CombatStats;

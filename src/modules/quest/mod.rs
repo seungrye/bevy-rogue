@@ -890,6 +890,7 @@ pub fn item_id_to_kind(id: &str, quest_items: &crate::modules::item::QuestItemRe
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)]
     use super::*;
     use std::sync::OnceLock;
 

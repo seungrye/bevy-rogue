@@ -95,6 +95,7 @@ fn connect_rooms(map: &mut Map, a: &Rect, b: &Rect, rng: &mut impl Rng) {
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)]
     use super::*;
     use crate::modules::map::MapGenerator;
 

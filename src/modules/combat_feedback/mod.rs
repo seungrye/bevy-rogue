@@ -175,6 +175,7 @@ pub fn hit_flash_remaining_after(remaining: f32, dt: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)]
     use super::*;
 
     fn decay_per_turn_for(lifetime_turns: u32) -> f32 {

@@ -673,6 +673,7 @@ fn is_quest_terminal_def(def: &QuestDef, state: &QuestState, quest_id: &str) -> 
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)]
     use super::*;
     use crate::modules::map::{TileKind, MapResource};
     use rand::SeedableRng;

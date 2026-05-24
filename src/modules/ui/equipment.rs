@@ -380,6 +380,7 @@ pub(crate) fn build_panel_text(
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)]
     use super::*;
     use crate::modules::item::{InventoryItem, WeaponKind, ArmorKind, ConsumableKind, QuestItemKind};
     use std::sync::OnceLock;

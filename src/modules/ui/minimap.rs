@@ -590,6 +590,7 @@ fn update_minimap(
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)]
     use super::*;
     use crate::modules::map::{tile_to_world_coords, MapResource};
 

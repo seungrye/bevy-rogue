@@ -867,6 +867,7 @@ pub fn is_in_view(
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)]
     use super::*;
     use bevy::prelude::Color;
     use rand::SeedableRng;

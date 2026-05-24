@@ -295,6 +295,7 @@ fn should_hint_giver_dialogue(def: &QuestDef, phase_id: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)]
     use super::*;
     use std::collections::HashMap;
     use crate::modules::{

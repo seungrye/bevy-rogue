@@ -138,6 +138,7 @@ fn status_hud_text(
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)]
     use super::*;
     use crate::modules::{
         item::{ArmorKind, PlayerEquipment, PlayerInventory, WeaponKind},

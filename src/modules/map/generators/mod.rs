@@ -315,6 +315,7 @@ pub fn add_rooms_from_water_land(map: &mut Map) {
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)]
     use super::super::MapGenerator;
     use super::super::TileKind;
     use super::{bsp, rooms, drunkard, cellular_automata, dla, bsp_indoor, prefab, organic_village, grid_village, forest, perlin,

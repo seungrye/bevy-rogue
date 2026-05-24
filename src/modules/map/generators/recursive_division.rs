@@ -82,6 +82,7 @@ fn divide(map: &mut Map, x1: usize, y1: usize, x2: usize, y2: usize, rng: &mut i
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)]
     use super::*;
     use crate::modules::map::MapGenerator;
 

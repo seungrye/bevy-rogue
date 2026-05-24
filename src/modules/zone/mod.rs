@@ -819,6 +819,7 @@ fn arrival_pos(map: &Map, arrive_from: &PortalDirection) -> (usize, usize) {
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)]
     use super::*;
     use crate::modules::map::{Rect, TileKind};
     use rand::SeedableRng;

@@ -317,6 +317,7 @@ fn section(value: impl Into<String>, font: &Handle<Font>, size: f32, color: Colo
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)]
     use super::*;
     use crate::modules::map::MapGenerator;
 

@@ -386,6 +386,7 @@ fn delete_save_at(path: &str) {
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)]
     use super::*;
     use crate::modules::{
         item::{InventoryItem, ItemKind, WeaponKind, ConsumableKind},

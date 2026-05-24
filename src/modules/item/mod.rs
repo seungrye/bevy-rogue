@@ -1385,6 +1385,7 @@ fn handle_despawn_world_item(
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)]
     use super::*;
     use std::sync::OnceLock;
     static TEST_QI: OnceLock<ItemRegistry> = OnceLock::new();

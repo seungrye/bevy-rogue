@@ -98,6 +98,7 @@ fn carve_building(map: &mut Map, b: &Rect, rng: &mut impl Rng) {
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)]
     use super::*;
     use crate::modules::map::{MapGenerator, MapType};
 
