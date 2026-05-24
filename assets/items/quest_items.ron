@@ -267,4 +267,13 @@
         pickup_message: "전속 파일럿 인증서를 받았다. 그레체의 무기 테스터가 되었다.",
         image_path: "scene/open-chest.png",
     ),
+    QuestItemDef(
+        id: "secret_document",
+        display_name: "기밀 문서",
+        glyph_ascii: "d",
+        glyph_unicode: "\u{2712}",
+        glyph_game_icon: "\u{1F4DC}",
+        pickup_message: "기밀 문서를 손에 넣었다. 봉랍이 깨지지 않도록 품속 깊이 숨긴다.",
+        image_path: "scene/open-chest.png",
+    ),
 ]

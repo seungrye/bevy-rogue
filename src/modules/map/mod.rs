@@ -670,6 +670,43 @@ pub fn is_line_of_sight_clear(map: &Map, x0: i32, y0: i32, x1: i32, y1: i32) -> 
     }
 }
 
+/// 방향 시야 기본 반경. 정면(facing 쪽)으로는 멀리(`FOV_FRONT`),
+/// 등 뒤로는 가깝게(`FOV_BACK`) 본다. 두 값을 분리해 두면 시야 feel 을
+/// 데이터처럼 튜닝할 수 있다.
+pub const FOV_FRONT: i32 = 8;
+pub const FOV_BACK: i32 = 3;
+
+/// `facing` 을 바라보는 주체(`px`,`py`)가 대상 타일(`tx`,`ty`)을 볼 수 있는지
+/// 판정하는 순수 함수.
+///
+/// - `front = dot(t - p, facing) >= 0` 이면 정면(수직 dot==0 도 관대하게 정면).
+///   정면이면 반경 `front_r`, 등 뒤면 반경 `back_r` 을 쓴다.
+/// - `facing` 이 0 벡터(초기/정지 직후 등)면 방향 개념이 없으므로 전방향
+///   원형(항상 `front_r`)으로 폴백한다.
+/// - 반경 안(`dist² <= r²`)이고 `is_line_of_sight_clear` 면 가시.
+pub fn is_in_view(
+    px: i32, py: i32,
+    facing: IVec2,
+    tx: i32, ty: i32,
+    front_r: i32, back_r: i32,
+    map: &Map,
+) -> bool {
+    let dx = tx - px;
+    let dy = ty - py;
+
+    // facing 0 벡터면 방향이 없으니 전방향 원형(front_r)으로 폴백.
+    let radius = if facing == IVec2::ZERO {
+        front_r
+    } else if dx * facing.x + dy * facing.y >= 0 {
+        front_r // 정면(수직 dot==0 포함)
+    } else {
+        back_r // 등 뒤
+    };
+
+    if dx * dx + dy * dy > radius * radius { return false; }
+    is_line_of_sight_clear(map, px, py, tx, ty)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -933,6 +970,133 @@ mod tests {
             "시작 x 가 음수면 차단돼야 한다(x<0)");
         assert!(!is_line_of_sight_clear(&map, 0, -1, 0, 3),
             "시작 y 가 음수면 차단돼야 한다(y<0)");
+    }
+
+    // --- is_in_view (방향 시야 순수 함수) ---
+
+    /// 모서리 한 칸만 Wall 인 충분히 큰 빈 맵.
+    fn open(w: usize, h: usize) -> Map {
+        let mut m = Map::new(w, h);
+        for y in 0..h { for x in 0..w { m.set_tile(x, y, TileKind::Floor); } }
+        m
+    }
+
+    #[test]
+    fn 방향시야는_정면_반경_안의_타일을_본다() {
+        let map = open(40, 40);
+        // 오른쪽(+x)을 보는 주체(20,20). 정면 7칸은 front_r(8) 이내.
+        assert!(is_in_view(20, 20, IVec2::new(1, 0), 27, 20, 8, 3, &map),
+            "정면 반경 안의 타일은 보여야 한다");
+    }
+
+    #[test]
+    fn 방향시야는_정면이라도_반경을_넘으면_보지_못한다() {
+        let map = open(40, 40);
+        // 정면 9칸은 front_r(8) 초과.
+        assert!(!is_in_view(20, 20, IVec2::new(1, 0), 29, 20, 8, 3, &map),
+            "정면이라도 front_r 를 넘으면 보이지 않아야 한다");
+    }
+
+    #[test]
+    fn 방향시야는_등_뒤_먼_타일을_보지_못한다() {
+        let map = open(40, 40);
+        // 오른쪽을 보는데 왼쪽(-x) 5칸은 back_r(3) 초과.
+        assert!(!is_in_view(20, 20, IVec2::new(1, 0), 15, 20, 8, 3, &map),
+            "등 뒤로 back_r 를 넘는 타일은 보이지 않아야 한다");
+    }
+
+    #[test]
+    fn 방향시야는_등_뒤라도_back_r_이내면_본다() {
+        let map = open(40, 40);
+        // 왼쪽(-x) 3칸은 back_r(3) 이내.
+        assert!(is_in_view(20, 20, IVec2::new(1, 0), 17, 20, 8, 3, &map),
+            "등 뒤라도 back_r 이내면 보여야 한다");
+    }
+
+    #[test]
+    fn 방향시야는_dot이_0인_측면은_정면으로_간주한다() {
+        // 오른쪽(+x)을 볼 때 위(+y) 측면은 dot==0 → 정면(front_r) 적용.
+        let map = open(40, 40);
+        // 위로 5칸: front_r(8) 이내라 보임. back_r(3) 라면 안 보일 거리.
+        assert!(is_in_view(20, 20, IVec2::new(1, 0), 20, 25, 8, 3, &map),
+            "수직(dot==0) 측면은 정면으로 간주해 front_r 를 써야 한다");
+    }
+
+    #[test]
+    fn 방향시야는_정면_경계_거리에서_정확히_보인다() {
+        // 정확히 front_r(8) 거리 — dist²(64) <= r²(64) 경계 포함.
+        let map = open(40, 40);
+        assert!(is_in_view(20, 20, IVec2::new(1, 0), 28, 20, 8, 3, &map),
+            "정확히 front_r 거리는 경계 포함이라 보여야 한다");
+    }
+
+    #[test]
+    fn 방향시야는_등_뒤_경계_거리에서_정확히_보인다() {
+        // 등 뒤 정확히 back_r(3) 거리 — 경계 포함.
+        let map = open(40, 40);
+        assert!(is_in_view(20, 20, IVec2::new(1, 0), 17, 20, 8, 3, &map),
+            "정확히 back_r 거리는 경계 포함이라 보여야 한다");
+    }
+
+    #[test]
+    fn 방향시야는_벽이_가로막으면_정면_반경_안이어도_못_본다() {
+        let mut map = open(40, 40);
+        for y in 0..40 { map.set_tile(23, y, TileKind::Wall); } // 정면을 막는 벽 열
+        assert!(!is_in_view(20, 20, IVec2::new(1, 0), 27, 20, 8, 3, &map),
+            "정면 반경 안이라도 LoS 가 막히면 보이지 않아야 한다");
+    }
+
+    #[test]
+    fn 방향시야는_facing이_0이면_전방향_원형으로_폴백한다() {
+        let map = open(40, 40);
+        // facing 0 → 모든 방향이 front_r(8) 원형. 왼쪽 7칸도 보인다.
+        assert!(is_in_view(20, 20, IVec2::ZERO, 13, 20, 8, 3, &map),
+            "facing 0 이면 왼쪽도 front_r 원형으로 보여야 한다");
+        assert!(is_in_view(20, 20, IVec2::ZERO, 27, 20, 8, 3, &map),
+            "facing 0 이면 오른쪽도 front_r 원형으로 보여야 한다");
+        // 원형 반경 밖(9칸)은 방향과 무관하게 안 보인다.
+        assert!(!is_in_view(20, 20, IVec2::ZERO, 11, 20, 8, 3, &map),
+            "facing 0 이라도 front_r 원형 반경 밖은 보이지 않아야 한다");
+    }
+
+    #[test]
+    fn 방향시야는_네_방향_facing에서_각자_정면을_본다() {
+        let map = open(40, 40);
+        let cases = [
+            (IVec2::new(1, 0), 26, 20),   // 오른쪽
+            (IVec2::new(-1, 0), 14, 20),  // 왼쪽
+            (IVec2::new(0, 1), 20, 26),   // 위
+            (IVec2::new(0, -1), 20, 14),  // 아래
+        ];
+        for (f, tx, ty) in cases {
+            assert!(is_in_view(20, 20, f, tx, ty, 8, 3, &map),
+                "facing {:?} 의 정면 타일({},{})은 보여야 한다", f, tx, ty);
+            // 정반대 방향 같은 거리(6칸)는 등 뒤라 back_r(3) 초과 → 안 보임
+            let bx = 20 - (tx - 20);
+            let by = 20 - (ty - 20);
+            assert!(!is_in_view(20, 20, f, bx, by, 8, 3, &map),
+                "facing {:?} 의 등 뒤 타일({},{})은 보이지 않아야 한다", f, bx, by);
+        }
+    }
+
+    #[test]
+    fn 방향시야는_여덟_방향_대각_facing에서도_정면을_본다() {
+        let map = open(40, 40);
+        // 대각 facing 4종. 정면 대각 타일은 보이고, 정반대 대각은 등 뒤라 멀면 안 보임.
+        let diags = [
+            IVec2::new(1, 1), IVec2::new(-1, 1),
+            IVec2::new(1, -1), IVec2::new(-1, -1),
+        ];
+        for f in diags {
+            // 정면 대각 4칸 (dist²=32 <= 64)
+            let (tx, ty) = (20 + f.x * 4, 20 + f.y * 4);
+            assert!(is_in_view(20, 20, f, tx, ty, 8, 3, &map),
+                "대각 facing {:?} 의 정면 타일은 보여야 한다", f);
+            // 정반대 대각 4칸 — dot<0 등 뒤, dist²=32 > back_r²(9) → 안 보임
+            let (bx, by) = (20 - f.x * 4, 20 - f.y * 4);
+            assert!(!is_in_view(20, 20, f, bx, by, 8, 3, &map),
+                "대각 facing {:?} 의 등 뒤 먼 타일은 보이지 않아야 한다", f);
+        }
     }
 
     // --- 좌표 변환 ---

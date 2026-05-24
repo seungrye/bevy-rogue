@@ -7,6 +7,7 @@ use crate::modules::{
     map::{MapResource, TILE_SIZE, tile_to_world_coords, UsedSpawnTiles, random_floor_tile_anywhere},
     ui::minimap::{DiscoveredMarkers, MarkerKind},
     zone::{ZoneId, SpawnQuestPortalEvent, CloseQuestPortalEvent},
+    monster::{PlayerDetectedEvent, SpawnGuardEvent},
 };
 
 // ── RON 데이터 구조 (assets/quests/*.ron) ────────────────────────────────────
@@ -111,6 +112,9 @@ pub enum QuestAction {
     GiveItems { item: String, count: u32 },
     /// 월드에 놓인 아이템 엔티티를 즉시 제거한다 (인벤토리는 건들지 않음)
     DespawnWorldItem(String),
+    /// 현재 맵에 가드를 `count` 마리 스폰한다 (잠입 구역 경비).
+    /// monster 모듈의 `SpawnGuardEvent` 를 발행해 실제 스폰을 위임한다.
+    SpawnGuards { count: u32 },
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -259,6 +263,10 @@ impl Plugin for QuestPlugin {
             .init_resource::<QuestState>()
             .add_event::<KillNpcEvent>()
             .add_event::<DespawnWorldItemEvent>()
+            // monster 모듈이 발행하는 이벤트 — MonsterPlugin 도 등록하지만
+            // QuestPlugin 단독(테스트 등)에서도 동작하도록 여기서도 보장한다.
+            .add_event::<PlayerDetectedEvent>()
+            .add_event::<SpawnGuardEvent>()
             .add_systems(Startup, (
                 load_quests.in_set(QuestSystemSet::Load).after(ItemSystemSet::Load),
                 validate_quest_item_refs
@@ -267,6 +275,7 @@ impl Plugin for QuestPlugin {
             ))
             .add_systems(Update, (
                 check_auto_advance,
+                handle_player_detected,
                 // apply_map 이 새 MapResource 를 교체한 뒤에 실행되어야 한다.
                 // 같은 frame 에 ordering 없이 실행되면 옛 map 의 rooms/tiles 를 보고
                 // 좌표를 골라 새 map 에서 wall 위에 spawn 되는 race condition 발생.
@@ -604,6 +613,7 @@ pub fn execute_actions(
     open_portal: &mut EventWriter<SpawnQuestPortalEvent>,
     close_portal: &mut EventWriter<CloseQuestPortalEvent>,
     despawn_item: &mut EventWriter<DespawnWorldItemEvent>,
+    spawn_guards: &mut EventWriter<SpawnGuardEvent>,
     quest_items: &crate::modules::item::QuestItemRegistry,
 ) {
     for action in actions {
@@ -675,7 +685,24 @@ pub fn execute_actions(
                 despawn_item.send(DespawnWorldItemEvent(item_id.clone()));
                 info!("월드 아이템 제거: {}", item_id);
             }
+            QuestAction::SpawnGuards { count } => {
+                spawn_guards.send(SpawnGuardEvent { count: *count });
+                info!("가드 스폰 요청: {}마리", count);
+            }
         }
+    }
+}
+
+/// 가드가 플레이어를 탐지하면(`PlayerDetectedEvent`) 잠입 실패 플래그
+/// `stealth_blown` 을 세운다. 한 프레임에 여러 탐지 이벤트가 와도 한 번만
+/// 세우면 충분하므로 이벤트가 하나라도 있으면 플래그를 설정한다.
+/// 기존 alert/추적/전투 흐름은 monster 모듈이 그대로 처리한다(B안).
+fn handle_player_detected(
+    mut events: EventReader<PlayerDetectedEvent>,
+    mut state: ResMut<QuestState>,
+) {
+    if events.read().next().is_some() {
+        state.set_flag("stealth_blown", "true");
     }
 }
 
@@ -1795,12 +1822,13 @@ mod tests {
         mut open_portal: EventWriter<SpawnQuestPortalEvent>,
         mut close_portal: EventWriter<CloseQuestPortalEvent>,
         mut despawn_item: EventWriter<DespawnWorldItemEvent>,
+        mut spawn_guards: EventWriter<SpawnGuardEvent>,
         quest_items: Res<crate::modules::item::QuestItemRegistry>,
     ) {
         execute_actions(
             &input.actions, &input.quest_id, &mut state, &mut inventory,
             &mut log, &mut kill_npc, &mut open_portal, &mut close_portal,
-            &mut despawn_item, &quest_items,
+            &mut despawn_item, &mut spawn_guards, &quest_items,
         );
     }
 
@@ -1816,6 +1844,7 @@ mod tests {
             .add_event::<SpawnQuestPortalEvent>()
             .add_event::<CloseQuestPortalEvent>()
             .add_event::<DespawnWorldItemEvent>()
+            .add_event::<SpawnGuardEvent>()
             .add_systems(Update, run_execute_actions_system);
         app
     }
@@ -1950,6 +1979,16 @@ mod tests {
         ]);
         app.update();
         assert_eq!(app.world.resource::<Events<DespawnWorldItemEvent>>().len(), 1);
+    }
+
+    #[test]
+    fn SpawnGuards액션은_요청한_마릿수로_가드스폰_이벤트를_발행한다() {
+        let mut app = execute_actions_app(vec![QuestAction::SpawnGuards { count: 3 }]);
+        app.update();
+        let events = app.world.resource::<Events<SpawnGuardEvent>>();
+        let mut cursor = events.get_reader();
+        let counts: Vec<u32> = cursor.read(events).map(|e| e.count).collect();
+        assert_eq!(counts, vec![3], "한 번의 SpawnGuardEvent 에 count=3");
     }
 
     // ── check_auto_advance (App 하네스) — 상태머신 주요 경로 ───────────────────
@@ -2325,5 +2364,197 @@ mod tests {
         app.insert_resource(MapResource(map));
         app.update();
         assert_eq!(count_items(&mut app), 0, "Floor 타일 없으면 스폰 실패");
+    }
+
+    // ── handle_player_detected (탐지 → stealth_blown 플래그) ───────────────────
+
+    fn detected_app() -> App {
+        let mut app = App::new();
+        app.add_event::<PlayerDetectedEvent>();
+        app.init_resource::<QuestState>();
+        app.add_systems(Update, handle_player_detected);
+        app
+    }
+
+    #[test]
+    fn 탐지이벤트가_오면_잠입실패_플래그가_설정된다() {
+        let mut app = detected_app();
+        app.world.send_event(PlayerDetectedEvent);
+        app.update();
+        assert!(app.world.resource::<QuestState>().flag_is("stealth_blown", "true"),
+            "탐지 시 stealth_blown=true");
+    }
+
+    #[test]
+    fn 탐지이벤트가_없으면_잠입실패_플래그는_설정되지_않는다() {
+        let mut app = detected_app();
+        app.update(); // 이벤트 없음
+        assert!(!app.world.resource::<QuestState>().has_flag("stealth_blown"),
+            "탐지 없으면 플래그 미설정");
+    }
+
+    #[test]
+    fn 같은_프레임에_여러_탐지이벤트가_와도_플래그는_한번만_설정된다() {
+        // events.read().next().is_some() 한 갈래만 타도 충분 — 다중 이벤트 입력.
+        let mut app = detected_app();
+        app.world.send_event(PlayerDetectedEvent);
+        app.world.send_event(PlayerDetectedEvent);
+        app.update();
+        assert!(app.world.resource::<QuestState>().flag_is("stealth_blown", "true"));
+    }
+
+    // ── SpawnGuards 액션 직렬화/검증 ──────────────────────────────────────────
+
+    #[test]
+    fn SpawnGuards액션이_RON에서_올바르게_파싱된다() {
+        let def: QuestDef = ron::de::from_str(r#"
+            QuestDef(
+                id: "test", title: "test", giver_npc: "npc", initial_phase: "p1",
+                phases: {
+                    "p1": QuestPhaseDef(dialog: []),
+                    "p2": QuestPhaseDef(dialog: []),
+                },
+                transitions: [
+                    Transition(from: "p1", trigger: Interact, actions: [SpawnGuards(count: 4)], to: "p2"),
+                ],
+            )
+        "#).expect("RON 파싱 성공");
+        let actions = &def.transitions[0].actions;
+        assert!(matches!(&actions[0], QuestAction::SpawnGuards { count } if *count == 4));
+    }
+
+    #[test]
+    fn 검증은_SpawnGuards를_포함한_퀘스트를_거부하지_않는다() {
+        // SpawnGuards 는 item ID 를 참조하지 않으므로 validate 가 통과해야 한다.
+        let def: QuestDef = ron::de::from_str(r#"
+            QuestDef(
+                id: "infil", title: "잠입", giver_npc: "장로", initial_phase: "start",
+                phases: {
+                    "start": QuestPhaseDef(dialog: []),
+                    "guarded": QuestPhaseDef(dialog: []),
+                },
+                transitions: [
+                    Transition(from: "start", trigger: Interact, actions: [SpawnGuards(count: 2)], to: "guarded"),
+                ],
+            )
+        "#).expect("RON 파싱 성공");
+        let errors = validate_quest_def(&def, qi());
+        assert!(errors.is_empty(), "SpawnGuards 는 검증 오류를 내지 않아야 한다: {:?}", errors);
+    }
+
+    #[test]
+    fn 시맨틱검증은_SpawnGuards를_거부하지_않는다() {
+        // collect_quest_item_ref_errors → check_action_item_ids 의 SpawnGuards arm.
+        let mut reg = QuestRegistry::default();
+        let def: QuestDef = ron::de::from_str(r#"
+            QuestDef(
+                id: "infil", title: "잠입", giver_npc: "장로", initial_phase: "start",
+                phases: {
+                    "start": QuestPhaseDef(dialog: []),
+                    "guarded": QuestPhaseDef(dialog: []),
+                },
+                transitions: [
+                    Transition(from: "start", trigger: Interact, actions: [SpawnGuards(count: 2)], to: "guarded"),
+                ],
+            )
+        "#).expect("RON 파싱 성공");
+        reg.quests.insert(def.id.clone(), def);
+        let errors = collect_quest_item_ref_errors(&reg, qi());
+        assert!(errors.is_empty(), "SpawnGuards 는 item-ref 검증을 통과해야 한다");
+    }
+
+    // ── infiltration_quest (잠입 퀘스트) 콘텐츠 검증 ──────────────────────────
+
+    /// 실제 잠입 퀘스트 RON 파일을 로드한다.
+    fn load_infiltration_quest() -> QuestDef {
+        let text = std::fs::read_to_string("assets/quests/infiltration_quest.ron")
+            .expect("infiltration_quest.ron 이 존재해야 한다");
+        ron::de::from_str::<QuestDef>(&text)
+            .expect("infiltration_quest.ron 이 파싱돼야 한다")
+    }
+
+    #[test]
+    fn 잠입퀘스트는_파싱되고_시맨틱검증을_통과한다() {
+        let def = load_infiltration_quest();
+        assert_eq!(def.id, "infiltration_quest");
+        assert_eq!(def.giver_npc, "burgomaster", "giver 는 villager 레지스트리에 존재하는 촌장이어야 한다");
+        let errors = validate_quest_def(&def, qi());
+        assert!(errors.is_empty(), "시맨틱 검증 통과해야 한다: {:?}", errors);
+    }
+
+    #[test]
+    fn 잠입퀘스트의_기밀문서ID가_kind로_매핑된다() {
+        let _ = qi();
+        assert_eq!(
+            item_id_to_kind("secret_document", qi()),
+            Some(ItemKind::QuestItem(QuestItemKind("secret_document"))),
+        );
+    }
+
+    #[test]
+    fn 잠입퀘스트_수락전이는_플래그초기화와_포탈개방과_가드스폰을_실행한다() {
+        let def = load_infiltration_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "not_started" && t.trigger == TriggerKind::Interact)
+            .expect("수락 전이가 있어야 한다");
+        assert!(t.actions.iter().any(|a| matches!(a, QuestAction::ClearFlag(f) if f == "stealth_blown")),
+            "수락 시 stealth_blown 플래그를 초기화해야 한다");
+        assert!(t.actions.iter().any(|a| matches!(a, QuestAction::OpenPortal { zone, .. } if zone == "infiltration")),
+            "수락 시 잠입구역 포탈을 열어야 한다");
+        assert!(t.actions.iter().any(|a| matches!(a, QuestAction::SpawnGuards { count } if (4..=6).contains(count))),
+            "수락 시 가드 4~6마리를 스폰해야 한다");
+    }
+
+    #[test]
+    fn 잠입퀘스트는_기밀문서를_잠입구역_진행페이즈에_스폰한다() {
+        use crate::modules::zone::ZoneId;
+        let def = load_infiltration_quest();
+        let spawn = def.spawns.iter()
+            .find(|s| s.item == "secret_document")
+            .expect("기밀 문서 스폰이 있어야 한다");
+        assert_eq!(spawn.zone, ZoneId::Named("infiltration".into()), "잠입구역에 스폰돼야 한다");
+        assert_eq!(spawn.phase, "infiltrating", "잠입 진행 페이즈에 스폰돼야 한다");
+    }
+
+    /// extracted 페이즈에서 탐지 여부(stealth_blown 플래그)에 따라 어느 보상 전이가
+    /// 선택되는지를 실제 RON 의 transition 순서/조건으로 재현한다.
+    fn select_extracted_transition<'a>(def: &'a QuestDef, state: &QuestState) -> &'a QuestTransition {
+        let inv = make_inventory_with(&["secret_document"]);
+        let world = make_world();
+        def.transitions.iter()
+            .filter(|t| t.from == "extracted" && t.trigger == TriggerKind::Interact)
+            .find(|t| t.when.as_ref()
+                .map(|c| eval_condition(c, &inv, &world, state, qi()))
+                .unwrap_or(true))
+            .expect("extracted 에서 매칭되는 전이가 있어야 한다")
+    }
+
+    #[test]
+    fn 잠입퀘스트_무탐지시_보너스분기가_선택된다() {
+        let def = load_infiltration_quest();
+        // stealth_blown 플래그 없음 → 무탐지
+        let state = QuestState::default();
+        let t = select_extracted_transition(&def, &state);
+        assert_eq!(t.to, "done_clean", "무탐지면 보너스(done_clean) 분기로 가야 한다");
+        // 보너스: 추가 아이템(현자의 돌) 지급이 포함돼야 한다
+        assert!(
+            t.actions.iter().any(|a| matches!(a, QuestAction::GiveItem(id) if id == "philosophers_stone")),
+            "무탐지 보너스에는 추가 보상 아이템이 있어야 한다"
+        );
+    }
+
+    #[test]
+    fn 잠입퀘스트_탐지시_일반보상분기가_선택된다() {
+        let def = load_infiltration_quest();
+        // stealth_blown=true → 탐지됨 → 보너스 조건(Not HasFlag) 불충족 → fallback
+        let mut state = QuestState::default();
+        state.set_flag("stealth_blown", "true");
+        let t = select_extracted_transition(&def, &state);
+        assert_eq!(t.to, "done_blown", "탐지되면 일반 보상(done_blown) fallback 으로 가야 한다");
+        // 일반 보상에는 보너스 전용 아이템이 없어야 한다
+        assert!(
+            !t.actions.iter().any(|a| matches!(a, QuestAction::GiveItem(id) if id == "philosophers_stone")),
+            "탐지 시에는 보너스 아이템이 지급되지 않아야 한다"
+        );
     }
 }

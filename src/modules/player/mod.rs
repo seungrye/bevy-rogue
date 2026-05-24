@@ -1,7 +1,7 @@
 use crate::modules::{
     map::{
         draw_map, Map, MapResource, OccupiedTiles, MonsterTiles,
-        tile_to_world_coords, world_to_tile_coords, is_line_of_sight_clear,
+        tile_to_world_coords, world_to_tile_coords, is_in_view, FOV_FRONT, FOV_BACK,
         MAP_HEIGHT, MAP_WIDTH, TILE_SIZE,
         MapSystemSet, PlayerRespawnEvent, PlayerActedEvent, BumpTileEvent, AttackMonsterEvent,
     },
@@ -159,6 +159,17 @@ pub fn offset_tile_in_bounds(map: &Map, x: usize, y: usize, delta: IVec2) -> Opt
 #[derive(Component)]
 pub struct Player;
 
+/// 시야 주체가 마지막으로 향한 방향(이동 방향). 이동할 때마다 갱신되고,
+/// 정지 시에는 마지막 방향을 유지한다. 방향 시야(facing-based FOV)가
+/// "정면은 멀리, 등 뒤는 가깝게" 보도록 하는 기준이다.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Facing(pub IVec2);
+
+impl Default for Facing {
+    /// 초기 기본값은 아래(`(0,-1)`)를 향한다.
+    fn default() -> Self { Facing(IVec2::new(0, -1)) }
+}
+
 #[derive(Component)]
 pub struct MovingTo {
     pub target: Vec3,
@@ -191,6 +202,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, map_res:
         },
         Speed::new(1.0),
         ElementalStatus::default(),
+        Facing::default(),
     )).with_children(|parent| {
         // HP 바 배경 (어두운 빨간색)
         parent.spawn(SpriteBundle {
@@ -292,6 +304,9 @@ fn player_movement(
             acted.send(PlayerActedEvent);
         } else {
             player_path.0.pop_front();
+            let (cx, cy) = world_to_tile_coords(transform.translation);
+            let face = IVec2::new(tx as i32 - cx as i32, ty as i32 - cy as i32);
+            if face != IVec2::ZERO { commands.entity(entity).insert(Facing(face)); }
             let wp = tile_to_world_coords(tx, ty);
             commands.entity(entity).insert(MovingTo { target: Vec3::new(wp.x, wp.y, 1.0) });
             // PlayerActedEvent 는 smooth_player_lerp 가 이동 완료 시 발행
@@ -318,6 +333,7 @@ fn player_movement(
         bump.send(BumpTileEvent(tx, ty));
         acted.send(PlayerActedEvent);
     } else {
+        commands.entity(entity).insert(Facing(delta));
         let wp = tile_to_world_coords(tx, ty);
         commands.entity(entity).insert(MovingTo { target: Vec3::new(wp.x, wp.y, 1.0) });
         // PlayerActedEvent 는 smooth_player_lerp 가 이동 완료 시 발행
@@ -447,32 +463,33 @@ fn camera_follow_player(
 }
 
 fn update_fov(
-    player_query: Query<&Transform, With<Player>>,
+    player_query: Query<(&Transform, &Facing), With<Player>>,
     mut map_res: ResMut<MapResource>,
-    mut last_pos: Local<Option<IVec2>>,
+    mut last_pos: Local<Option<(IVec2, IVec2)>>,
 ) {
     // 맵이 교체되면 강제 재계산
     if map_res.is_changed() {
         *last_pos = None;
     }
 
-    let Ok(transform) = player_query.get_single() else { return };
+    let Ok((transform, facing)) = player_query.get_single() else { return };
     let (px, py) = world_to_tile_coords(transform.translation);
     let cur = IVec2::new(px as i32, py as i32);
-    if Some(cur) == *last_pos { return; }
-    *last_pos = Some(cur);
+    // 위치뿐 아니라 facing 이 바뀌어도(제자리 회전) 시야가 달라지므로 함께 추적한다.
+    let key = (cur, facing.0);
+    if Some(key) == *last_pos { return; }
+    *last_pos = Some(key);
 
     let start = std::time::Instant::now();
     let map = map_res.map_mut();
     map.tiles.iter_mut().for_each(|t| t.visible = false);
 
-    let radius = 8i32;
+    // 두-반원의 최대 탐색 범위는 max(front, back).
+    let radius = FOV_FRONT.max(FOV_BACK);
     for y in (cur.y - radius)..=(cur.y + radius) {
         for x in (cur.x - radius)..=(cur.x + radius) {
             if x < 0 || x >= map.width as i32 || y < 0 || y >= map.height as i32 { continue; }
-            let (dx, dy) = (x - cur.x, y - cur.y);
-            if dx * dx + dy * dy > radius * radius { continue; }
-            if is_line_of_sight_clear(map, cur.x, cur.y, x, y) {
+            if is_in_view(cur.x, cur.y, facing.0, x, y, FOV_FRONT, FOV_BACK, map) {
                 let idx = map.index(x as usize, y as usize);
                 map.tiles[idx].visible = true;
                 map.tiles[idx].revealed = true;
@@ -818,6 +835,9 @@ mod tests {
             r.read(events).map(|e| (e.0, e.1)).collect()
         }
         fn path_len(&self) -> usize { self.app.world.resource::<PlayerPath>().0.len() }
+        fn facing(&self) -> Option<IVec2> {
+            self.app.world.get::<Facing>(self.player).map(|f| f.0)
+        }
     }
 
     // --- player_movement: 조기 종료 분기 ---
@@ -945,6 +965,47 @@ mod tests {
     #[test]
     fn s키로_아래로_이동한다() {
         assert!(move_once_with_key(KeyCode::KeyS, (5, 4)));
+    }
+
+    // --- player_movement: 이동 시 Facing 갱신 ---
+
+    #[test]
+    fn 키보드로_오른쪽으로_이동하면_facing이_오른쪽으로_갱신된다() {
+        let mut h = MoveHarness::new(20, 20);
+        h.set_tile(6, 5, TileKind::Floor);
+        h.press(KeyCode::ArrowRight);
+        h.update();
+        assert_eq!(h.facing(), Some(IVec2::new(1, 0)), "이동 방향으로 facing 갱신");
+    }
+
+    #[test]
+    fn 키보드로_위로_이동하면_facing이_위로_갱신된다() {
+        let mut h = MoveHarness::new(20, 20);
+        h.set_tile(5, 6, TileKind::Floor);
+        h.press(KeyCode::ArrowUp);
+        h.update();
+        assert_eq!(h.facing(), Some(IVec2::new(0, 1)), "위로 이동 시 facing 갱신");
+    }
+
+    #[test]
+    fn 이동이_차단되면_facing은_갱신되지_않는다() {
+        // 벽으로 막혀 이동(MovingTo)이 없으면 Facing 컴포넌트도 붙지 않는다.
+        let mut h = MoveHarness::new(20, 20);
+        h.set_tile(6, 5, TileKind::Wall);
+        h.press(KeyCode::ArrowRight);
+        h.update();
+        assert!(!h.moving(), "벽이라 이동 없음");
+        assert_eq!(h.facing(), None, "이동하지 않으면 facing 도 갱신되지 않는다");
+    }
+
+    #[test]
+    fn 자동경로로_이동하면_그_방향으로_facing이_갱신된다() {
+        let h = run_path_step(|h| {
+            h.set_tile(6, 5, TileKind::Floor);
+            h.app.world.resource_mut::<PlayerPath>().0.push_back((6, 5));
+        });
+        assert!(h.moving(), "자동 경로로 이동");
+        assert_eq!(h.facing(), Some(IVec2::new(1, 0)), "자동 경로 이동 방향으로 facing 갱신");
     }
 
     // --- player_movement: 키보드 이동 시 몬스터/주민/경계/홀드 분기 ---
@@ -1272,15 +1333,20 @@ mod tests {
 
     // --- update_fov ---
 
-    /// FOV 하네스: 맵과 플레이어를 두고 update_fov 한 번 돌린 뒤 맵을 돌려준다.
-    fn run_fov(map: Map, player_tile: (usize, usize)) -> Map {
+    /// FOV 하네스: 맵·플레이어·facing 을 두고 update_fov 한 번 돌린 뒤 맵을 돌려준다.
+    fn run_fov_facing(map: Map, player_tile: (usize, usize), facing: IVec2) -> Map {
         let mut app = App::new();
         app.insert_resource(MapResource(map));
         let pos = tile_to_world_coords(player_tile.0, player_tile.1);
-        app.world.spawn((Player, Transform::from_xyz(pos.x, pos.y, 1.0)));
+        app.world.spawn((Player, Transform::from_xyz(pos.x, pos.y, 1.0), Facing(facing)));
         app.add_systems(Update, update_fov);
         app.update();
         app.world.remove_resource::<MapResource>().unwrap().0
+    }
+
+    /// 방향이 결과에 영향을 주지 않는 회귀 테스트용 — facing 0(전방향 원형) 으로 돈다.
+    fn run_fov(map: Map, player_tile: (usize, usize)) -> Map {
+        run_fov_facing(map, player_tile, IVec2::ZERO)
     }
 
     #[test]
@@ -1303,7 +1369,8 @@ mod tests {
         map.set_tile(10, 10, TileKind::Floor); // 플레이어
         map.set_tile(11, 10, TileKind::Water); // 물
         map.set_tile(12, 10, TileKind::Floor); // 물 너머
-        let out = run_fov(map, (10, 10));
+        // 오른쪽(+x)을 보게 해 (12,10) 이 정면 반경 안에 들도록.
+        let out = run_fov_facing(map, (10, 10), IVec2::new(1, 0));
         let beyond = out.index(12, 10);
         assert!(out.tiles[beyond].visible, "물 너머 타일이 보여야 한다(물은 시야를 막지 않음)");
     }
@@ -1315,9 +1382,24 @@ mod tests {
         map.set_tile(10, 10, TileKind::Floor);
         map.set_tile(11, 10, TileKind::Wall);  // 벽
         map.set_tile(12, 10, TileKind::Floor); // 벽 너머
-        let out = run_fov(map, (10, 10));
+        let out = run_fov_facing(map, (10, 10), IVec2::new(1, 0));
         let beyond = out.index(12, 10);
         assert!(!out.tiles[beyond].visible, "벽 너머 타일은 보이지 않아야 한다");
+    }
+
+    #[test]
+    fn fov는_바라보는_정면은_멀리_보이고_등_뒤는_가깝게만_보인다() {
+        // 플레이어(15,15)가 오른쪽(+x)을 본다. 정면 FOV_FRONT(8)칸 타일은 보이지만,
+        // 등 뒤로 FOV_BACK(3) 을 넘는 타일(왼쪽 5칸)은 보이지 않아야 한다.
+        let mut map = Map::new(40, 40);
+        for y in 0..40 { for x in 0..40 { map.set_tile(x, y, TileKind::Floor); } }
+        let out = run_fov_facing(map, (15, 15), IVec2::new(1, 0));
+        let front_far = out.index(15 + FOV_FRONT as usize, 15); // 정면 8칸
+        assert!(out.tiles[front_far].visible, "정면 FOV_FRONT 거리 타일은 보여야 한다");
+        let back_far = out.index(15 - (FOV_BACK as usize + 2), 15); // 등 뒤 5칸
+        assert!(!out.tiles[back_far].visible, "등 뒤 FOV_BACK 초과 타일은 보이지 않아야 한다");
+        let back_near = out.index(15 - FOV_BACK as usize, 15); // 등 뒤 3칸
+        assert!(out.tiles[back_near].visible, "등 뒤라도 FOV_BACK 이내는 보여야 한다");
     }
 
     #[test]
@@ -1330,13 +1412,33 @@ mod tests {
         let mut app = App::new();
         app.insert_resource(MapResource(map));
         let pos = tile_to_world_coords(10, 10);
-        app.world.spawn((Player, Transform::from_xyz(pos.x, pos.y, 1.0)));
+        app.world.spawn((Player, Transform::from_xyz(pos.x, pos.y, 1.0), Facing::default()));
         app.add_systems(Update, update_fov);
-        app.update(); // 1회차: 계산 + last_pos=(10,10)
+        app.update(); // 1회차: 계산 + last_pos=((10,10), facing)
         app.world.clear_trackers(); // 변경 추적 리셋
-        app.update(); // 2회차: 같은 위치 → early return (맵 미변경)
+        app.update(); // 2회차: 같은 위치+같은 facing → early return (맵 미변경)
         assert!(!app.world.is_resource_changed::<MapResource>(),
-            "같은 위치면 재계산을 건너뛰어 맵을 건드리지 않아야 한다");
+            "같은 위치·방향이면 재계산을 건너뛰어 맵을 건드리지 않아야 한다");
+    }
+
+    #[test]
+    fn fov는_제자리에서_방향만_바뀌어도_시야를_재계산한다() {
+        // 위치는 그대로지만 facing 이 바뀌면 last_pos 키가 달라져 재계산한다.
+        let mut map = Map::new(40, 40);
+        for y in 0..40 { for x in 0..40 { map.set_tile(x, y, TileKind::Floor); } }
+        let mut app = App::new();
+        app.insert_resource(MapResource(map));
+        let pos = tile_to_world_coords(15, 15);
+        let player = app.world.spawn((Player, Transform::from_xyz(pos.x, pos.y, 1.0), Facing(IVec2::new(1, 0)))).id();
+        app.add_systems(Update, update_fov);
+        app.update(); // 오른쪽을 봄 → 오른쪽 먼 타일이 보임
+        let right_far = app.world.resource::<MapResource>().map().index(15 + FOV_FRONT as usize, 15);
+        assert!(app.world.resource::<MapResource>().map().tiles[right_far].visible, "처음엔 오른쪽 정면이 보임");
+        // 왼쪽으로 돌면 오른쪽 먼 타일은 등 뒤가 되어 안 보여야 한다.
+        app.world.get_mut::<Facing>(player).unwrap().0 = IVec2::new(-1, 0);
+        app.update();
+        assert!(!app.world.resource::<MapResource>().map().tiles[right_far].visible,
+            "방향을 반대로 돌리면 이전 정면(이제 등 뒤 먼 곳)은 보이지 않아야 한다");
     }
 
     #[test]
@@ -1350,11 +1452,11 @@ mod tests {
         let mut app = App::new();
         app.insert_resource(MapResource(map));
         let pos = tile_to_world_coords(10, 10);
-        app.world.spawn((Player, Transform::from_xyz(pos.x, pos.y, 1.0)));
+        app.world.spawn((Player, Transform::from_xyz(pos.x, pos.y, 1.0), Facing::default()));
         app.add_systems(Update, update_fov);
         app.update();
         let far = {
-            // 반경(8) 밖 먼 타일을 visible=true 로 켜두고 MapResource 를 changed 로 만든다.
+            // 최대 반경 밖 먼 타일을 visible=true 로 켜두고 MapResource 를 changed 로 만든다.
             let mut mr = app.world.resource_mut::<MapResource>();
             let idx = mr.map().index(29, 29);
             mr.map_mut().tiles[idx].visible = true;

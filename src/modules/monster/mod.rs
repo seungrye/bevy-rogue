@@ -4,15 +4,16 @@ use rand::{Rng, rngs::ThreadRng};
 use crate::modules::{
     map::{
         draw_map, Map, MapResource, MapType, MonsterTiles,
-        tile_to_world_coords, world_to_tile_coords, is_line_of_sight_clear,
+        tile_to_world_coords, world_to_tile_coords, is_in_view, FOV_BACK,
         MAP_HEIGHT, MAP_WIDTH, TILE_SIZE,
         MapSystemSet, MonsterRespawnEvent, PlayerActedEvent, AttackMonsterEvent, Rect,
+        UsedSpawnTiles, random_floor_tile_anywhere,
     },
-    player::{grant_xp, xp_reward_for_monster, MovingTo, MoveQueue, Player, PlayerProgress, PlayerSystemSet, LERP_SPEED},
+    player::{grant_xp, xp_reward_for_monster, Facing, MovingTo, MoveQueue, Player, PlayerProgress, PlayerSystemSet, LERP_SPEED},
     combat::{CombatStats, Defeated, Speed, calc_damage},
     ui::LogMessage,
     combat_feedback::CombatFeedbackEvent,
-    item::{ItemDropEvent, PlayerEquipment},
+    item::{ItemDropEvent, PlayerEquipment, ItemRegistry, effective_attack, effective_defense},
     zone::{WorldState, ZonePersistence, MonsterSlot},
     map::GlobalTurn,
     elemental::{ElementalApplyEvent, ElementalStatus, Stunned, monster_element, weapon_element},
@@ -20,6 +21,25 @@ use crate::modules::{
 
 const Z_MONSTER: f32 = 0.8;
 const MAX_ALERT_TURNS: u32 = 5;
+
+/// 가드 스탯 배율 — 플레이어 현재 effective HP/ATK/DEF 에 곱한다.
+/// 1.2 → 레벨 무관하게 늘 "조금 더 셈"으로 정면 돌파보다 잠입을 유도한다.
+const GUARD_POWER_MULT: f32 = 1.2;
+/// 가드의 시야 반경 — 일반 몬스터보다 넉넉하게 잡아 잠입 난이도를 만든다.
+const GUARD_VISION_RADIUS: i32 = 8;
+
+/// 가드 한 마리가 방향 시야로 플레이어를 탐지했음을 알리는 이벤트.
+/// 기존 alert/추적/전투 흐름은 그대로 두고(B안), 퀘스트 플래그(`stealth_blown`)
+/// 설정 같은 추가 반응만 이 이벤트로 배선한다.
+#[derive(Event)]
+pub struct PlayerDetectedEvent;
+
+/// 잠입 구역에 가드를 `count` 마리 스폰하라는 요청 이벤트.
+/// 퀘스트 액션 `SpawnGuards` 가 발행하고 `handle_spawn_guards` 가 처리한다.
+#[derive(Event)]
+pub struct SpawnGuardEvent {
+    pub count: u32,
+}
 
 static MONSTER_DATA: &[(&str, &str, [f32; 3], i32, i32, i32, i32, f32)] = &[
     // (이름, 글리프, 색상, HP, 공격력, 방어력, 시야 반경, 속도)
@@ -38,29 +58,45 @@ pub struct Monster {
     pub slot_idx: usize,
 }
 
+/// 몬스터가 자기 facing 기준 방향 시야로 플레이어를 볼 수 있는지 판정한다.
+///
+/// 정면(facing 쪽)으로는 `vision_radius` 만큼, 등 뒤로는 `back_radius` 만큼만
+/// 본다. 그래서 등 뒤로 다가오는 플레이어는 가까워야만 들킨다. 시야 거리/LoS
+/// 판정은 순수 함수 `is_in_view` 에 위임한다.
 pub fn can_see_player(
     mx: usize, my: usize,
     px: usize, py: usize,
     vision_radius: i32,
+    facing: IVec2,
     map: &Map,
 ) -> bool {
-    let dx = mx as i32 - px as i32;
-    let dy = my as i32 - py as i32;
-    if dx * dx + dy * dy > vision_radius * vision_radius { return false; }
-    is_line_of_sight_clear(map, mx as i32, my as i32, px as i32, py as i32)
+    is_in_view(mx as i32, my as i32, facing, px as i32, py as i32, vision_radius, FOV_BACK, map)
+}
+
+/// 가드 스탯을 플레이어 현재 효과치(max_hp / effective ATK / effective DEF)에
+/// `GUARD_POWER_MULT` 를 곱해 반올림한 `(hp, atk, def)` 로 계산한다.
+///
+/// 레벨이 올라도 가드가 늘 "조금 더 셈"으로 유지돼 정면 돌파보다 잠입을
+/// 유도한다. rand·쿼리 의존이 없는 순수 함수라 경계/반올림을 단독 테스트한다.
+pub fn guard_stats(player_hp: i32, player_atk: i32, player_def: i32) -> (i32, i32, i32) {
+    let scale = |v: i32| (v as f32 * GUARD_POWER_MULT).round() as i32;
+    (scale(player_hp), scale(player_atk), scale(player_def))
 }
 
 pub struct MonsterPlugin;
 
 impl Plugin for MonsterPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_on_startup.after(draw_map))
+        app.add_event::<PlayerDetectedEvent>()
+            .add_event::<SpawnGuardEvent>()
+            .add_systems(Startup, spawn_on_startup.after(draw_map))
             .add_systems(PreUpdate, sync_monster_tiles)
             .add_systems(Update, (
                 respawn_on_regen.after(MapSystemSet::ExecuteRegen),
                 (handle_player_attack, monster_turn, cleanup_dead)
                     .chain()
                     .after(PlayerSystemSet::MovementComplete),
+                handle_spawn_guards,
                 smooth_monster_move,
             ));
     }
@@ -195,7 +231,82 @@ fn spawn_from_slots(
             Speed::new(spd),
             MoveQueue::default(),
             ElementalStatus::default(),
+            Facing::default(),
         ));
+    }
+}
+
+/// 가드 한 마리를 (tx, ty) 에 스폰한다. 일반 몬스터 스폰과 동일한 부수 컴포넌트
+/// (Speed/MoveQueue/ElementalStatus/Facing/Text2dBundle)를 붙이되, 스탯은 인자로
+/// 받은 가드 스탯(`hp/atk/def`)을 쓴다. slot_idx 는 가드 전용으로 의미 없어 0.
+fn spawn_guard(
+    commands: &mut Commands,
+    font: &Handle<Font>,
+    tx: usize, ty: usize,
+    hp: i32, atk: i32, def: i32,
+) {
+    let coord = tile_to_world_coords(tx, ty);
+    commands.spawn((
+        Text2dBundle {
+            text: Text::from_section("가", TextStyle {
+                font: font.clone(),
+                font_size: TILE_SIZE,
+                color: Color::rgb(0.9, 0.2, 0.2),
+            }),
+            transform: Transform::from_xyz(coord.x, coord.y, Z_MONSTER),
+            ..default()
+        },
+        Monster {
+            name: "가드".to_string(),
+            tile_x: tx, tile_y: ty,
+            vision_radius: GUARD_VISION_RADIUS,
+            alert_turns: 0,
+            slot_idx: 0,
+        },
+        CombatStats { hp, max_hp: hp.max(1), mp: 0, max_mp: 0, attack: atk, defense: def },
+        Speed::new(1.0),
+        MoveQueue::default(),
+        ElementalStatus::default(),
+        Facing::default(),
+    ));
+}
+
+/// `SpawnGuardEvent` 를 받아 현재 맵의 통과타일 무작위 위치에 가드를 `count`
+/// 마리 스폰한다. 가드 스탯은 플레이어 현재 effective ATK/DEF + max_hp 를
+/// `guard_stats` 로 스케일해 결정한다.
+fn handle_spawn_guards(
+    mut commands: Commands,
+    mut events: EventReader<SpawnGuardEvent>,
+    map_res: Res<MapResource>,
+    asset_server: Res<AssetServer>,
+    mut used_spawn: ResMut<UsedSpawnTiles>,
+    player_query: Query<&CombatStats, With<Player>>,
+    equipment: Res<PlayerEquipment>,
+    items: Res<ItemRegistry>,
+) {
+    let mut total: u32 = 0;
+    for ev in events.read() {
+        total += ev.count;
+    }
+    if total == 0 { return; }
+
+    // 플레이어 현재 효과치 기준으로 가드 스탯 계산 (없으면 스폰하지 않음).
+    let Ok(player_stats) = player_query.get_single() else { return };
+    let (hp, atk, def) = guard_stats(
+        player_stats.max_hp,
+        effective_attack(&equipment, &items),
+        effective_defense(&equipment, &items),
+    );
+
+    let map = map_res.map();
+    let font = asset_server.load("fonts/FiraMono-Medium.ttf");
+    let mut rng = rand::thread_rng();
+    for _ in 0..total {
+        let Some((tx, ty)) = random_floor_tile_anywhere(&map.rooms, map, &mut used_spawn.0, &mut rng) else {
+            info!("가드 스폰 실패 — 통과타일 없음");
+            continue;
+        };
+        spawn_guard(&mut commands, &font, tx, ty, hp, atk, def);
     }
 }
 
@@ -278,11 +389,12 @@ fn monster_turn(
     mut commands: Commands,
     mut events: EventReader<PlayerActedEvent>,
     map_res: Res<MapResource>,
-    mut monster_query: Query<(&mut Monster, &mut MoveQueue, &CombatStats, &mut Speed, Option<&Stunned>), Without<Player>>,
+    mut monster_query: Query<(&mut Monster, &mut MoveQueue, &CombatStats, &mut Speed, &mut Facing, Option<&Stunned>), Without<Player>>,
     mut player_query: Query<(Entity, &Transform, Option<&MovingTo>, &mut CombatStats), (With<Player>, Without<Monster>)>,
     mut log_writer: EventWriter<LogMessage>,
     mut feedback_writer: EventWriter<CombatFeedbackEvent>,
     mut elemental_writer: EventWriter<ElementalApplyEvent>,
+    mut detected_writer: EventWriter<PlayerDetectedEvent>,
 ) {
     if events.read().next().is_none() { return; }
 
@@ -294,15 +406,15 @@ fn monster_turn(
         .unwrap_or_else(|| world_to_tile_coords(player_transform.translation));
 
     let mut occupied: HashSet<(usize, usize)> = monster_query.iter()
-        .filter(|(_, _, stats, _, _)| stats.hp > 0)
-        .map(|(m, _, _, _, _)| (m.tile_x, m.tile_y))
+        .filter(|(_, _, stats, _, _, _)| stats.hp > 0)
+        .map(|(m, _, _, _, _, _)| (m.tile_x, m.tile_y))
         .collect();
     occupied.insert((px, py));
 
     let mut player_dead = false;
     let mut rng = rand::thread_rng();
 
-    for (mut monster, mut move_queue, monster_stats, mut speed, stunned) in monster_query.iter_mut() {
+    for (mut monster, mut move_queue, monster_stats, mut speed, mut facing, stunned) in monster_query.iter_mut() {
         if monster_stats.hp <= 0 { continue; }
         if stunned.is_some() {
             occupied.insert((monster.tile_x, monster.tile_y));
@@ -311,9 +423,12 @@ fn monster_turn(
 
         occupied.remove(&(monster.tile_x, monster.tile_y));
 
-        // 시야 갱신
-        if can_see_player(monster.tile_x, monster.tile_y, px, py, monster.vision_radius, map) {
+        // 시야 갱신 (몬스터 facing 기준 방향 시야)
+        if can_see_player(monster.tile_x, monster.tile_y, px, py, monster.vision_radius, facing.0, map) {
             monster.alert_turns = MAX_ALERT_TURNS;
+            // 기존 alert/추적/전투 흐름은 그대로 두고, 탐지 사실만 추가로 알린다(B안).
+            // 잠입 퀘스트가 활성이면 quest 모듈이 stealth_blown 플래그를 세운다.
+            detected_writer.send(PlayerDetectedEvent);
         } else if monster.alert_turns > 0 {
             monster.alert_turns -= 1;
         }
@@ -366,6 +481,7 @@ fn monster_turn(
                 }
             } else if monster.alert_turns > 0 {
                 let (nx, ny) = move_toward(monster.tile_x, monster.tile_y, px, py, map, &occupied);
+                update_facing(&mut facing, monster.tile_x, monster.tile_y, nx, ny);
                 occupied.remove(&(monster.tile_x, monster.tile_y));
                 occupied.insert((nx, ny));
                 let wp = tile_to_world_coords(nx, ny);
@@ -374,6 +490,7 @@ fn monster_turn(
                 monster.tile_y = ny;
             } else {
                 let (nx, ny) = wander(monster.tile_x, monster.tile_y, map, &occupied, &mut rng);
+                update_facing(&mut facing, monster.tile_x, monster.tile_y, nx, ny);
                 occupied.remove(&(monster.tile_x, monster.tile_y));
                 occupied.insert((nx, ny));
                 let wp = tile_to_world_coords(nx, ny);
@@ -428,6 +545,13 @@ fn cleanup_dead(
             }
         }
     }
+}
+
+/// 실제 이동(`from != to`)이 일어났을 때만 facing 을 이동 방향으로 갱신한다.
+/// 제자리(이동 없음)면 마지막 방향을 그대로 유지한다.
+fn update_facing(facing: &mut Facing, fx: usize, fy: usize, tx: usize, ty: usize) {
+    let dir = IVec2::new(tx as i32 - fx as i32, ty as i32 - fy as i32);
+    if dir != IVec2::ZERO { facing.0 = dir; }
 }
 
 pub fn move_toward(
@@ -567,6 +691,22 @@ mod tests {
         assert_eq!((nx, ny), (rx - 1, 5), "경계 밖(x=MAP_WIDTH)으로는 가지 않고 왼쪽으로");
     }
 
+    // --- update_facing (이동 시에만 방향 갱신) ---
+
+    #[test]
+    fn facing갱신은_실제_이동시_이동방향으로_바꾼다() {
+        let mut f = Facing(IVec2::new(0, -1));
+        update_facing(&mut f, 5, 5, 6, 5); // 오른쪽으로 이동
+        assert_eq!(f.0, IVec2::new(1, 0), "이동 방향으로 facing 이 바뀐다");
+    }
+
+    #[test]
+    fn facing갱신은_제자리면_이전_방향을_유지한다() {
+        let mut f = Facing(IVec2::new(0, -1));
+        update_facing(&mut f, 5, 5, 5, 5); // 이동 없음
+        assert_eq!(f.0, IVec2::new(0, -1), "제자리면 facing 을 유지한다");
+    }
+
     fn open_map(w: usize, h: usize) -> Map {
         let mut map = Map::new(w, h);
         for y in 1..h-1 { for x in 1..w-1 { map.set_tile(x, y, TileKind::Floor); } }
@@ -574,23 +714,45 @@ mod tests {
     }
 
     #[test]
-    fn 시야_반경_안에_벽이_없으면_몬스터는_플레이어를_본다() {
+    fn 정면_시야_반경_안에_벽이_없으면_몬스터는_플레이어를_본다() {
         let map = open_map(20, 20);
-        assert!(can_see_player(5, 5, 9, 5, 6, &map), "반경 내 명확한 시야면 탐지해야 한다");
+        // 몬스터(5,5)가 오른쪽(+x)을 보고 있고 플레이어(9,5)는 정면 4칸 거리.
+        assert!(can_see_player(5, 5, 9, 5, 6, IVec2::new(1, 0), &map),
+            "정면 반경 내 명확한 시야면 탐지해야 한다");
     }
 
     #[test]
     fn 시야_반경_밖의_플레이어는_몬스터가_보지_못한다() {
         let map = open_map(20, 20);
-        assert!(!can_see_player(1, 1, 10, 10, 6, &map), "반경 밖은 탐지하지 않아야 한다");
+        // 정면(대각 +x,+y)이라도 거리가 멀어 반경 밖.
+        assert!(!can_see_player(1, 1, 10, 10, 6, IVec2::new(1, 1), &map),
+            "반경 밖은 탐지하지 않아야 한다");
     }
 
     #[test]
     fn 벽이_시선을_가로막으면_몬스터는_플레이어를_보지_못한다() {
-        // (5,5)와 (8,5) 사이에 벽 열
+        // (5,5)와 (8,5) 사이에 벽 열 — 정면을 봐도 LoS 가 막힌다.
         let mut map = open_map(20, 20);
         for y in 0..20 { map.set_tile(7, y, TileKind::Wall); }
-        assert!(!can_see_player(5, 5, 8, 5, 10, &map), "벽이 가로막으면 탐지하지 않아야 한다");
+        assert!(!can_see_player(5, 5, 8, 5, 10, IVec2::new(1, 0), &map),
+            "벽이 가로막으면 탐지하지 않아야 한다");
+    }
+
+    #[test]
+    fn 등_뒤의_먼_플레이어는_몬스터가_보지_못한다() {
+        // 몬스터(5,5)는 오른쪽(+x)을 보는데 플레이어(1,5)는 등 뒤(-x) 4칸.
+        // 정면 반경(6)이면 보이지만, 등 뒤 반경(FOV_BACK=3)을 넘어 안 보인다.
+        let map = open_map(20, 20);
+        assert!(!can_see_player(5, 5, 1, 5, 6, IVec2::new(1, 0), &map),
+            "정면 반경 안이라도 등 뒤로 멀면 탐지하지 못해야 한다");
+    }
+
+    #[test]
+    fn 등_뒤라도_아주_가까운_플레이어는_몬스터가_본다() {
+        // 등 뒤(-x) 2칸은 FOV_BACK(3) 이내라 탐지된다.
+        let map = open_map(20, 20);
+        assert!(can_see_player(5, 5, 3, 5, 6, IVec2::new(1, 0), &map),
+            "등 뒤라도 FOV_BACK 이내면 탐지해야 한다");
     }
 
     #[test]
@@ -696,6 +858,7 @@ mod tests {
             Speed::new(1.0),
             MoveQueue::default(),
             ElementalStatus::default(),
+            Facing::default(),
             Transform::from_translation(tile_to_world_coords(tile.0, tile.1).extend(Z_MONSTER)),
         )).id()
     }
@@ -1096,6 +1259,7 @@ mod tests {
         app.add_event::<LogMessage>();
         app.add_event::<CombatFeedbackEvent>();
         app.add_event::<ElementalApplyEvent>();
+        app.add_event::<PlayerDetectedEvent>();
         app.add_systems(Update, monster_turn);
         app
     }
@@ -1178,6 +1342,47 @@ mod tests {
     }
 
     #[test]
+    fn 정면에_플레이어가_있으면_몬스터는_경계상태가_된다() {
+        // 몬스터(5,5)가 오른쪽(+x)을 보고, 플레이어(9,5)는 정면 4칸.
+        let mut app = turn_app(full_floor_map());
+        spawn_player(&mut app, (9, 5));
+        let m = spawn_monster(&mut app, "고블린", (5, 5), 6);
+        app.world.get_mut::<Facing>(m).unwrap().0 = IVec2::new(1, 0);
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert_eq!(app.world.get::<Monster>(m).unwrap().alert_turns, MAX_ALERT_TURNS,
+            "정면 시야 안의 플레이어는 탐지된다");
+    }
+
+    #[test]
+    fn 등_뒤에_멀리_있는_플레이어는_몬스터가_탐지하지_못한다() {
+        // 몬스터(9,5)가 오른쪽(+x)을 보는데 플레이어(5,5)는 등 뒤(-x) 4칸.
+        // 정면 반경(6)이면 닿지만 등 뒤 반경(FOV_BACK=3) 초과라 탐지 못 함.
+        let mut app = turn_app(full_floor_map());
+        spawn_player(&mut app, (5, 5));
+        let m = spawn_monster(&mut app, "고블린", (9, 5), 6);
+        app.world.get_mut::<Facing>(m).unwrap().0 = IVec2::new(1, 0);
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert_eq!(app.world.get::<Monster>(m).unwrap().alert_turns, 0,
+            "등 뒤 먼 플레이어는 탐지되지 않아 경계 상태가 되지 않는다");
+    }
+
+    #[test]
+    fn 추적_이동한_몬스터는_이동방향으로_facing이_갱신된다() {
+        // 몬스터(5,5)가 오른쪽을 보고 정면의 플레이어(9,5)를 추적해 +x 로 이동.
+        let mut app = turn_app(full_floor_map());
+        spawn_player(&mut app, (9, 5));
+        let m = spawn_monster(&mut app, "고블린", (5, 5), 6);
+        app.world.get_mut::<Facing>(m).unwrap().0 = IVec2::new(1, 0);
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert_eq!(app.world.get::<Monster>(m).unwrap().tile_x, 6, "오른쪽으로 한 칸 추적 이동");
+        assert_eq!(app.world.get::<Facing>(m).unwrap().0, IVec2::new(1, 0),
+            "이동 방향으로 facing 갱신");
+    }
+
+    #[test]
     fn 시야_밖이면_경계턴이_매턴_감소한다() {
         let mut app = turn_app(full_floor_map());
         spawn_player(&mut app, (1, 1));
@@ -1188,6 +1393,7 @@ mod tests {
             Speed::new(1.0),
             MoveQueue::default(),
             ElementalStatus::default(),
+            Facing::default(),
             Transform::from_translation(tile_to_world_coords(40, 40).extend(Z_MONSTER)),
         )).id();
         app.world.send_event(PlayerActedEvent);
@@ -1206,6 +1412,7 @@ mod tests {
             Speed::new(1.0),
             MoveQueue::default(),
             ElementalStatus::default(),
+            Facing::default(),
             Transform::from_translation(tile_to_world_coords(40, 40).extend(Z_MONSTER)),
         )).id();
         app.world.send_event(PlayerActedEvent);
@@ -1532,5 +1739,182 @@ mod tests {
             if r == (6, 5) { moved = true; }
         }
         assert!(moved, "모래 타일로 이동한 경우가 한 번은 있어야 한다");
+    }
+
+    // --- guard_stats (순수 함수: 스케일/반올림/경계) ---
+
+    #[test]
+    fn 가드스탯은_플레이어_효과치에_배율1점2를_곱해_반올림한다() {
+        // 10*1.2=12.0, 5*1.2=6.0, 1*1.2=1.2→1
+        assert_eq!(guard_stats(10, 5, 1), (12, 6, 1), "각 값에 1.2 곱하고 반올림");
+    }
+
+    #[test]
+    fn 가드스탯_반올림은_0점5_이상은_올림_미만은_내림한다() {
+        // 3*1.2=3.6→4 (올림), 2*1.2=2.4→2 (내림), 4*1.2=4.8→5 (올림)
+        assert_eq!(guard_stats(3, 2, 4), (4, 2, 5), "0.5 경계 기준 반올림");
+    }
+
+    #[test]
+    fn 가드스탯은_0이면_0을_반환한다() {
+        // 경계: 0*1.2=0.0
+        assert_eq!(guard_stats(0, 0, 0), (0, 0, 0), "0 입력은 0 출력");
+    }
+
+    #[test]
+    fn 가드스탯은_큰_플레이어수치도_정상_스케일한다() {
+        // 100*1.2=120.0, 50*1.2=60.0, 20*1.2=24.0
+        assert_eq!(guard_stats(100, 50, 20), (120, 60, 24), "큰 수치도 1.2배");
+    }
+
+    // --- monster_turn 의 PlayerDetectedEvent 발행 ---
+
+    fn detected_count(app: &App) -> usize {
+        app.world.resource::<Events<PlayerDetectedEvent>>().len()
+    }
+
+    #[test]
+    fn 정면으로_플레이어를_탐지하면_탐지이벤트를_발행한다() {
+        // 몬스터(5,5)가 오른쪽(+x)을 보고 플레이어(9,5)는 정면 4칸.
+        let mut app = turn_app(full_floor_map());
+        spawn_player(&mut app, (9, 5));
+        let m = spawn_monster(&mut app, "고블린", (5, 5), 6);
+        app.world.get_mut::<Facing>(m).unwrap().0 = IVec2::new(1, 0);
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert_eq!(detected_count(&app), 1, "정면 탐지 시 PlayerDetectedEvent 발행");
+    }
+
+    #[test]
+    fn 등_뒤_먼_플레이어는_탐지이벤트를_발행하지_않는다() {
+        // 몬스터(9,5)가 오른쪽(+x)을 보는데 플레이어(5,5)는 등 뒤 4칸 → 미탐지.
+        let mut app = turn_app(full_floor_map());
+        spawn_player(&mut app, (5, 5));
+        let m = spawn_monster(&mut app, "고블린", (9, 5), 6);
+        app.world.get_mut::<Facing>(m).unwrap().0 = IVec2::new(1, 0);
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert_eq!(detected_count(&app), 0, "등 뒤 먼 플레이어는 미탐지 → 이벤트 없음");
+    }
+
+    // --- handle_spawn_guards ---
+
+    fn guard_spawn_app(map: Map) -> App {
+        let mut app = asset_app();
+        app.insert_resource(MapResource(map));
+        app.init_resource::<UsedSpawnTiles>();
+        app.add_event::<SpawnGuardEvent>();
+        app.insert_resource(PlayerEquipment::default());
+        app.insert_resource(ItemRegistry::default());
+        app.add_systems(Update, handle_spawn_guards);
+        app
+    }
+
+    #[test]
+    fn 가드스폰이벤트는_요청한_마릿수만큼_가드를_스폰한다() {
+        let mut map = full_floor_map();
+        map.rooms = rooms_with(3);
+        let mut app = guard_spawn_app(map);
+        spawn_player(&mut app, (1, 1));
+        app.world.send_event(SpawnGuardEvent { count: 3 });
+        app.update();
+        let names: Vec<String> = app.world.query::<&Monster>()
+            .iter(&app.world).map(|m| m.name.clone()).collect();
+        let guards = names.iter().filter(|n| n.as_str() == "가드").count();
+        assert_eq!(guards, 3, "요청한 3마리 가드 스폰");
+    }
+
+    #[test]
+    fn 스폰된_가드의_스탯은_플레이어_효과치의_1점2배다() {
+        let mut map = full_floor_map();
+        map.rooms = rooms_with(1);
+        let mut app = guard_spawn_app(map);
+        // 플레이어 max_hp 30, 장비 없음 → effective ATK=PLAYER_ATK(5), DEF=PLAYER_DEF(1)
+        spawn_player(&mut app, (1, 1));
+        app.world.send_event(SpawnGuardEvent { count: 1 });
+        app.update();
+        let (expect_hp, expect_atk, expect_def) = guard_stats(30, 5, 1);
+        let mut q = app.world.query::<(&Monster, &CombatStats)>();
+        let (_, stats) = q.iter(&app.world).find(|(m, _)| m.name == "가드").expect("가드 존재");
+        assert_eq!(stats.max_hp, expect_hp, "HP 스케일");
+        assert_eq!(stats.attack, expect_atk, "ATK 스케일");
+        assert_eq!(stats.defense, expect_def, "DEF 스케일");
+    }
+
+    #[test]
+    fn 가드는_넉넉한_시야반경을_가진다() {
+        let mut map = full_floor_map();
+        map.rooms = rooms_with(1);
+        let mut app = guard_spawn_app(map);
+        spawn_player(&mut app, (1, 1));
+        app.world.send_event(SpawnGuardEvent { count: 1 });
+        app.update();
+        let mut q = app.world.query::<&Monster>();
+        let guard = q.iter(&app.world).find(|m| m.name == "가드").expect("가드 존재");
+        assert_eq!(guard.vision_radius, GUARD_VISION_RADIUS, "가드 시야 반경");
+    }
+
+    #[test]
+    fn 가드스폰이벤트가_없으면_가드를_스폰하지_않는다() {
+        let mut map = full_floor_map();
+        map.rooms = rooms_with(2);
+        let mut app = guard_spawn_app(map);
+        spawn_player(&mut app, (1, 1));
+        app.update(); // 이벤트 없음 → early return (total==0)
+        let n = app.world.query::<&Monster>().iter(&app.world).count();
+        assert_eq!(n, 0, "이벤트 없으면 스폰 없음");
+    }
+
+    #[test]
+    fn 카운트0_가드스폰이벤트는_가드를_스폰하지_않는다() {
+        // total==0 분기: 이벤트는 왔지만 count 합이 0.
+        let mut map = full_floor_map();
+        map.rooms = rooms_with(1);
+        let mut app = guard_spawn_app(map);
+        spawn_player(&mut app, (1, 1));
+        app.world.send_event(SpawnGuardEvent { count: 0 });
+        app.update();
+        let n = app.world.query::<&Monster>().iter(&app.world).count();
+        assert_eq!(n, 0, "count 합 0 이면 스폰 없음");
+    }
+
+    #[test]
+    fn 플레이어가_없으면_가드를_스폰하지_않는다() {
+        // player_query Err 분기 — count>0 이어도 스폰 불가.
+        let mut map = full_floor_map();
+        map.rooms = rooms_with(1);
+        let mut app = guard_spawn_app(map);
+        app.world.send_event(SpawnGuardEvent { count: 2 });
+        app.update();
+        let n = app.world.query::<&Monster>().iter(&app.world).count();
+        assert_eq!(n, 0, "플레이어 없으면 스폰 안 함");
+    }
+
+    #[test]
+    fn 통과타일이_없으면_가드_스폰을_건너뛴다() {
+        // 전부 Wall 인 맵 + room 없음 → random_floor_tile_anywhere 항상 None.
+        let mut map = Map::new(MAP_WIDTH, MAP_HEIGHT); // 기본 전부 Wall
+        map.rooms = vec![];
+        let mut app = guard_spawn_app(map);
+        spawn_player(&mut app, (1, 1));
+        app.world.send_event(SpawnGuardEvent { count: 2 });
+        app.update();
+        let n = app.world.query::<&Monster>().iter(&app.world).count();
+        assert_eq!(n, 0, "Floor 타일 없으면 스폰 실패 (continue)");
+    }
+
+    #[test]
+    fn 여러_가드스폰이벤트의_카운트는_합산되어_스폰된다() {
+        // 같은 프레임에 두 이벤트 → total = 1 + 2 = 3.
+        let mut map = full_floor_map();
+        map.rooms = rooms_with(3);
+        let mut app = guard_spawn_app(map);
+        spawn_player(&mut app, (1, 1));
+        app.world.send_event(SpawnGuardEvent { count: 1 });
+        app.world.send_event(SpawnGuardEvent { count: 2 });
+        app.update();
+        let guards = app.world.query::<&Monster>()
+            .iter(&app.world).filter(|m| m.name == "가드").count();
+        assert_eq!(guards, 3, "두 이벤트 카운트 합산 스폰");
     }
 }

@@ -1,0 +1,129 @@
+#![enable(implicit_some)]
+
+// ─────────────────────────────────────────────────────────────────
+// infiltration_quest — 그림자 속의 회수
+//
+// 잠입(스텔스) 퀘스트. specs/stealth-and-directional-fov.md §Phase 2.
+//   - 수락 시: stealth_blown 플래그 초기화 → 잠입구역 포탈 개방 → 가드 스폰.
+//   - 잠입구역(Named "infiltration") 에서 기밀 문서(secret_document) 회수.
+//   - 가드(방향 시야)에게 탐지되면 monster 모듈이 stealth_blown 플래그를 set.
+//   - 무탐지(Not HasFlag stealth_blown) 로 회수 시 보너스, 탐지 시 일반 보상.
+//
+// 사용 기능:
+//   QuestAction:    ClearFlag, OpenPortal, SpawnGuards, ClosePortal,
+//                   GiveItems, GiveItem, RemoveItem, Log
+//   QuestCondition: HasItem, HasFlag, Not
+//   QuestSpawn:     zone(Named) + phase 조건
+// ─────────────────────────────────────────────────────────────────
+QuestDef(
+    id: "infiltration_quest",
+    title: "그림자 속의 회수",
+    giver_npc: "burgomaster",
+    initial_phase: "not_started",
+    spawn_chance: 0.7,
+
+    phases: {
+        // ── 1단계: 잠입 의뢰 ────────────────────────────────────
+        "not_started": QuestPhaseDef(
+            dialog: [
+                "쉿... 가까이 오시게. 남들 귀에 들어가면 안 되는 일이라네.",
+                "옆 영지의 저택에 우리 마을의 운명을 가를 기밀 문서가 숨겨져 있어.",
+                "그곳은 경비가 삼엄하다네. 정면으로 부딪치면 살아 돌아오기 어려워.",
+                "벽을 따라, 그림자를 밟고, 경비병의 등 뒤로만 움직이게.",
+                "들키지 않고 문서를 가져오면... 자네에게 따로 사례하지.",
+                "맡아주겠나?",
+            ],
+            objective: Some("촌장의 은밀한 부탁을 들어볼까."),
+        ),
+
+        // ── 2단계: 잠입 진행 중 ─────────────────────────────────
+        "infiltrating": QuestPhaseDef(
+            dialog: [
+                "아직 문서를 손에 넣지 못했나? 서두르되, 조급해선 안 되네.",
+                "경비병의 시선은 앞이 넓고 뒤가 좁다네. 등 뒤를 노리게.",
+                "한 번이라도 들키면 사례는 없어. 하지만 문서만 가져오면 돼.",
+            ],
+            objective: Some("잠입구역에 들어가 기밀 문서를 회수하라. 경비병에게 들키지 마라."),
+        ),
+
+        // ── 3단계: 회수 완료, 촌장에게 귀환 ─────────────────────
+        "extracted": QuestPhaseDef(
+            dialog: [
+                "돌아왔군! 그래, 문서는?",
+                "어디 보세... 틀림없네. 바로 이것이야.",
+            ],
+            objective: Some("기밀 문서를 촌장에게 전달하라."),
+        ),
+
+        // ── 4-A단계: 무탐지 완료 (보너스) ──────────────────────
+        "done_clean": QuestPhaseDef(
+            dialog: [
+                "그림자 하나 흔들리지 않았다더군. 경비병들은 아무것도 눈치채지 못했어.",
+                "이런 솜씨라니... 약속한 사례에 후하게 얹어주겠네.",
+                "자네 같은 사람이 있어 마을이 발 뻗고 잔다네. 고맙네.",
+            ],
+            objective: Some("잠입 완료! 들키지 않고 임무를 완수했다."),
+        ),
+
+        // ── 4-B단계: 탐지 완료 (일반 보상) ─────────────────────
+        "done_blown": QuestPhaseDef(
+            dialog: [
+                "문서는 받았네만... 자네, 들켰군. 저택이 발칵 뒤집혔다는 소문이야.",
+                "어쨌든 임무는 완수했으니 약속한 사례는 주겠네.",
+                "다음엔 좀 더 조용히 움직이게나.",
+            ],
+            objective: Some("임무 완료. 다만 잠입은 발각되었다."),
+        ),
+    },
+
+    transitions: [
+        // 수락 → stealth_blown 초기화 + 잠입구역 포탈 개방 + 가드 스폰
+        Transition(from: "not_started", trigger: Interact,
+            actions: [
+                ClearFlag("stealth_blown"),
+                OpenPortal(zone: "infiltration", generator: "walled_town", placement: Border),
+                SpawnGuards(count: 5),
+                Log("촌장: 포탈을 열어두었네. 그림자 속으로 사라지게."),
+            ],
+            to: "infiltrating"),
+
+        // 기밀 문서 회수 시 자동으로 귀환 단계로
+        Transition(from: "infiltrating", trigger: Auto,
+            when: HasItem("secret_document"),
+            to: "extracted"),
+
+        // ── extracted: 탐지 여부에 따른 보상 분기 (첫 매칭만 실행) ──
+        // ① 무탐지(Not stealth_blown) → 보너스 보상
+        Transition(from: "extracted", trigger: Interact,
+            when: Not(HasFlag("stealth_blown")),
+            actions: [
+                RemoveItem("secret_document"),
+                Log("촌장: 완벽한 잠입이었어. 이건 약속한 것 이상일세."),
+                GiveItems(item: "health_potion", count: 5),
+                GiveItem("philosophers_stone"),
+                ClosePortal("infiltration"),
+                ClearFlag("stealth_blown"),
+            ],
+            to: "done_clean"),
+
+        // ② 탐지됨(fallback) → 일반 보상
+        Transition(from: "extracted", trigger: Interact,
+            actions: [
+                RemoveItem("secret_document"),
+                Log("촌장: 시끄러웠지만, 어쨌든 문서는 손에 들어왔군."),
+                GiveItems(item: "health_potion", count: 2),
+                ClosePortal("infiltration"),
+                ClearFlag("stealth_blown"),
+            ],
+            to: "done_blown"),
+    ],
+
+    spawns: [
+        // 기밀 문서 — 잠입 진행 중일 때 잠입구역에 스폰
+        QuestSpawn(
+            phase: "infiltrating",
+            item: "secret_document",
+            zone: Named("infiltration"),
+        ),
+    ],
+)
