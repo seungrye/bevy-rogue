@@ -6,11 +6,17 @@ edition = "2021"
 [dependencies]
 rand = "0.8"
 noise = "0.8"
-# bevy = { version = "0.13", features = ["dynamic_linking"] }
 bevy = { version = "0.13" }
 bevy_rapier2d = "0.26"
 serde = { version = "1", features = ["derive"] }
 ron = "0.8"
+
+[features]
+# 개발 반복 가속(opt-in): bevy 를 동적 링크(.so)로 빌드 → 증분 빌드·링크 추가 단축.
+#   사용:  cargo run --features fast-dev
+#   주의:  배포(릴리즈)에는 절대 쓰지 말 것. 런타임에 libbevy_dylib.so 가 필요해진다.
+#          기본 빌드/테스트/커버리지/package.sh 는 이 피처 없이 정적 링크(영향 없음).
+fast-dev = ["bevy/dynamic_linking"]
 
 # 개발 빌드(cargo run) 시 의존성(bevy 등)에만 최적화를 활성화합니다.
 # 이는 초기 빌드는 조금 더 오래 걸리게 하지만, 이후의 증분 빌드 속도를 크게 향상시킵니다.
