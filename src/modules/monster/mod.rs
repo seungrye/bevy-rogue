@@ -14,7 +14,7 @@ use crate::modules::{
     combat::{CombatStats, Defeated, Speed, calc_damage},
     ui::LogMessage,
     combat_feedback::CombatFeedbackEvent,
-    item::{ItemDropEvent, PlayerEquipment, ItemRegistry, PlayerInventory, effective_attack, effective_defense},
+    item::{ItemDropEvent, PlayerEquipment, ItemRegistry, PlayerInventory, ItemKind, QuestItemKind, effective_attack, effective_defense},
     zone::{WorldState, ZoneId, ZonePersistence, MonsterSlot},
     map::GlobalTurn,
     elemental::{Element, ElementalApplyEvent, ElementalStatus, Stunned, weapon_element},
@@ -23,6 +23,14 @@ use crate::modules::{
 
 const Z_MONSTER: f32 = 0.8;
 const MAX_ALERT_TURNS: u32 = 5;
+
+/// 위험 타일(가드 시야) 오버레이의 Z. 타일(0.0) 위, 아이템(0.3)/몬스터(0.8) 아래에
+/// 깔아 글리프를 가리지 않고 바닥만 붉게 틴트한다.
+const Z_DANGER_OVERLAY: f32 = 0.15;
+/// 위험 타일 틴트 색 (반투명 붉은색).
+const DANGER_TINT: Color = Color::rgba(1.0, 0.0, 0.0, 0.25);
+/// 정찰 도구 아이템 ID — 인벤토리에 있으면 위험 타일 오버레이가 활성화된다.
+pub const SCOUT_LENS_ID: &str = "scout_lens";
 
 /// 가드 스탯 배율 — 플레이어 현재 effective HP/ATK/DEF 에 곱한다.
 /// 1.2 → 레벨 무관하게 늘 "조금 더 셈"으로 정면 돌파보다 잠입을 유도한다.
@@ -191,6 +199,92 @@ pub fn guard_stats(player_hp: i32, player_atk: i32, player_def: i32) -> (i32, i3
     (scale(player_hp), scale(player_atk), scale(player_def))
 }
 
+/// 위험 타일 오버레이 엔티티 마커. 가드 시야가 닿는 타일 위에 깔리는 반투명
+/// 붉은 사각형으로, 기존 타일 렌더와 독립된 별도 레이어다.
+#[derive(Component)]
+pub struct GuardVisionOverlay;
+
+/// 가드(적대 엔티티)들의 방향 시야가 닿는 "위험 타일" 집합을 계산하는 순수 함수.
+///
+/// 각 가드 `(pos, facing, vision_radius)` 에 대해 맵의 모든 타일 중
+/// `is_in_view(gpos, gfacing, tile, vision_radius, FOV_BACK, map)` 인 타일을 모아
+/// 합집합으로 반환한다. 정면(facing 쪽)은 멀리, 등 뒤는 가깝게(FOV_BACK) 보는
+/// Phase 1 방향 시야를 그대로 재사용하므로 등 뒤·벽 너머 타일은 제외된다.
+/// 가드가 없으면 빈 집합을 반환한다.
+pub fn danger_tiles(
+    guards: &[((usize, usize), IVec2, i32)],
+    map: &Map,
+) -> HashSet<(usize, usize)> {
+    let mut out = HashSet::new();
+    for &((gx, gy), facing, vision_radius) in guards {
+        for ty in 0..map.height {
+            for tx in 0..map.width {
+                if is_in_view(
+                    gx as i32, gy as i32, facing,
+                    tx as i32, ty as i32,
+                    vision_radius, FOV_BACK, map,
+                ) {
+                    out.insert((tx, ty));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 인벤토리에 정찰 도구(`scout_lens`)를 보유했는지 여부 (순수 함수).
+/// 보유하면 위험 타일 오버레이가 활성화된다.
+pub fn player_has_scout_lens(inventory: &PlayerInventory) -> bool {
+    let lens = ItemKind::QuestItem(QuestItemKind(SCOUT_LENS_ID));
+    inventory.items.iter().any(|i| i.kind == lens)
+}
+
+/// 정찰 도구 보유 시 가드 시야가 닿는 위험 타일에 반투명 붉은 오버레이를 깔고,
+/// 미보유 시 모든 오버레이를 제거한다. 플레이어/가드 이동·facing 변화·인벤토리
+/// 변경 시마다 매 프레임 재계산해 항상 현재 상태를 반영한다(전부 despawn 후 재배치).
+///
+/// 기존 타일 렌더(`TileEntity`)는 건드리지 않고 별도 `GuardVisionOverlay` 레이어로만
+/// 표시한다.
+fn update_guard_vision_overlay(
+    mut commands: Commands,
+    map_res: Res<MapResource>,
+    inventory: Res<PlayerInventory>,
+    monster_query: Query<(&Monster, &Facing, &CombatStats)>,
+    overlay_query: Query<Entity, With<GuardVisionOverlay>>,
+) {
+    // 매번 기존 오버레이를 비우고 다시 그린다 — 이동/facing/인벤토리 변화 반영을 단순화.
+    for entity in overlay_query.iter() {
+        commands.entity(entity).despawn();
+    }
+
+    // 정찰 도구 미보유면 오버레이 없음 (제거만 하고 종료).
+    if !player_has_scout_lens(&inventory) {
+        return;
+    }
+
+    let map = map_res.map();
+    let guards: Vec<((usize, usize), IVec2, i32)> = monster_query.iter()
+        .filter(|(_, _, stats)| stats.hp > 0)
+        .map(|(m, facing, _)| ((m.tile_x, m.tile_y), facing.0, m.vision_radius))
+        .collect();
+
+    for (tx, ty) in danger_tiles(&guards, map) {
+        let coord = tile_to_world_coords(tx, ty);
+        commands.spawn((
+            SpriteBundle {
+                sprite: Sprite {
+                    color: DANGER_TINT,
+                    custom_size: Some(Vec2::splat(TILE_SIZE)),
+                    ..default()
+                },
+                transform: Transform::from_xyz(coord.x, coord.y, Z_DANGER_OVERLAY),
+                ..default()
+            },
+            GuardVisionOverlay,
+        ));
+    }
+}
+
 pub struct MonsterPlugin;
 
 impl Plugin for MonsterPlugin {
@@ -212,6 +306,7 @@ impl Plugin for MonsterPlugin {
                 handle_spawn_guards,
                 handle_spawn_monster,
                 smooth_monster_move,
+                update_guard_vision_overlay,
             ));
     }
 }
@@ -2545,5 +2640,169 @@ mod tests {
         let mut app = run_spawn_from_slots(&rooms, &slots, 0);
         let n = app.world.query::<&Monster>().iter(&app.world).count();
         assert_eq!(n, 1, "범위 밖 data_idx 슬롯은 스폰 제외");
+    }
+
+    // ── danger_tiles (위험 타일 순수 함수) ────────────────────────────────────
+
+    use crate::modules::item::InventoryItem;
+
+    #[test]
+    fn 위험타일은_가드_정면_시야_타일을_포함한다() {
+        // 가드(5,5)가 오른쪽(+x)을 보면 정면 타일(8,5)이 위험 타일에 포함된다.
+        let map = open_map(20, 20);
+        let guards = [((5usize, 5usize), IVec2::new(1, 0), 8)];
+        let tiles = danger_tiles(&guards, &map);
+        assert!(tiles.contains(&(8, 5)), "정면 반경 내 타일은 위험 타일이어야 한다");
+        assert!(tiles.contains(&(5, 5)), "가드 자기 타일도 시야에 포함된다");
+    }
+
+    #[test]
+    fn 위험타일은_가드_등_뒤의_먼_타일을_제외한다() {
+        // 가드(10,5)가 오른쪽(+x)을 보면, 등 뒤(-x)로 FOV_BACK(3)을 넘는 (5,5)는 제외.
+        let map = open_map(20, 20);
+        let guards = [((10usize, 5usize), IVec2::new(1, 0), 8)];
+        let tiles = danger_tiles(&guards, &map);
+        assert!(!tiles.contains(&(5, 5)), "등 뒤로 FOV_BACK 을 넘는 타일은 제외되어야 한다");
+    }
+
+    #[test]
+    fn 위험타일은_벽_너머의_타일을_제외한다() {
+        // (5,5)와 (9,5) 사이 x=7 에 벽 열 → 벽 너머 타일은 시야가 막혀 제외.
+        let mut map = open_map(20, 20);
+        for y in 0..20 { map.set_tile(7, y, TileKind::Wall); }
+        let guards = [((5usize, 5usize), IVec2::new(1, 0), 10)];
+        let tiles = danger_tiles(&guards, &map);
+        assert!(tiles.contains(&(6, 5)), "벽 앞 타일은 보인다");
+        assert!(!tiles.contains(&(9, 5)), "벽 너머 타일은 시야가 막혀 제외되어야 한다");
+    }
+
+    #[test]
+    fn 위험타일은_여러_가드의_시야를_합집합으로_모은다() {
+        // 서로 멀리 떨어진 두 가드의 시야가 모두 포함되어야 한다.
+        let map = open_map(40, 20);
+        let guards = [
+            ((5usize, 5usize), IVec2::new(1, 0), 6),
+            ((30usize, 5usize), IVec2::new(-1, 0), 6),
+        ];
+        let tiles = danger_tiles(&guards, &map);
+        assert!(tiles.contains(&(8, 5)), "첫 가드 정면 타일 포함");
+        assert!(tiles.contains(&(27, 5)), "둘째 가드 정면 타일 포함");
+    }
+
+    #[test]
+    fn 가드가_없으면_위험타일은_빈_집합이다() {
+        let map = open_map(20, 20);
+        let guards: [((usize, usize), IVec2, i32); 0] = [];
+        let tiles = danger_tiles(&guards, &map);
+        assert!(tiles.is_empty(), "가드가 없으면 위험 타일도 없다");
+    }
+
+    // ── update_guard_vision_overlay (오버레이 시스템) ─────────────────────────
+
+    fn scout_lens_item() -> InventoryItem {
+        InventoryItem::new(ItemKind::QuestItem(QuestItemKind(SCOUT_LENS_ID)))
+    }
+
+    /// 오버레이 시스템 + 필요한 리소스를 갖춘 App. AssetServer(Image) 는 SpriteBundle 용.
+    fn overlay_app(map: Map, has_lens: bool) -> App {
+        let mut app = asset_app();
+        app.insert_resource(MapResource(map));
+        let mut inv = PlayerInventory::default();
+        if has_lens { inv.items.push(scout_lens_item()); }
+        app.insert_resource(inv);
+        app.add_systems(Update, update_guard_vision_overlay);
+        app
+    }
+
+    /// 지정 위치·facing 의 가드 한 마리를 스폰한다 (CombatStats hp>0).
+    fn spawn_guard_for_overlay(app: &mut App, tile: (usize, usize), facing: IVec2, radius: i32) -> Entity {
+        app.world.spawn((
+            Monster { name: "가드".into(), tile_x: tile.0, tile_y: tile.1, vision_radius: radius, alert_turns: 0, slot_idx: 0 },
+            Facing(facing),
+            CombatStats { hp: 20, max_hp: 20, mp: 0, max_mp: 0, attack: 4, defense: 0 },
+        )).id()
+    }
+
+    fn overlay_count(app: &mut App) -> usize {
+        app.world.query_filtered::<Entity, With<GuardVisionOverlay>>().iter(&app.world).count()
+    }
+
+    #[test]
+    fn 정찰도구를_보유하면_위험타일에_오버레이가_생긴다() {
+        let map = open_map(20, 20);
+        let mut app = overlay_app(map, true);
+        spawn_guard_for_overlay(&mut app, (5, 5), IVec2::new(1, 0), 6);
+        app.update();
+        assert!(overlay_count(&mut app) > 0, "정찰 도구 보유 시 위험 타일 오버레이가 스폰되어야 한다");
+    }
+
+    #[test]
+    fn 정찰도구가_없으면_오버레이가_생기지_않는다() {
+        let map = open_map(20, 20);
+        let mut app = overlay_app(map, false);
+        spawn_guard_for_overlay(&mut app, (5, 5), IVec2::new(1, 0), 6);
+        app.update();
+        assert_eq!(overlay_count(&mut app), 0, "정찰 도구 미보유 시 오버레이가 없어야 한다");
+    }
+
+    #[test]
+    fn 가드_facing이_바뀌면_오버레이가_새_시야로_갱신된다() {
+        // 가드가 오른쪽을 볼 때 (8,5)는 위험, 왼쪽으로 돌면 (8,5)는 등 뒤로 빠져 안전.
+        let map = open_map(20, 20);
+        let mut app = overlay_app(map, true);
+        let guard = spawn_guard_for_overlay(&mut app, (5, 5), IVec2::new(1, 0), 6);
+        app.update();
+
+        // 오버레이 사각형의 월드 좌표로 (8,5) 가 덮였는지 확인하는 헬퍼.
+        let covered = |app: &mut App, tile: (usize, usize)| {
+            let target = tile_to_world_coords(tile.0, tile.1);
+            app.world.query_filtered::<&Transform, With<GuardVisionOverlay>>()
+                .iter(&app.world)
+                .any(|t| (t.translation.x - target.x).abs() < 0.1 && (t.translation.y - target.y).abs() < 0.1)
+        };
+        // (9,5)는 정면 4칸(반경 6 이내)이라 위험, 등 뒤로는 FOV_BACK(3)을 넘어 안전.
+        assert!(covered(&mut app, (9, 5)), "오른쪽을 볼 때 (9,5)는 위험 타일");
+
+        // facing 을 왼쪽(-x)으로 돌린다.
+        app.world.get_mut::<Facing>(guard).unwrap().0 = IVec2::new(-1, 0);
+        app.update();
+        assert!(!covered(&mut app, (9, 5)), "왼쪽으로 돌면 (9,5)는 등 뒤로 빠져 위험 타일에서 빠진다");
+    }
+
+    #[test]
+    fn 정찰도구를_잃으면_기존_오버레이가_제거된다() {
+        // 보유 → 오버레이 생성, 미보유로 바뀌면 전부 제거.
+        let map = open_map(20, 20);
+        let mut app = overlay_app(map.clone(), true);
+        spawn_guard_for_overlay(&mut app, (5, 5), IVec2::new(1, 0), 6);
+        app.update();
+        assert!(overlay_count(&mut app) > 0, "보유 시 오버레이 존재");
+
+        // 인벤토리에서 정찰 도구 제거.
+        app.world.resource_mut::<PlayerInventory>().items.clear();
+        app.update();
+        assert_eq!(overlay_count(&mut app), 0, "정찰 도구를 잃으면 오버레이가 전부 제거된다");
+    }
+
+    #[test]
+    fn 죽은_가드의_시야는_위험타일에_반영되지_않는다() {
+        // hp<=0 가드는 시야에서 제외되어 오버레이가 생기지 않는다.
+        let map = open_map(20, 20);
+        let mut app = overlay_app(map, true);
+        app.world.spawn((
+            Monster { name: "가드".into(), tile_x: 5, tile_y: 5, vision_radius: 6, alert_turns: 0, slot_idx: 0 },
+            Facing(IVec2::new(1, 0)),
+            CombatStats { hp: 0, max_hp: 20, mp: 0, max_mp: 0, attack: 4, defense: 0 },
+        ));
+        app.update();
+        assert_eq!(overlay_count(&mut app), 0, "죽은 가드의 시야는 오버레이로 표시되지 않는다");
+    }
+
+    #[test]
+    fn 정찰도구_보유_판정은_인벤토리의_올빼미안경을_인식한다() {
+        let mut inv = PlayerInventory::default();
+        assert!(!player_has_scout_lens(&inv), "기본 인벤토리엔 정찰 도구가 없다");
+        inv.items.push(scout_lens_item());
+        assert!(player_has_scout_lens(&inv), "올빼미 안경을 넣으면 보유로 판정한다");
     }
 }

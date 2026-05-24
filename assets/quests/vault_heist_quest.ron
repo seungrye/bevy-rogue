@@ -109,6 +109,8 @@ QuestDef(
         Transition(from: "not_started", trigger: Interact,
             actions: [
                 ClearFlag("stealth_blown"),
+                GiveItem("scout_lens"),
+                Log("상인: 이 올빼미 안경을 끼시오. 경비병의 시선이 붉게 비쳐 보일 거요."),
                 OpenPortal(zone: "dreadfort_vault", generator: "bsp_indoor", placement: Border),
                 SpawnGuards(count: 6),
                 Log("상인: 포탈을 열어뒀소. 그림자 속으로 사라지시오."),

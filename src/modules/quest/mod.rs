@@ -1371,6 +1371,30 @@ mod tests {
         }
     }
 
+    /// 지정 퀘스트 RON 의 not_started→infiltrating 수락 전이가 정찰 도구를 지급하는지 검사.
+    fn accept_transition_gives_scout_lens(quest_file: &str) -> bool {
+        let text = std::fs::read_to_string(quest_file)
+            .unwrap_or_else(|e| panic!("{} 읽기 실패: {}", quest_file, e));
+        let def: QuestDef = ron::de::from_str(&text)
+            .unwrap_or_else(|e| panic!("{} 파싱 실패: {}", quest_file, e));
+        def.transitions.iter()
+            .filter(|t| t.from == "not_started" && t.to == "infiltrating")
+            .flat_map(|t| t.actions.iter())
+            .any(|a| matches!(a, QuestAction::GiveItem(id) if id == "scout_lens"))
+    }
+
+    #[test]
+    fn 잠입_퀘스트_수락은_정찰도구_올빼미안경을_지급한다() {
+        assert!(
+            accept_transition_gives_scout_lens("assets/quests/infiltration_quest.ron"),
+            "infiltration_quest 수락 전이는 GiveItem(scout_lens) 를 포함해야 한다"
+        );
+        assert!(
+            accept_transition_gives_scout_lens("assets/quests/vault_heist_quest.ron"),
+            "vault_heist_quest 수락 전이는 GiveItem(scout_lens) 를 포함해야 한다"
+        );
+    }
+
     #[test]
     fn 레지스트리는_active집합에_있는_퀘스트만_활성으로_판정한다() {
         let mut reg = QuestRegistry::default();

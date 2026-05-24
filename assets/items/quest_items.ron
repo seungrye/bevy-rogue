@@ -285,4 +285,13 @@
         pickup_message: "스타크 가문의 인장을 되찾았다. 늑대 머리가 새겨진 차가운 강철이 손에 묵직하다.",
         image_path: "scene/open-chest.png",
     ),
+    QuestItemDef(
+        id: "scout_lens",
+        display_name: "올빼미 안경",
+        glyph_ascii: "O",
+        glyph_unicode: "\u{1F50E}",
+        glyph_game_icon: "\u{1F50E}",
+        pickup_message: "올빼미 안경을 받았다. 끼면 경비병의 시선이 붉게 비쳐 보인다.",
+        image_path: "scene/open-chest.png",
+    ),
 ]
