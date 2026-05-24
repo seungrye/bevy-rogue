@@ -128,7 +128,7 @@ fn help_sections(font: &Handle<Font>) -> Vec<TextSection> {
     ]);
     push_group(&mut sections, font, "패널", &[
         ("E", "장비/인벤토리 패널"),
-        ("Q", "퀘스트 패널"),
+        ("Q 또는 J", "퀘스트 패널 / 저널 (진행 중 목표)"),
         ("상인에게 부딪힘", "상점 열기"),
         ("↑↓ / Tab / Enter", "목록 이동, 탭 전환, 확인"),
     ]);

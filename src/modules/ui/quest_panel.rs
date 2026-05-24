@@ -17,9 +17,48 @@ const C_PROGRESS: Color = Color::rgba(0.75, 1.0, 0.65, 1.0);
 const C_DONE:     Color = Color::rgba(0.35, 0.35, 0.35, 0.9);
 const C_EMPTY:    Color = Color::rgba(0.45, 0.45, 0.45, 0.8);
 
+const C_JOURNAL: Color = Color::rgba(1.0, 0.85, 0.4, 1.0);
+
 #[derive(Component)] pub struct QuestPanel;
 #[derive(Component)] struct QuestPanelContent;
 #[derive(Resource, Default)] pub struct QuestPanelOpen(pub bool);
+
+/// 진행 중(활성)인 퀘스트의 `(제목, 현재 목표)` 목록을 순수 함수로 만든다.
+///
+/// 저널은 **읽기 전용** 으로, 지금 플레이어가 추적해야 할 목표만 보여준다.
+/// 따라서 다음 퀘스트는 제외한다:
+/// - **미시작**: `QuestState.phases` 에 없거나 현재 페이즈가 `initial_phase` 인 퀘스트
+///   (아직 수락 전이므로 추적할 목표가 없다).
+/// - **완료(터미널)**: 현재 페이즈에서 시작하는 전환이 하나도 없는 퀘스트
+///   (`done` 등 종착 페이즈). villager 모듈의 터미널 판정과 같은 규칙을 쓴다.
+///
+/// 목표 문구는 현재 페이즈의 `objective` 를 쓰되, 없으면 페이즈 ID 로 대체한다
+/// (패널 렌더(`build_quest_sections`)의 fallback 과 동일하게 일관 유지).
+///
+/// 실제 패널과 단위 테스트가 같은 로직을 공유하도록 순수 함수로 분리한다.
+pub fn journal_entries(
+    quest_state: &QuestState,
+    registry: &QuestRegistry,
+) -> Vec<(String, String)> {
+    quest_state.phases.iter()
+        .filter_map(|(qid, phase_id)| {
+            let def = registry.get(qid)?;
+            // 미시작(initial_phase) 제외 — 아직 수락 전이라 추적 목표 없음.
+            if phase_id == &def.initial_phase { return None; }
+            let phase = def.phases.get(phase_id)?;
+            // 완료(터미널: 현재 페이즈에서 나가는 전환 없음) 제외.
+            if is_terminal_phase(def, phase_id) { return None; }
+            let objective = phase.objective.clone().unwrap_or_else(|| phase_id.clone());
+            Some((def.title.clone(), objective))
+        })
+        .collect()
+}
+
+/// 현재 페이즈에서 시작하는 전환이 하나도 없으면 터미널(완료) 페이즈다.
+/// villager 모듈의 `is_quest_terminal_def` 와 같은 규칙을 quest_panel 안에서 재사용한다.
+fn is_terminal_phase(def: &QuestDef, phase_id: &str) -> bool {
+    !def.transitions.iter().any(|t| t.from == phase_id)
+}
 
 pub struct QuestPanelPlugin;
 
@@ -63,7 +102,10 @@ fn setup_quest_panel(mut commands: Commands) {
     });
 }
 
-/// Q 입력으로 퀘스트 패널을 열고 닫으며, 즉각적인 반응을 위해 visibility를 바로 갱신한다.
+/// `Q` 또는 `J`(저널) 입력으로 퀘스트 패널을 열고 닫으며, 즉각적인 반응을 위해 visibility를 바로 갱신한다.
+///
+/// 저널은 별도 패널이 아니라 같은 퀘스트 패널이므로 두 키 모두 동일 패널을 토글한다
+/// (모달/입력 흐름은 기존 패널과 동일하게 유지).
 fn toggle_quest_panel(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut panel_open: ResMut<QuestPanelOpen>,
@@ -71,7 +113,7 @@ fn toggle_quest_panel(
     defeated_q: Query<(), With<crate::modules::combat::Defeated>>,
 ) {
     if !defeated_q.is_empty() { return; }
-    if !keyboard.just_pressed(KeyCode::KeyQ) { return; }
+    if !keyboard.just_pressed(KeyCode::KeyQ) && !keyboard.just_pressed(KeyCode::KeyJ) { return; }
     panel_open.0 = !panel_open.0;
     if let Ok(mut vis) = panel_q.get_single_mut() {
         *vis = if panel_open.0 { Visibility::Inherited } else { Visibility::Hidden };
@@ -132,6 +174,9 @@ fn build_quest_sections(
     let f = font.clone();
     let mut s = vec![ts("/ Q U E S T S /\n\n", f.clone(), C_HEADER)];
 
+    // 진행 중(활성) 퀘스트 목표만 모은 읽기 전용 저널 요약 (Q/J 공용 패널 상단).
+    push_journal_summary(&mut s, registry, state, &f);
+
     let active_quests: Vec<_> = state.phases.iter()
         .filter_map(|(qid, phase_id)| {
             let def = registry.get(qid)?;
@@ -173,6 +218,28 @@ fn build_quest_sections(
     }
 
     s
+}
+
+/// `journal_entries` 로 뽑은 진행 중 퀘스트의 `(제목 — 목표)` 요약을 패널 상단에 추가한다.
+///
+/// 읽기 전용 저널: 지금 추적할 목표만 한눈에 보여주고(미시작/완료 제외),
+/// 진행 중인 퀘스트가 하나도 없으면 안내 문구만 둔다.
+fn push_journal_summary(
+    s: &mut Vec<TextSection>,
+    registry: &QuestRegistry,
+    state: &QuestState,
+    f: &Handle<Font>,
+) {
+    s.push(ts("[ 저널 ] (J / Q)\n", f.clone(), C_HEADER));
+    let entries = journal_entries(state, registry);
+    if entries.is_empty() {
+        s.push(ts("진행 중인 목표 없음\n\n", f.clone(), C_EMPTY));
+        return;
+    }
+    for (title, objective) in entries {
+        s.push(ts(format!("• {} — {}\n", title, objective), f.clone(), C_JOURNAL));
+    }
+    s.push(ts("\n", f.clone(), C_JOURNAL));
 }
 
 /// phase 스폰과 존 기반 자동 진행 조건에서 추론한 목표 존 힌트를 반환한다.
@@ -506,6 +573,145 @@ mod tests {
         assert!(!all_text.contains("다음:"));
     }
 
+    // ── 순수 함수 journal_entries (§D) ───────────────────────────────────
+
+    #[test]
+    fn 진행중인_퀘스트만_저널에_현재목표와_함께_표시된다() {
+        // make_registry_and_state 의 phase "ready" 는 initial_phase("active")가 아니고
+        // 터미널(전환 없음)도 아니므로 진행 중 → 저널에 포함된다.
+        let (reg, st) = make_registry_and_state("ready");
+        let entries = journal_entries(&st, &reg);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, "잃어버린 보석");
+        assert_eq!(entries[0].1, "보석을 장로에게 가져가라");
+    }
+
+    #[test]
+    fn 아직_수락하지_않은_initial_phase_퀘스트는_저널에서_제외된다() {
+        // initial_phase 와 같은 페이즈("active")는 미시작으로 간주 → 저널 제외.
+        let (reg, st) = make_registry_and_state("active");
+        assert!(journal_entries(&st, &reg).is_empty());
+    }
+
+    #[test]
+    fn 완료된_터미널_퀘스트는_저널에서_제외된다() {
+        // "done" 에서 시작하는 전환이 없으므로 터미널(완료) → 저널 제외.
+        let (reg, st) = make_registry_and_state("done");
+        assert!(journal_entries(&st, &reg).is_empty());
+    }
+
+    #[test]
+    fn 진행중인_퀘스트가_하나도_없으면_저널은_빈_목록이다() {
+        let reg = QuestRegistry::default();
+        let st = QuestState::default();
+        assert!(journal_entries(&st, &reg).is_empty());
+    }
+
+    #[test]
+    fn 레지스트리에_없는_퀘스트는_저널에서_건너뛴다() {
+        // registry.get(qid) == None 분기.
+        let reg = QuestRegistry::default();
+        let mut st = QuestState::default();
+        st.set_phase("유령_퀘스트", "진행중");
+        assert!(journal_entries(&st, &reg).is_empty());
+    }
+
+    #[test]
+    fn 상태에_있지만_정의에_없는_페이즈는_저널에서_건너뛴다() {
+        // def.phases.get(phase_id) == None 분기 (state 의 phase 가 def 에 없음).
+        let (reg, _) = make_registry_and_state("ready");
+        let mut st = QuestState::default();
+        st.set_phase("gem_quest", "존재하지_않는_페이즈");
+        assert!(journal_entries(&st, &reg).is_empty());
+    }
+
+    #[test]
+    fn objective가_없는_진행페이즈는_페이즈ID를_목표로_대체한다() {
+        // objective: None 인 진행 중 페이즈 → 페이즈 ID 로 fallback.
+        let mut reg = QuestRegistry::default();
+        let mut phases = HashMap::new();
+        phases.insert("start".to_string(), phase("시작"));
+        phases.insert("진행중페이즈".to_string(), QuestPhaseDef { dialog: vec![], objective: None });
+        reg.quests.insert("q".into(), QuestDef {
+            id: "q".into(),
+            title: "목표없는 퀘스트".into(),
+            giver_npc: "npc".into(),
+            initial_phase: "start".into(),
+            phases,
+            transitions: vec![QuestTransition {
+                from: "진행중페이즈".into(),
+                trigger: TriggerKind::Interact,
+                when: None,
+                actions: vec![],
+                to: "끝".into(),
+            }],
+            spawns: vec![],
+            spawn_chance: 1.0,
+        });
+        let mut st = QuestState::default();
+        st.set_phase("q", "진행중페이즈");
+        let entries = journal_entries(&st, &reg);
+        assert_eq!(entries, vec![("목표없는 퀘스트".to_string(), "진행중페이즈".to_string())]);
+    }
+
+    #[test]
+    fn 저널은_진행중_퀘스트만_담고_미시작과_완료는_함께_있어도_제외한다() {
+        // 한 상태에 미시작/진행중/완료 퀘스트를 모두 두고 진행 중만 남는지 확인.
+        let mut reg = QuestRegistry::default();
+        let three_phase = |start_obj: &str| {
+            let mut p = HashMap::new();
+            p.insert("start".to_string(), phase(start_obj));
+            p.insert("mid".to_string(), phase("중간 목표"));
+            p.insert("done".to_string(), phase("끝"));
+            p
+        };
+        let make = |id: &str| QuestDef {
+            id: id.into(),
+            title: id.into(),
+            giver_npc: "npc".into(),
+            initial_phase: "start".into(),
+            phases: three_phase("시작 목표"),
+            transitions: vec![
+                QuestTransition { from: "start".into(), trigger: TriggerKind::Interact, when: None, actions: vec![], to: "mid".into() },
+                QuestTransition { from: "mid".into(), trigger: TriggerKind::Interact, when: None, actions: vec![], to: "done".into() },
+            ],
+            spawns: vec![],
+            spawn_chance: 1.0,
+        };
+        reg.quests.insert("미시작".into(), make("미시작"));
+        reg.quests.insert("진행중".into(), make("진행중"));
+        reg.quests.insert("완료".into(), make("완료"));
+
+        let mut st = QuestState::default();
+        st.set_phase("미시작", "start"); // initial_phase → 제외
+        st.set_phase("진행중", "mid");   // 진행 중 → 포함
+        st.set_phase("완료", "done");    // 터미널 → 제외
+
+        let entries = journal_entries(&st, &reg);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0], ("진행중".to_string(), "중간 목표".to_string()));
+    }
+
+    // ── 저널 요약 패널 렌더 (push_journal_summary) ───────────────────────
+
+    #[test]
+    fn 패널_상단_저널요약은_진행중_퀘스트_목표를_보여준다() {
+        let (reg, st) = make_registry_and_state("ready");
+        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default(), qi());
+        let all_text = all_text(sections);
+        assert!(all_text.contains("[ 저널 ] (J / Q)"));
+        assert!(all_text.contains("• 잃어버린 보석 — 보석을 장로에게 가져가라"));
+    }
+
+    #[test]
+    fn 진행중_퀘스트가_없으면_저널요약은_진행중_목표_없음을_안내한다() {
+        // 완료(done)만 있는 상태 → 저널 요약은 비어 안내 문구.
+        let (reg, st) = make_registry_and_state("done");
+        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default(), qi());
+        let all_text = all_text(sections);
+        assert!(all_text.contains("진행 중인 목표 없음"));
+    }
+
     // ── 조건 존 수집 ─────────────────────────────────────────────────────
 
     #[test]
@@ -755,6 +961,32 @@ mod tests {
         assert!(app.world.resource::<QuestPanelOpen>().0);
         let vis = *app.world.query_filtered::<&Visibility, With<QuestPanel>>().single(&app.world);
         assert!(matches!(vis, Visibility::Inherited));
+    }
+
+    #[test]
+    fn J키를_누르면_저널_패널이_열리고_보임으로_바뀐다() {
+        // 저널은 별도 패널이 아니라 같은 퀘스트 패널 → J 로도 토글된다.
+        let mut app = 키_입력_하네스();
+        app.add_systems(Update, toggle_quest_panel);
+        app.world.spawn((Visibility::Hidden, QuestPanel));
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyJ);
+        app.update();
+        assert!(app.world.resource::<QuestPanelOpen>().0);
+        let vis = *app.world.query_filtered::<&Visibility, With<QuestPanel>>().single(&app.world);
+        assert!(matches!(vis, Visibility::Inherited));
+    }
+
+    #[test]
+    fn 열린_상태에서_J키를_다시_누르면_닫히고_숨김으로_바뀐다() {
+        let mut app = 키_입력_하네스();
+        app.add_systems(Update, toggle_quest_panel);
+        app.world.spawn((Visibility::Inherited, QuestPanel));
+        app.world.resource_mut::<QuestPanelOpen>().0 = true;
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyJ);
+        app.update();
+        assert!(!app.world.resource::<QuestPanelOpen>().0);
+        let vis = *app.world.query_filtered::<&Visibility, With<QuestPanel>>().single(&app.world);
+        assert!(matches!(vis, Visibility::Hidden));
     }
 
     #[test]
