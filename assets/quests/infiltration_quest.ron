@@ -85,6 +85,7 @@ QuestDef(
                 Log("촌장: 이 안경을 끼면 놈들의 시선이 보일 걸세. 붉게 비치는 곳을 피하게."),
                 OpenPortal(zone: "infiltration", generator: "walled_town", placement: Border),
                 SpawnGuards(count: 5),
+                PlaceTraps(kind: Alarm, count: 4, hidden: true),
                 Log("촌장: 포탈을 열어두었네. 그림자 속으로 사라지게."),
             ],
             to: "infiltrating"),

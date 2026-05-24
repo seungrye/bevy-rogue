@@ -1,0 +1,11 @@
+# 빌드 병렬/성능 설정
+# 논리 코어 8개 중 7개 사용(1개는 시스템 여유). 의존성 그래프 병렬 + 크레이트 내 codegen 병렬에 적용.
+[build]
+jobs = 7
+
+# (적용 예정 — 함정 빌드 종료 후 검증) 빠른 링커 lld:
+# [target.x86_64-unknown-linux-gnu]
+# rustflags = ["-C", "link-arg=-fuse-ld=/usr/bin/ld.lld-19"]
+#
+# (nightly 한정) 단일 크레이트 프런트엔드 병렬: RUSTFLAGS="-Z threads=7" cargo +nightly ...
+#   stable rustflags 에 넣으면 빌드가 깨지므로 전역 설정 금지(nightly 명령에서만).

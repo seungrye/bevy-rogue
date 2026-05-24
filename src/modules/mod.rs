@@ -11,6 +11,7 @@ pub mod quest;
 pub mod ranged;
 pub mod save;
 pub mod skill;
+pub mod trap;
 pub mod ui;
 pub mod villager;
 pub mod zone;

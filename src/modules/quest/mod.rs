@@ -8,6 +8,7 @@ use crate::modules::{
     ui::minimap::{DiscoveredMarkers, MarkerKind},
     zone::{ZoneId, SpawnQuestPortalEvent, CloseQuestPortalEvent},
     monster::{PlayerDetectedEvent, SpawnGuardEvent, SpawnMonsterEvent},
+    trap::SpawnTrapEvent,
 };
 
 // ── RON 데이터 구조 (assets/quests/*.ron) ────────────────────────────────────
@@ -121,7 +122,18 @@ pub enum QuestAction {
     /// 트리거 위치(플레이어/NPC 좌표) 기준으로 폭발을 일으킨다.
     /// map 모듈의 `ExplosionEvent` 를 발행해 지형 파괴·엔티티 피해를 위임한다.
     Explode { radius: i32, terrain: bool, entity_damage: i32 },
+    /// 현재 맵에 함정을 `count` 개 배치한다 (잠입 구역의 경보 함정 등).
+    /// trap 모듈의 `SpawnTrapEvent` 를 발행해 실제 배치를 위임한다.
+    /// `hidden` 미지정 시 숨김(true) 함정으로 둔다.
+    PlaceTraps {
+        kind: crate::modules::trap::TrapKind,
+        count: u32,
+        #[serde(default = "default_trap_hidden")]
+        hidden: bool,
+    },
 }
+
+fn default_trap_hidden() -> bool { true }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct QuestSpawn {
@@ -274,6 +286,7 @@ impl Plugin for QuestPlugin {
             .add_event::<PlayerDetectedEvent>()
             .add_event::<SpawnGuardEvent>()
             .add_event::<SpawnMonsterEvent>()
+            .add_event::<SpawnTrapEvent>()
             .add_systems(Startup, (
                 load_quests.in_set(QuestSystemSet::Load).after(ItemSystemSet::Load),
                 validate_quest_item_refs
@@ -624,6 +637,7 @@ pub fn execute_actions(
     spawn_guards: &mut EventWriter<SpawnGuardEvent>,
     spawn_monster: &mut EventWriter<SpawnMonsterEvent>,
     explode: &mut EventWriter<ExplosionEvent>,
+    place_traps: &mut EventWriter<SpawnTrapEvent>,
     quest_items: &crate::modules::item::QuestItemRegistry,
 ) {
     for action in actions {
@@ -714,6 +728,10 @@ pub fn execute_actions(
                     "폭발 발생: 중심 {:?} 반경 {} (지형 {}, 피해 {})",
                     trigger_pos, radius, terrain, entity_damage
                 );
+            }
+            QuestAction::PlaceTraps { kind, count, hidden } => {
+                place_traps.send(SpawnTrapEvent { kind: *kind, count: *count, hidden: *hidden });
+                info!("함정 배치 요청: {:?} {}개 (숨김 {})", kind, count, hidden);
             }
         }
     }
@@ -1876,12 +1894,14 @@ mod tests {
         mut spawn_guards: EventWriter<SpawnGuardEvent>,
         mut spawn_monster: EventWriter<SpawnMonsterEvent>,
         mut explode: EventWriter<ExplosionEvent>,
+        mut place_traps: EventWriter<SpawnTrapEvent>,
         quest_items: Res<crate::modules::item::QuestItemRegistry>,
     ) {
         execute_actions(
             &input.actions, &input.quest_id, input.trigger_pos, &mut state, &mut inventory,
             &mut log, &mut kill_npc, &mut open_portal, &mut close_portal,
-            &mut despawn_item, &mut spawn_guards, &mut spawn_monster, &mut explode, &quest_items,
+            &mut despawn_item, &mut spawn_guards, &mut spawn_monster, &mut explode,
+            &mut place_traps, &quest_items,
         );
     }
 
@@ -1900,6 +1920,7 @@ mod tests {
             .add_event::<SpawnGuardEvent>()
             .add_event::<SpawnMonsterEvent>()
             .add_event::<ExplosionEvent>()
+            .add_event::<SpawnTrapEvent>()
             .add_systems(Update, run_execute_actions_system);
         app
     }
@@ -2057,6 +2078,35 @@ mod tests {
         let payloads: Vec<(String, u32)> = cursor.read(events)
             .map(|e| (e.id.clone(), e.count)).collect();
         assert_eq!(payloads, vec![("dragon".to_string(), 2)], "id·count 그대로 전달");
+    }
+
+    #[test]
+    fn PlaceTraps액션은_지정종류와_개수로_함정스폰_이벤트를_발행한다() {
+        use crate::modules::trap::TrapKind;
+        let mut app = execute_actions_app(vec![QuestAction::PlaceTraps {
+            kind: TrapKind::Alarm, count: 4, hidden: true,
+        }]);
+        app.update();
+        let events = app.world.resource::<Events<SpawnTrapEvent>>();
+        let mut cursor = events.get_reader();
+        let payloads: Vec<(TrapKind, u32, bool)> = cursor.read(events)
+            .map(|e| (e.kind, e.count, e.hidden)).collect();
+        assert_eq!(payloads, vec![(TrapKind::Alarm, 4, true)], "종류·개수·숨김 그대로 전달");
+    }
+
+    #[test]
+    fn PlaceTraps는_hidden_생략시_기본값_숨김으로_역직렬화된다() {
+        // RON 에 hidden 을 안 적으면 default_trap_hidden() == true.
+        let ron = r#"PlaceTraps(kind: Spike, count: 2)"#;
+        let action: QuestAction = ron::de::from_str(ron).expect("PlaceTraps 역직렬화");
+        match action {
+            QuestAction::PlaceTraps { kind, count, hidden } => {
+                assert_eq!(kind, crate::modules::trap::TrapKind::Spike);
+                assert_eq!(count, 2);
+                assert!(hidden, "hidden 생략 시 기본 숨김(true)");
+            }
+            _ => panic!("PlaceTraps 로 파싱돼야 한다"),
+        }
     }
 
     #[test]

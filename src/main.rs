@@ -122,6 +122,7 @@ fn main() {
         .add_plugins(modules::projectile::ProjectilePlugin)
         .add_plugins(modules::ranged::RangedPlugin)
         .add_plugins(modules::skill::SkillPlugin)
+        .add_plugins(modules::trap::TrapPlugin)
         .add_plugins(ItemPlugin { initial_glyph_style })
         .add_plugins(modules::ui::GameUiPlugin)
         .add_plugins(modules::villager::VillagerPlugin)
