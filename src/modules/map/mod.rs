@@ -25,6 +25,22 @@ pub enum TileKind {
     #[default]
     Wall,
     Floor,
+    Water,
+    Sand,
+}
+
+impl TileKind {
+    /// 이동 가능 여부. `Floor`/`Sand` 는 통과, `Wall`/`Water` 는 막힌다.
+    /// 플레이어·몬스터·주민 이동과 경로탐색이 이 술어를 사용한다.
+    pub fn is_walkable(self) -> bool {
+        matches!(self, TileKind::Floor | TileKind::Sand)
+    }
+
+    /// 시야 차단 여부. `Wall` 만 시야를 막고, `Floor`/`Water`/`Sand` 는 시야가 통과한다.
+    /// FOV/시선(LoS) 계산이 이 술어를 사용한다(물 너머가 보인다).
+    pub fn blocks_sight(self) -> bool {
+        matches!(self, TileKind::Wall)
+    }
 }
 
 /// 맵 타일 하나의 전체 상태를 담는 구조체.
@@ -248,6 +264,18 @@ impl Plugin for MapPlugin {
         registry.register(Box::new(grid_village::GridVillageGenerator));
         registry.register(Box::new(forest::ForestGenerator));
         registry.register(Box::new(perlin::PerlinNoiseGenerator));
+        registry.register(Box::new(maze::MazeGenerator));
+        registry.register(Box::new(maze_prim::MazePrimGenerator));
+        registry.register(Box::new(recursive_division::RecursiveDivisionGenerator));
+        registry.register(Box::new(voronoi_rooms::VoronoiRoomsGenerator));
+        registry.register(Box::new(walled_town::WalledTownGenerator));
+        registry.register(Box::new(voronoi_districts::VoronoiDistrictsGenerator));
+        registry.register(Box::new(island::IslandGenerator));
+        registry.register(Box::new(archipelago::ArchipelagoGenerator));
+        registry.register(Box::new(coastal::CoastalGenerator));
+        registry.register(Box::new(ocean::OceanGenerator));
+        registry.register(Box::new(biome_world::BiomeWorldGenerator));
+        registry.register(Box::new(wfc::WfcGenerator));
 
         if let Some(name) = &self.initial_algorithm {
             registry.select_by_name(name);
@@ -316,17 +344,15 @@ pub fn draw_map(
     let map = map_res.map();
     for y in 0..map.height {
         for x in 0..map.width {
-            let glyph = match map.get_tile(x, y) {
-                TileKind::Wall => "#",
-                TileKind::Floor => ".",
-            };
+            let kind = map.get_tile(x, y);
+            let glyph = tile_glyph(kind);
             let coord = tile_to_world_coords(x, y);
             commands.spawn((
                 Text2dBundle {
                     text: Text::from_section(glyph, TextStyle {
                         font: font.clone(),
                         font_size: TILE_SIZE,
-                        color: Color::WHITE,
+                        color: tile_base_color(kind),
                     }),
                     transform: Transform::from_xyz(coord.x, coord.y, 0.0),
                     ..default()
@@ -376,17 +402,15 @@ fn execute_regen(
         let font = asset_server.load("fonts/FiraMono-Medium.ttf");
         for y in 0..map.height {
             for x in 0..map.width {
-                let glyph = match map.get_tile(x, y) {
-                    TileKind::Wall => "#",
-                    TileKind::Floor => ".",
-                };
+                let kind = map.get_tile(x, y);
+                let glyph = tile_glyph(kind);
                 let coord = tile_to_world_coords(x, y);
                 commands.spawn((
                     Text2dBundle {
                         text: Text::from_section(glyph, TextStyle {
                             font: font.clone(),
                             font_size: TILE_SIZE,
-                            color: Color::WHITE,
+                            color: tile_base_color(kind),
                         }),
                         transform: Transform::from_xyz(coord.x, coord.y, 0.0),
                         ..default()
@@ -425,7 +449,10 @@ pub fn update_tile_visibility(
         if *vis != target_vis { *vis = target_vis; }
 
         if target_vis == Visibility::Visible {
-            let new_color = if map.tiles[idx].visible { Color::WHITE } else { Color::rgb(0.3, 0.3, 0.3) };
+            let base = tile_base_color(map.tiles[idx].kind);
+            // 보이는 타일은 기본 색, 탐험만 된 타일은 동일 색을 0.3 배로 어둡게.
+            // Wall/Floor(흰색)는 (1,1,1)→(0.3,0.3,0.3) 으로 기존 동작과 동일.
+            let new_color = if map.tiles[idx].visible { base } else { dim_color(base, 0.3) };
             if text.sections[0].style.color != new_color {
                 text.sections[0].style.color = new_color;
             }
@@ -453,17 +480,15 @@ fn execute_apply(
         let font = asset_server.load("fonts/FiraMono-Medium.ttf");
         for y in 0..map.height {
             for x in 0..map.width {
-                let glyph = match map.get_tile(x, y) {
-                    TileKind::Wall  => "#",
-                    TileKind::Floor => ".",
-                };
+                let kind = map.get_tile(x, y);
+                let glyph = tile_glyph(kind);
                 let coord = tile_to_world_coords(x, y);
                 commands.spawn((
                     Text2dBundle {
                         text: Text::from_section(glyph, TextStyle {
                             font: font.clone(),
                             font_size: TILE_SIZE,
-                            color: Color::WHITE,
+                            color: tile_base_color(kind),
                         }),
                         transform: Transform::from_xyz(coord.x, coord.y, 0.0),
                         ..default()
@@ -495,12 +520,41 @@ fn find_spawn_point(map: &Map) -> (usize, usize) {
     }
     for y in 1..map.height - 1 {
         for x in 1..map.width - 1 {
-            if map.get_tile(x, y) == TileKind::Floor {
+            if map.get_tile(x, y).is_walkable() {
                 return (x, y);
             }
         }
     }
     (map.width / 2, map.height / 2)
+}
+
+// --- 렌더 헬퍼 ---
+
+/// 타일 종류별 ascii 글리프.
+pub fn tile_glyph(kind: TileKind) -> &'static str {
+    match kind {
+        TileKind::Wall => "#",
+        TileKind::Floor => ".",
+        TileKind::Water => "~",
+        TileKind::Sand => ",",
+    }
+}
+
+/// 타일 종류별 기본(밝은) 렌더 색.
+/// Wall/Floor 는 기존 동작과 동일하게 흰색을 유지하고,
+/// Water 는 파랑 계열, Sand 는 모래색을 쓴다.
+pub fn tile_base_color(kind: TileKind) -> Color {
+    match kind {
+        TileKind::Wall => Color::WHITE,
+        TileKind::Floor => Color::WHITE,
+        TileKind::Water => Color::rgb(0.25, 0.5, 0.9),
+        TileKind::Sand => Color::rgb(0.85, 0.78, 0.5),
+    }
+}
+
+/// 색을 균일 비율로 어둡게 만든다(탐험만 된 타일 표시용). 알파는 유지.
+fn dim_color(c: Color, factor: f32) -> Color {
+    Color::rgba(c.r() * factor, c.g() * factor, c.b() * factor, c.a())
 }
 
 // --- 상수 ---
@@ -555,7 +609,7 @@ pub fn random_floor_tile_in_room(
     let mut candidates: Vec<(usize, usize)> = (room.x1..=x_max)
         .flat_map(|x| (room.y1..=y_max).map(move |y| (x, y)))
         .filter(|&(x, y)| x < map.width && y < map.height
-            && map.get_tile(x, y) == TileKind::Floor
+            && map.get_tile(x, y).is_walkable()
             && !used.contains(&(x, y)))
         .collect();
     candidates.shuffle(rng);
@@ -588,7 +642,7 @@ pub fn random_floor_tile_anywhere(
     let mut candidates: Vec<(usize, usize)> = Vec::new();
     for y in 0..map.height {
         for x in 0..map.width {
-            if map.get_tile(x, y) == TileKind::Floor && !used.contains(&(x, y)) {
+            if map.get_tile(x, y).is_walkable() && !used.contains(&(x, y)) {
                 candidates.push((x, y));
             }
         }
@@ -607,7 +661,7 @@ pub fn is_line_of_sight_clear(map: &Map, x0: i32, y0: i32, x1: i32, y1: i32) -> 
     loop {
         if x < 0 || x >= map.width as i32 || y < 0 || y >= map.height as i32 { return false; }
         if x == x1 && y == y1 { return true; }
-        if (x != x0 || y != y0) && map.tiles[map.index(x as usize, y as usize)].kind == TileKind::Wall {
+        if (x != x0 || y != y0) && map.tiles[map.index(x as usize, y as usize)].kind.blocks_sight() {
             return false;
         }
         let e2 = 2 * err;
@@ -618,14 +672,26 @@ pub fn is_line_of_sight_clear(map: &Map, x0: i32, y0: i32, x1: i32, y1: i32) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{MapGenerator, MapGeneratorRegistry, Map,
-        TileKind, Rect, random_floor_tile_anywhere};
+    use super::*;
+    use bevy::prelude::Color;
     use rand::SeedableRng;
 
     struct NamedGen(&'static str);
     impl MapGenerator for NamedGen {
         fn generate(&self, width: usize, height: usize, _seed: u64) -> Map { Map::new(width, height) }
         fn name(&self) -> &str { self.0 }
+    }
+
+    /// 내부를 모두 바닥으로 채우고 방 하나를 두는 테스트용 생성기.
+    struct FloorGen;
+    impl MapGenerator for FloorGen {
+        fn generate(&self, width: usize, height: usize, _seed: u64) -> Map {
+            let mut m = Map::new(width, height);
+            for y in 1..height - 1 { for x in 1..width - 1 { m.set_tile(x, y, TileKind::Floor); } }
+            m.rooms.push(Rect::new(2, 2, 4, 4));
+            m
+        }
+        fn name(&self) -> &str { "floor" }
     }
 
     fn registry_with(names: &[&'static str]) -> MapGeneratorRegistry {
@@ -635,20 +701,20 @@ mod tests {
     }
 
     #[test]
-    fn empty_registry_current_returns_none() {
+    fn 빈_레지스트리는_현재_생성기가_없다() {
         let r = MapGeneratorRegistry::new();
         assert!(r.current().is_none());
     }
 
     #[test]
-    fn single_generator_next_stays_same() {
+    fn 생성기가_하나뿐이면_다음으로_넘겨도_그대로다() {
         let mut r = registry_with(&["A"]);
         r.next();
         assert_eq!(r.current_name(), "A");
     }
 
     #[test]
-    fn next_cycles_through_all() {
+    fn 다음_호출은_모든_생성기를_순환하고_마지막에서_처음으로_돌아온다() {
         let mut r = registry_with(&["A", "B", "C"]);
         assert_eq!(r.current_name(), "A");
         r.next(); assert_eq!(r.current_name(), "B");
@@ -657,27 +723,27 @@ mod tests {
     }
 
     #[test]
-    fn select_by_name_picks_correct() {
+    fn 이름으로_선택하면_해당_생성기가_현재가_된다() {
         let mut r = registry_with(&["A", "B", "C"]);
         assert!(r.select_by_name("C"));
         assert_eq!(r.current_name(), "C");
     }
 
     #[test]
-    fn select_by_name_unknown_is_noop() {
+    fn 없는_이름으로_선택하면_아무것도_바뀌지_않는다() {
         let mut r = registry_with(&["A", "B"]);
         assert!(!r.select_by_name("Z"));
         assert_eq!(r.current_name(), "A");
     }
 
     #[test]
-    fn generate_with_unknown_returns_none() {
+    fn 없는_알고리즘으로_생성요청하면_None을_반환한다() {
         let r = registry_with(&["A"]);
         assert!(r.generate_with("missing", 10, 10, 1).is_none());
     }
 
     #[test]
-    fn random_floor_tile_anywhere_returns_floor_only() {
+    fn 어디든_바닥타일찾기는_바닥타일만_반환한다() {
         // 두 room — 첫 room 은 모두 wall, 두 번째는 모두 floor
         let mut map = Map::new(20, 20);
         // 두 번째 room 영역만 floor 로 변경
@@ -695,7 +761,7 @@ mod tests {
     }
 
     #[test]
-    fn random_floor_tile_anywhere_distributes_across_rooms() {
+    fn 어디든_바닥타일찾기는_여러_방에_고르게_분산된다() {
         // 두 room, 모두 충분한 floor — 여러 번 호출 시 두 room 모두 사용됨
         let mut map = Map::new(40, 20);
         for y in 1..19 { for x in 1..39 { map.set_tile(x, y, TileKind::Floor); } }
@@ -717,7 +783,7 @@ mod tests {
     }
 
     #[test]
-    fn random_floor_tile_anywhere_clamps_room_beyond_map_bounds() {
+    fn 어디든_바닥타일찾기는_맵범위를_넘는_방을_경계안으로_클램프한다() {
         // room.x2 가 map.width 를 넘어도 영역 밖 좌표를 반환하지 않는다
         let mut map = Map::new(10, 10);
         for y in 0..10 { for x in 0..10 { map.set_tile(x, y, TileKind::Floor); } }
@@ -731,7 +797,7 @@ mod tests {
     }
 
     #[test]
-    fn random_floor_tile_anywhere_returns_none_when_no_floor() {
+    fn 어디든_바닥타일찾기는_바닥이_없으면_None을_반환한다() {
         let map = Map::new(10, 10);  // 전체 wall
         let rooms = vec![Rect::new(1, 1, 8, 8)];
         let mut used = std::collections::HashSet::new();
@@ -740,7 +806,7 @@ mod tests {
     }
 
     #[test]
-    fn random_floor_tile_anywhere_never_returns_wall_in_mixed_map() {
+    fn 어디든_바닥타일찾기는_혼합맵에서도_벽좌표를_반환하지_않는다() {
         // bsp 처럼 room boundary 안에 wall 이 섞인 맵에서도 wall 좌표 안 반환
         let mut map = Map::new(20, 20);
         // 체스판 패턴 — 절반은 floor, 절반은 wall
@@ -759,5 +825,625 @@ mod tests {
             assert_eq!(map.get_tile(x, y), TileKind::Floor,
                 "({},{}) 가 wall 인데 반환됨 — wall 위 spawn 버그", x, y);
         }
+    }
+
+    // --- 타일 술어 ---
+
+    #[test]
+    fn 바닥과_모래만_이동가능하고_벽과_물은_막힌다() {
+        assert!(TileKind::Floor.is_walkable(), "Floor 는 이동 가능해야 한다");
+        assert!(TileKind::Sand.is_walkable(), "Sand 는 이동 가능해야 한다");
+        assert!(!TileKind::Wall.is_walkable(), "Wall 은 이동 불가여야 한다");
+        assert!(!TileKind::Water.is_walkable(), "Water 는 이동 불가여야 한다");
+    }
+
+    #[test]
+    fn 벽만_시야를_막고_바닥물모래는_시야가_통과한다() {
+        assert!(TileKind::Wall.blocks_sight(), "Wall 은 시야를 막아야 한다");
+        assert!(!TileKind::Floor.blocks_sight(), "Floor 는 시야가 통과해야 한다");
+        assert!(!TileKind::Water.blocks_sight(), "Water 는 시야가 통과해야 한다(물 너머가 보임)");
+        assert!(!TileKind::Sand.blocks_sight(), "Sand 는 시야가 통과해야 한다");
+    }
+
+    // --- 렌더 글리프/색 매핑 ---
+
+    #[test]
+    fn 타일별_글리프는_명세대로_매핑된다() {
+        assert_eq!(tile_glyph(TileKind::Wall), "#");
+        assert_eq!(tile_glyph(TileKind::Floor), ".");
+        assert_eq!(tile_glyph(TileKind::Water), "~");
+        assert_eq!(tile_glyph(TileKind::Sand), ",");
+    }
+
+    #[test]
+    fn 벽과_바닥의_기본색은_기존대로_흰색이다() {
+        // 지상맵 동작 불변: Wall/Floor 는 흰색을 유지해야 한다.
+        assert_eq!(tile_base_color(TileKind::Wall), Color::WHITE);
+        assert_eq!(tile_base_color(TileKind::Floor), Color::WHITE);
+    }
+
+    #[test]
+    fn 물은_파랑계열_모래는_모래색으로_그려진다() {
+        let water = tile_base_color(TileKind::Water);
+        // 파랑 계열: 파랑 성분이 빨강보다 확실히 크다
+        assert!(water.b() > water.r(), "Water 색은 파랑 성분이 우세해야 한다: {:?}", water);
+        assert!(water.b() > water.g(), "Water 색은 파랑이 초록보다 커야 한다: {:?}", water);
+
+        let sand = tile_base_color(TileKind::Sand);
+        // 모래색: 빨강·초록이 높고 파랑이 낮은 따뜻한 톤
+        assert!(sand.r() > sand.b() && sand.g() > sand.b(),
+            "Sand 색은 파랑이 가장 낮은 따뜻한 톤이어야 한다: {:?}", sand);
+    }
+
+    // --- LoS/FOV ---
+
+    #[test]
+    fn 시선은_물타일_너머를_본다() {
+        // 한 줄을 모두 Water 로 두면 시선이 끝까지 통과해야 한다.
+        let mut map = Map::new(10, 3);
+        for x in 0..10 { map.set_tile(x, 1, TileKind::Water); }
+        assert!(is_line_of_sight_clear(&map, 0, 1, 9, 1),
+            "물 타일은 시야를 막지 않으므로 끝까지 보여야 한다");
+    }
+
+    #[test]
+    fn 시선은_벽타일에서_막힌다() {
+        // 중간에 Wall 이 있으면 그 너머는 보이지 않는다.
+        let mut map = Map::new(10, 3);
+        for x in 0..10 { map.set_tile(x, 1, TileKind::Floor); }
+        map.set_tile(5, 1, TileKind::Wall);
+        assert!(!is_line_of_sight_clear(&map, 0, 1, 9, 1),
+            "벽이 시선을 가로막으면 너머가 보이면 안 된다");
+    }
+
+    #[test]
+    fn 시선은_모래타일_너머도_본다() {
+        let mut map = Map::new(10, 3);
+        for x in 0..10 { map.set_tile(x, 1, TileKind::Sand); }
+        assert!(is_line_of_sight_clear(&map, 0, 1, 9, 1),
+            "모래 타일은 시야를 막지 않는다");
+    }
+
+    #[test]
+    fn 시선은_아래에서_위로도_정상_판정한다() {
+        // y0 < y1 인 세로 시선 — y 증가 방향(sy=+1) 분기를 탄다.
+        let mut map = Map::new(3, 10);
+        for y in 0..10 { map.set_tile(1, y, TileKind::Floor); }
+        assert!(is_line_of_sight_clear(&map, 1, 0, 1, 9),
+            "세로 시선(아래→위)도 통과해야 한다");
+    }
+
+    #[test]
+    fn 시선이_맵_경계_밖으로_나가면_차단된다() {
+        // 끝점이 맵 밖이면 경계 검사 분기에서 false 를 반환한다.
+        let mut map = Map::new(5, 5);
+        for y in 0..5 { for x in 0..5 { map.set_tile(x, y, TileKind::Floor); } }
+        assert!(!is_line_of_sight_clear(&map, 0, 0, 10, 0),
+            "오른쪽 맵 밖으로 향하는 시선은 차단돼야 한다(x>=width)");
+        assert!(!is_line_of_sight_clear(&map, 0, 0, 0, 10),
+            "위쪽 맵 밖으로 향하는 시선도 차단돼야 한다(y>=height)");
+    }
+
+    #[test]
+    fn 시선의_시작점이_음수좌표면_즉시_차단된다() {
+        // 시작점이 (-1,*) 또는 (*,-1) 이면 첫 루프에서 x<0/y<0 경계 분기로 false.
+        let mut map = Map::new(5, 5);
+        for y in 0..5 { for x in 0..5 { map.set_tile(x, y, TileKind::Floor); } }
+        assert!(!is_line_of_sight_clear(&map, -1, 0, 3, 0),
+            "시작 x 가 음수면 차단돼야 한다(x<0)");
+        assert!(!is_line_of_sight_clear(&map, 0, -1, 0, 3),
+            "시작 y 가 음수면 차단돼야 한다(y<0)");
+    }
+
+    // --- 좌표 변환 ---
+
+    #[test]
+    fn 타일과_월드_좌표_변환은_왕복해도_같은_타일이다() {
+        for &(x, y) in &[(0usize, 0usize), (40, 25), (MAP_WIDTH - 1, MAP_HEIGHT - 1)] {
+            let world = tile_to_world_coords(x, y);
+            let (rx, ry) = world_to_tile_coords(world.extend(0.0));
+            assert_eq!((rx, ry), (x, y), "({},{}) 왕복 변환이 어긋났다", x, y);
+        }
+    }
+
+    #[test]
+    fn 월드좌표가_범위를_벗어나면_타일_경계로_클램프된다() {
+        // 아주 큰 음수/양수 좌표는 [0, MAP_*) 로 클램프된다(양쪽 clamp 분기).
+        let lo = world_to_tile_coords(Vec3::new(-1_000_000.0, -1_000_000.0, 0.0));
+        assert_eq!(lo, (0, 0), "큰 음수는 (0,0) 으로 클램프돼야 한다");
+        let hi = world_to_tile_coords(Vec3::new(1_000_000.0, 1_000_000.0, 0.0));
+        assert_eq!(hi, (MAP_WIDTH - 1, MAP_HEIGHT - 1),
+            "큰 양수는 우하단 모서리로 클램프돼야 한다");
+    }
+
+    // --- 존 시드 파생 ---
+
+    #[test]
+    fn 존시드는_같은_입력에_대해_결정론적이고_존마다_다르다() {
+        let a = zone_seed_from_idx(12345, 0);
+        let b = zone_seed_from_idx(12345, 0);
+        assert_eq!(a, b, "같은 입력은 같은 시드를 낸다");
+        let c = zone_seed_from_idx(12345, 1);
+        assert_ne!(a, c, "다른 존 인덱스는 다른 시드를 낸다");
+    }
+
+    // --- 방 사각형 헬퍼 ---
+
+    #[test]
+    fn 방사각형은_너비높이중심을_정확히_계산한다() {
+        let r = Rect::new(10, 20, 6, 4);
+        assert_eq!(r.width(), 6);
+        assert_eq!(r.height(), 4);
+        assert_eq!(r.center(), (13, 22));
+    }
+
+    #[test]
+    fn 맵타일_기본값은_숨겨진_벽이다() {
+        let t = MapTile::default();
+        assert_eq!(t.kind, TileKind::Wall);
+        assert!(!t.revealed);
+        assert!(!t.visible);
+    }
+
+    #[test]
+    fn 맵타일_생성자는_지정한_종류로_숨겨진_타일을_만든다() {
+        let t = MapTile::new(TileKind::Floor);
+        assert_eq!(t.kind, TileKind::Floor);
+        assert!(!t.revealed && !t.visible);
+    }
+
+    #[test]
+    fn 맵리소스는_가변_불변_접근자를_제공한다() {
+        let mut res = MapResource(Map::new(5, 5));
+        res.map_mut().set_tile(2, 2, TileKind::Floor);
+        assert_eq!(res.map().get_tile(2, 2), TileKind::Floor);
+    }
+
+    // --- 한 방 안 무작위 바닥 ---
+
+    #[test]
+    fn 한_방안_무작위_바닥찾기는_바닥만_반환하고_중복을_피한다() {
+        let mut map = Map::new(20, 20);
+        for y in 5..10 { for x in 5..10 { map.set_tile(x, y, TileKind::Floor); } }
+        let room = Rect::new(5, 5, 5, 5);
+        let mut used = std::collections::HashSet::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(3);
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..10 {
+            if let Some((x, y)) = random_floor_tile_in_room(&room, &map, &mut used, &mut rng) {
+                assert_eq!(map.get_tile(x, y), TileKind::Floor);
+                assert!(seen.insert((x, y)), "({},{}) 가 중복 반환됐다", x, y);
+            }
+        }
+    }
+
+    #[test]
+    fn 한_방안_무작위_바닥찾기는_방의_시작좌표가_맵밖이면_None을_반환한다() {
+        // room.x1 이 map.width 이상이면 후보 좌표가 맵 범위(x<width) 검사를 통과 못 한다.
+        let mut map = Map::new(10, 10);
+        for y in 0..10 { for x in 0..10 { map.set_tile(x, y, TileKind::Floor); } }
+        let mut used = std::collections::HashSet::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(5);
+        // x 가 맵 밖(x<width 거짓), 그리고 x 는 안이고 y 만 맵 밖(y<height 거짓)인 두 경우.
+        let x_outside = Rect::new(20, 2, 3, 3);
+        let y_outside = Rect::new(2, 20, 3, 3);
+        assert!(random_floor_tile_in_room(&x_outside, &map, &mut used, &mut rng).is_none(),
+            "방 x 가 맵 밖이면 None");
+        assert!(random_floor_tile_in_room(&y_outside, &map, &mut used, &mut rng).is_none(),
+            "방 y 가 맵 밖이면 None");
+    }
+
+    #[test]
+    fn 무작위_바닥찾기는_threadrng로도_동일하게_동작한다() {
+        // 프로덕션 스폰(quest)은 thread_rng 를 쓴다. 그 단형화(monomorphization)의
+        // 분기들(맵밖 거부, fallback 경로)을 함께 실행한다.
+        let mut map = Map::new(10, 10);
+        for y in 0..10 { for x in 0..10 { map.set_tile(x, y, TileKind::Floor); } }
+        let mut used = std::collections::HashSet::new();
+        let mut rng = rand::thread_rng();
+        // 방이 맵 밖 → x<width / y<height 거짓 분기.
+        assert!(random_floor_tile_in_room(&Rect::new(20, 2, 3, 3), &map, &mut used, &mut rng).is_none());
+        assert!(random_floor_tile_in_room(&Rect::new(2, 20, 3, 3), &map, &mut used, &mut rng).is_none());
+        // 방 안에서 정상 반환도 한 번.
+        assert!(random_floor_tile_in_room(&Rect::new(2, 2, 3, 3), &map, &mut used, &mut rng).is_some());
+
+        // anywhere fallback: 방은 전부 맵 밖(실패) → 맵 전체 fallback 에서 바닥을 찾는다.
+        // 바닥 두 칸 중 하나는 미리 used 에 넣어 fallback 의 `!used.contains` 양쪽을 탄다.
+        let mut small = Map::new(10, 10);
+        small.set_tile(7, 7, TileKind::Floor);
+        small.set_tile(8, 8, TileKind::Floor);
+        let mut used2 = std::collections::HashSet::new();
+        used2.insert((7, 7));
+        let bad_rooms = vec![Rect::new(50, 50, 3, 3)];
+        let found = random_floor_tile_anywhere(&bad_rooms, &small, &mut used2, &mut rng);
+        assert_eq!(found, Some((8, 8)), "사용된 (7,7) 은 건너뛰고 (8,8) 을 반환");
+        // 전부 벽인 맵에서 fallback 도 실패하는 경로(645 의 walkable False 쪽).
+        let wall_map = Map::new(10, 10);
+        let mut used3 = std::collections::HashSet::new();
+        assert!(random_floor_tile_anywhere(&bad_rooms, &wall_map, &mut used3, &mut rng).is_none());
+    }
+
+    // --- 어디든 바닥찾기 fallback 경로 ---
+
+    #[test]
+    fn 어디든_바닥타일찾기는_모든_방이_벽이면_맵전체_fallback으로_바닥을_찾는다() {
+        // 방 영역은 전부 벽, 방 밖에만 바닥 한 칸 → 1)방 시도 전부 실패 후 2)전체 스캔.
+        let mut map = Map::new(20, 20);
+        map.set_tile(18, 18, TileKind::Floor); // 방 밖 바닥
+        let rooms = vec![Rect::new(2, 2, 3, 3), Rect::new(8, 8, 3, 3)]; // 모두 벽
+        let mut used = std::collections::HashSet::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(11);
+        let p = random_floor_tile_anywhere(&rooms, &map, &mut used, &mut rng);
+        assert_eq!(p, Some((18, 18)), "fallback 으로 방 밖 바닥을 찾아야 한다");
+    }
+
+    #[test]
+    fn 어디든_바닥타일찾기_fallback은_이미_사용된_바닥은_건너뛴다() {
+        // 방 밖 바닥 두 칸 중 하나를 미리 used 에 넣어 둔다 → fallback 스캔에서
+        // 그 칸은 `!used.contains` 거짓으로 제외되고 나머지 한 칸만 반환된다.
+        let mut map = Map::new(20, 20);
+        map.set_tile(17, 17, TileKind::Floor);
+        map.set_tile(18, 18, TileKind::Floor);
+        let rooms = vec![Rect::new(2, 2, 3, 3)]; // 전부 벽
+        let mut used = std::collections::HashSet::new();
+        used.insert((17, 17)); // 이미 사용됨
+        let mut rng = rand::rngs::StdRng::seed_from_u64(2);
+        let p = random_floor_tile_anywhere(&rooms, &map, &mut used, &mut rng);
+        assert_eq!(p, Some((18, 18)), "사용된 (17,17) 은 건너뛰고 (18,18) 을 반환");
+    }
+
+    // --- 스폰 지점 찾기 ---
+
+    #[test]
+    fn 스폰지점은_방이_있으면_첫_방의_중심이다() {
+        let mut map = Map::new(20, 20);
+        map.rooms.push(Rect::new(4, 4, 6, 6));
+        assert_eq!(find_spawn_point(&map), (7, 7), "첫 방 중심이어야 한다");
+    }
+
+    #[test]
+    fn 스폰지점은_방이_없으면_첫_통과타일을_스캔한다() {
+        let mut map = Map::new(20, 20);
+        map.set_tile(5, 3, TileKind::Floor);
+        // 방 없음 → 내부를 스캔해 첫 통과타일을 반환.
+        assert_eq!(find_spawn_point(&map), (5, 3));
+    }
+
+    #[test]
+    fn 스폰지점은_방도_통과타일도_없으면_맵_중앙으로_폴백한다() {
+        let map = Map::new(20, 20); // 전부 벽, 방 없음
+        assert_eq!(find_spawn_point(&map), (10, 10), "중앙으로 폴백해야 한다");
+    }
+
+    // --- 색 어둡게(dim) ---
+
+    #[test]
+    fn 색어둡게는_RGB를_비율로_줄이고_알파는_유지한다() {
+        let c = Color::rgba(1.0, 0.8, 0.4, 0.6);
+        let d = dim_color(c, 0.5);
+        assert!((d.r() - 0.5).abs() < 1e-6);
+        assert!((d.g() - 0.4).abs() < 1e-6);
+        assert!((d.b() - 0.2).abs() < 1e-6);
+        assert!((d.a() - 0.6).abs() < 1e-6, "알파는 유지돼야 한다");
+    }
+
+    // --- App 하네스: 시스템 ---
+
+    /// AssetServer(폰트) 를 제공하는 기본 App.
+    fn asset_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<Font>();
+        app
+    }
+
+    /// rooms[0] 의 중앙이 스폰점이 되도록 작은 바닥 맵을 만든다.
+    fn floor_map(w: usize, h: usize) -> Map {
+        let mut m = Map::new(w, h);
+        for y in 1..h - 1 { for x in 1..w - 1 { m.set_tile(x, y, TileKind::Floor); } }
+        m.rooms.push(Rect::new(2, 2, 4, 4));
+        m
+    }
+
+    #[test]
+    fn 맵그리기_시스템은_타일마다_텍스트_엔티티를_스폰한다() {
+        let mut app = asset_app();
+        let w = 6; let h = 5;
+        app.insert_resource(MapResource(floor_map(w, h)));
+        app.add_systems(Update, draw_map);
+        app.update();
+        let count = app.world.query::<&TileEntity>().iter(&app.world).count();
+        assert_eq!(count, w * h, "모든 타일에 엔티티가 하나씩 스폰돼야 한다");
+    }
+
+    #[test]
+    fn 전역턴_증가_시스템은_행동_이벤트만큼_턴을_올린다() {
+        let mut app = App::new();
+        app.add_event::<PlayerActedEvent>();
+        app.init_resource::<GlobalTurn>();
+        app.add_systems(Update, increment_global_turn);
+        app.world.send_event(PlayerActedEvent);
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert_eq!(app.world.resource::<GlobalTurn>().0, 2);
+        // 이벤트가 없으면 그대로 유지.
+        app.update();
+        assert_eq!(app.world.resource::<GlobalTurn>().0, 2);
+    }
+
+    #[test]
+    fn 맵저장_시스템은_현재_생성기로_맵리소스를_삽입한다() {
+        let mut app = App::new();
+        let mut registry = MapGeneratorRegistry::new();
+        registry.register(Box::new(NamedGen("bsp")));
+        app.insert_resource(registry);
+        app.insert_resource(GlobalSeed(42));
+        app.add_systems(Startup, create_and_store_map);
+        app.update();
+        let res = app.world.resource::<MapResource>();
+        assert_eq!(res.map().algorithm, "bsp", "알고리즘 이름이 기록돼야 한다");
+        assert_eq!(res.map().width, MAP_WIDTH);
+    }
+
+    #[test]
+    fn 맵저장_시스템은_빈_레지스트리면_기본_빈맵을_삽입한다() {
+        let mut app = App::new();
+        app.insert_resource(MapGeneratorRegistry::new());
+        app.insert_resource(GlobalSeed(1));
+        app.add_systems(Startup, create_and_store_map);
+        app.update();
+        let res = app.world.resource::<MapResource>();
+        assert_eq!(res.map().width, MAP_WIDTH);
+        // 빈 레지스트리 → unwrap_or_else 의 Map::new 경로.
+        assert!(res.map().rooms.is_empty());
+    }
+
+    #[test]
+    fn 생성기전환_시스템은_F1을_누르면_다음_생성기로_바꾸고_재생성을_발행한다() {
+        let mut app = App::new();
+        let mut registry = MapGeneratorRegistry::new();
+        registry.register(Box::new(NamedGen("a")));
+        registry.register(Box::new(NamedGen("b")));
+        app.insert_resource(registry);
+        app.insert_resource(ButtonInput::<KeyCode>::default());
+        app.add_event::<RegenerateMapEvent>();
+        app.add_systems(Update, cycle_map_generator);
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::F1);
+        app.update();
+        assert_eq!(app.world.resource::<MapGeneratorRegistry>().current_name(), "b");
+        let events = app.world.resource::<Events<RegenerateMapEvent>>();
+        assert_eq!(events.len(), 1, "재생성 이벤트가 한 번 발행돼야 한다");
+    }
+
+    #[test]
+    fn 생성기전환_시스템은_F1을_안누르면_아무것도_안한다() {
+        let mut app = App::new();
+        let mut registry = MapGeneratorRegistry::new();
+        registry.register(Box::new(NamedGen("a")));
+        registry.register(Box::new(NamedGen("b")));
+        app.insert_resource(registry);
+        app.insert_resource(ButtonInput::<KeyCode>::default());
+        app.add_event::<RegenerateMapEvent>();
+        app.add_systems(Update, cycle_map_generator);
+        app.update();
+        assert_eq!(app.world.resource::<MapGeneratorRegistry>().current_name(), "a");
+        assert_eq!(app.world.resource::<Events<RegenerateMapEvent>>().len(), 0);
+    }
+
+    #[test]
+    fn 생성기전환_시스템은_플레이어가_패배상태면_입력을_무시한다() {
+        let mut app = App::new();
+        let mut registry = MapGeneratorRegistry::new();
+        registry.register(Box::new(NamedGen("a")));
+        registry.register(Box::new(NamedGen("b")));
+        app.insert_resource(registry);
+        app.insert_resource(ButtonInput::<KeyCode>::default());
+        app.add_event::<RegenerateMapEvent>();
+        app.add_systems(Update, cycle_map_generator);
+        app.world.spawn(crate::modules::combat::Defeated);
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::F1);
+        app.update();
+        // 패배 중이면 전환 안 함.
+        assert_eq!(app.world.resource::<MapGeneratorRegistry>().current_name(), "a");
+        assert_eq!(app.world.resource::<Events<RegenerateMapEvent>>().len(), 0);
+    }
+
+    /// 재생성/적용 시스템이 발행하는 리스폰 이벤트를 받는 App 을 만든다.
+    fn regen_app() -> App {
+        let mut app = asset_app();
+        app.add_event::<RegenerateMapEvent>();
+        app.add_event::<ApplyMapEvent>();
+        app.add_event::<PlayerRespawnEvent>();
+        app.add_event::<VillagerRespawnEvent>();
+        app.add_event::<MonsterRespawnEvent>();
+        app.init_resource::<UsedSpawnTiles>();
+        app
+    }
+
+    #[test]
+    fn 재생성_시스템은_기존타일을_지우고_새맵을_그린_뒤_리스폰을_발행한다() {
+        let mut app = regen_app();
+        let mut registry = MapGeneratorRegistry::new();
+        registry.register(Box::new(FloorGen));
+        app.insert_resource(registry);
+        // 기존 타일 엔티티 하나 — despawn 되어야 한다.
+        let old = app.world.spawn(TileEntity { x: 0, y: 0 }).id();
+        app.add_systems(Update, execute_regen);
+        app.world.send_event(RegenerateMapEvent);
+        app.update();
+        assert!(app.world.get_entity(old).is_none(), "기존 타일은 despawn 돼야 한다");
+        let count = app.world.query::<&TileEntity>().iter(&app.world).count();
+        assert_eq!(count, MAP_WIDTH * MAP_HEIGHT, "새 맵 전체가 그려져야 한다");
+        assert_eq!(app.world.resource::<Events<PlayerRespawnEvent>>().len(), 1);
+        assert_eq!(app.world.resource::<Events<MonsterRespawnEvent>>().len(), 1);
+        assert!(app.world.contains_resource::<MapResource>());
+    }
+
+    #[test]
+    fn 재생성_시스템은_빈_레지스트리면_기본_빈맵을_그린다() {
+        let mut app = regen_app();
+        app.insert_resource(MapGeneratorRegistry::new());
+        app.add_systems(Update, execute_regen);
+        app.world.send_event(RegenerateMapEvent);
+        app.update();
+        // 빈 레지스트리 → Map::new fallback. 전부 벽이지만 타일은 그려진다.
+        let count = app.world.query::<&TileEntity>().iter(&app.world).count();
+        assert_eq!(count, MAP_WIDTH * MAP_HEIGHT);
+    }
+
+    #[test]
+    fn 적용_시스템은_준비된_맵을_그리고_스폰타일을_예약하며_리스폰을_발행한다() {
+        let mut app = regen_app();
+        let old = app.world.spawn(TileEntity { x: 1, y: 1 }).id();
+        app.add_systems(Update, execute_apply);
+        let map = floor_map(8, 6);
+        app.world.send_event(ApplyMapEvent { map, spawn_pos: Some((3, 3)) });
+        app.update();
+        assert!(app.world.get_entity(old).is_none(), "기존 타일 despawn");
+        let count = app.world.query::<&TileEntity>().iter(&app.world).count();
+        assert_eq!(count, 8 * 6);
+        // 스폰 타일이 예약됐는지 확인.
+        assert!(app.world.resource::<UsedSpawnTiles>().0.contains(&(3, 3)));
+        assert_eq!(app.world.resource::<Events<PlayerRespawnEvent>>().len(), 1);
+        assert_eq!(app.world.resource::<Events<VillagerRespawnEvent>>().len(), 1);
+    }
+
+    #[test]
+    fn 적용_시스템은_스폰위치가_없으면_맵에서_스폰지점을_찾는다() {
+        let mut app = regen_app();
+        app.add_systems(Update, execute_apply);
+        let map = floor_map(8, 6); // rooms[0] = Rect::new(2,2,4,4) → center (4,4)
+        app.world.send_event(ApplyMapEvent { map, spawn_pos: None });
+        app.update();
+        // spawn_pos None → find_spawn_point → 첫 방 중심 (4,4) 예약.
+        assert!(app.world.resource::<UsedSpawnTiles>().0.contains(&(4, 4)),
+            "spawn_pos 가 없으면 맵 스폰지점이 예약돼야 한다");
+    }
+
+    /// 타일 엔티티를 흰색 Text + Inherited Visibility 로 직접 스폰한다.
+    /// (draw_map 을 거치지 않아 중복 스폰/AssetServer 없이 가시성 시스템만 검증)
+    fn spawn_tile_entities(app: &mut App, map: &Map) {
+        for y in 0..map.height {
+            for x in 0..map.width {
+                let kind = map.get_tile(x, y);
+                app.world.spawn((
+                    Text::from_section(tile_glyph(kind), TextStyle {
+                        font: default(),
+                        font_size: TILE_SIZE,
+                        color: tile_base_color(kind),
+                    }),
+                    Visibility::default(),
+                    TileEntity { x, y },
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn 타일가시성_시스템은_보임_탐험_숨김_상태를_타일에_반영한다() {
+        let mut app = App::new();
+        let mut map = Map::new(3, 1);
+        // 0: visible, 1: revealed only, 2: 아무것도 아님.
+        map.set_tile(0, 0, TileKind::Floor); map.tiles[0].visible = true;
+        map.set_tile(1, 0, TileKind::Floor); map.tiles[1].revealed = true;
+        map.set_tile(2, 0, TileKind::Floor);
+        spawn_tile_entities(&mut app, &map);
+        app.insert_resource(MapResource(map));
+        app.add_systems(Update, update_tile_visibility);
+        app.update(); // MapResource 가 막 삽입됨 → is_changed → 처리
+
+        // 좌표별 Visibility 확인.
+        let mut vis_by_x = std::collections::HashMap::new();
+        let mut q = app.world.query::<(&TileEntity, &Visibility)>();
+        for (t, v) in q.iter(&app.world) {
+            vis_by_x.insert(t.x, *v);
+        }
+        assert_eq!(vis_by_x[&0], Visibility::Visible, "보이는 타일");
+        assert_eq!(vis_by_x[&1], Visibility::Visible, "탐험만 된 타일도 표시(어둡게)");
+        assert_eq!(vis_by_x[&2], Visibility::Hidden, "미탐험 타일은 숨김");
+
+        // 탐험만 된 타일은 어둡게(기본색의 0.3 배), 보이는 타일은 기본색.
+        let mut color_by_x = std::collections::HashMap::new();
+        let mut q2 = app.world.query::<(&TileEntity, &Text)>();
+        for (t, txt) in q2.iter(&app.world) {
+            color_by_x.insert(t.x, txt.sections[0].style.color);
+        }
+        assert_eq!(color_by_x[&0], Color::WHITE, "보이는 바닥은 흰색");
+        assert_eq!(color_by_x[&1], dim_color(Color::WHITE, 0.3), "탐험만 된 바닥은 어둡게");
+
+        // 리소스를 다시 변경시켜 시스템을 한 번 더 돌린다. 이번엔 Visibility/색이
+        // 이미 목표값과 같으므로 변경-없음(`!=` 거짓) 분기를 탄다.
+        app.world.resource_mut::<MapResource>().set_changed();
+        app.update();
+        let mut q3 = app.world.query::<(&TileEntity, &Visibility)>();
+        let mut vis2 = std::collections::HashMap::new();
+        for (t, v) in q3.iter(&app.world) { vis2.insert(t.x, *v); }
+        assert_eq!(vis2[&0], Visibility::Visible, "재실행 후에도 가시성 유지");
+        assert_eq!(vis2[&2], Visibility::Hidden, "재실행 후에도 숨김 유지");
+    }
+
+    #[test]
+    fn 타일가시성_시스템은_맵이_안바뀌었으면_조기_종료한다() {
+        let mut app = App::new();
+        let mut map = Map::new(2, 1);
+        map.set_tile(0, 0, TileKind::Floor); map.tiles[0].visible = true;
+        spawn_tile_entities(&mut app, &map);
+        app.insert_resource(MapResource(map));
+        app.add_systems(Update, update_tile_visibility);
+        app.update(); // 첫 실행 — is_changed
+        app.update(); // 변경 없음 → 조기 종료
+        // 조기 종료해도 패닉/변형 없이 타일 엔티티는 유지된다.
+        let count = app.world.query::<&TileEntity>().iter(&app.world).count();
+        assert_eq!(count, 2);
+    }
+
+    // --- 플러그인 빌드 ---
+
+    #[test]
+    fn 맵플러그인_기본값은_초기_알고리즘이_없다() {
+        let p = MapPlugin::default();
+        assert!(p.initial_algorithm.is_none());
+    }
+
+    #[test]
+    fn 맵플러그인을_추가하면_레지스트리와_시스템이_등록된다() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(MapPlugin { initial_algorithm: Some("bsp".into()) });
+        // build() 가 레지스트리를 삽입하고 시작 알고리즘을 선택했는지 확인.
+        let reg = app.world.resource::<MapGeneratorRegistry>();
+        assert_eq!(reg.current_name(), "bsp");
+        // 핵심 리소스/이벤트가 등록됐는지.
+        assert!(app.world.contains_resource::<GlobalTurn>());
+        assert!(app.world.contains_resource::<OccupiedTiles>());
+        assert!(app.world.contains_resource::<UsedSpawnTiles>());
+    }
+
+    #[test]
+    fn 맵플러그인은_초기알고리즘이_없으면_기본_생성기를_쓴다() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        // initial_algorithm: None → select_by_name 을 호출하지 않는 분기.
+        app.add_plugins(MapPlugin::default());
+        let reg = app.world.resource::<MapGeneratorRegistry>();
+        // 첫 등록 생성기(bsp)가 그대로 현재 생성기다.
+        assert_eq!(reg.current_name(), "bsp");
+    }
+
+    // --- 시스템 세트 트레이트(파생) ---
+
+    #[test]
+    fn 맵시스템세트는_복제와_동등성을_지원한다() {
+        let a = MapSystemSet::ExecuteRegen;
+        let b = a.clone();
+        assert_eq!(a, b);
+        // 스케줄에 set 을 사용해 dyn SystemSet 경로(dyn_hash/as_dyn_eq/dyn_clone)를 탄다.
+        let mut app = App::new();
+        app.configure_sets(Update, MapSystemSet::ExecuteRegen);
+        app.add_systems(Update, increment_global_turn.in_set(MapSystemSet::ExecuteRegen));
+        app.add_event::<PlayerActedEvent>();
+        app.init_resource::<GlobalTurn>();
+        app.update();
     }
 }

@@ -14,7 +14,7 @@
 
 ## 생성 알고리즘
 
-`MapGeneratorRegistry` 리소스에 11종의 생성기가 등록된다.
+`MapGeneratorRegistry` 리소스에 23종의 생성기가 등록된다.
 모든 생성기는 `MapGenerator` 트레이트를 구현하며 `seed: u64`를 받아 결정론적으로 맵을 생성한다:
 
 ```rust
@@ -37,6 +37,22 @@ pub trait MapGenerator: Send + Sync {
 | `grid_village` | 마을 | 격자 도로망 + 블록 건물 |
 | `forest` | 숲 | 나무 군집 사이 좁은 길 |
 | `perlin` | 숲 | 펄린 노이즈 기반 자연 지형 |
+| `maze` | 미로 | recursive backtracker, 루프 없는 완전 미로 |
+| `maze_prim` | 미로 | Prim's 알고리즘, 분기 많은 미로 |
+| `recursive_division` | 미로 | 빈 방을 벽으로 재귀 분할, 벽마다 통로 한 칸 |
+| `voronoi_rooms` | 던전 | Voronoi 셀을 방으로 카브, 인접 셀 복도 연결 |
+| `walled_town` | 도시 | 둘레 성벽 + 성문, 내부 도로망과 건물 블록 |
+| `voronoi_districts` | 도시 | Voronoi 구역 분할, 셀 경계 도로 + 내부 건물 |
+| `island` | 바다 | 방사형 falloff × 멀티옥타브 노이즈, 바다로 둘러싸인 단일 섬(해변 `Sand`) |
+| `archipelago` | 바다 | 약한 falloff + 다중 노이즈, 흩어진 여러 섬(다도해) |
+| `coastal` | 바다 | 한 축 그라디언트, 절반 땅·절반 바다·사이 해안선(`Sand`) |
+| `ocean` | 바다 | 대부분 `Water` + 드문드문 작은 섬/암초 |
+| `biome_world` | 바다 | 고도 노이즈로 `Water`→`Sand`→`Floor`→`Wall` 바이옴 대륙 |
+| `wfc` | 고급 | Wave Function Collapse(타일드 모델), 인접 제약 전파·붕괴로 구조적 던전 생성 |
+
+수상 생성기(island/archipelago/coastal/ocean/biome_world)는 지상과 계약이 다르다:
+테두리가 전부 `Water`(맵 밖 이탈 방지), 통과타일(`Floor`/`Sand`) 비율 ≥ 5%,
+스폰은 통과타일 위에서 이루어진다.
 
 - `F1` 키로 런타임에 생성기를 순환할 수 있다 (개발/테스트용)
 - `--algorithm <이름>` 커맨드라인 옵션으로 시작 생성기를 지정할 수 있다
