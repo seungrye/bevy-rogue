@@ -6,3 +6,4 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - [아키텍처](docs/architecture.md)
 - [맵 시스템 및 에셋](docs/map.md)
 - [개발 프로세스 (Spec-Driven TDD)](docs/development-process.md)
+- [테스트 & 커버리지 (Bevy 시스템 테스트 작성법)](docs/testing.md)

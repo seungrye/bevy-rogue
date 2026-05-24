@@ -3,8 +3,9 @@
 **Bevy 0.13** 기반 로그라이크 게임. 진입점은 `src/main.rs`이며, 고정 크기 창을 설정하고 플러그인을 순서대로 등록한다:
 
 ```
-MapPlugin → PlayerPlugin → MonsterPlugin → CombatFeedbackPlugin
-  → ItemPlugin → GameUiPlugin → VillagerPlugin → ZonePlugin → QuestPlugin → SavePlugin
+RapierPhysicsPlugin → MapPlugin → PlayerPlugin → MonsterPlugin → CombatFeedbackPlugin
+  → ElementalPlugin → ProjectilePlugin → RangedPlugin → ItemPlugin → GameUiPlugin
+  → VillagerPlugin → ZonePlugin → QuestPlugin → SavePlugin
 ```
 
 모든 게임 코드는 `src/modules/` 아래에 위치한다:
@@ -15,8 +16,11 @@ MapPlugin → PlayerPlugin → MonsterPlugin → CombatFeedbackPlugin
 | `map` | 맵 리소스·타일 렌더링·가시성·FOV, 11종 절차 생성 알고리즘, GlobalSeed |
 | `player` | 플레이어 엔티티, 방향키/WASD 이동(LERP 애니메이션), FOV 계산, 카메라 추적 |
 | `monster` | 몬스터 스폰·AI·리스폰 타이머, FOV 기반 추적 |
-| `combat` | 전투 판정, CombatStats 컴포넌트, 피해·사망 처리 |
-| `combat_feedback` | 피격 시 화면 흔들림·핏자국(BloodStain) 이펙트 |
+| `combat` | 전투 판정(`calc_damage`), CombatStats 컴포넌트, 피해·사망 처리 |
+| `combat_feedback` | 피격 시 핏자국(BloodStain)·핏방울 파티클·피격 섬광 이펙트 |
+| `elemental` | 무기/몬스터 원소 속성, 원소 반응(융해·파쇄 등), 지속피해·기절·둔화 상태 |
+| `projectile` | 화살 등 투사체 발사·비행·충돌(Rapier 센서), 명중 시 피해·원소 부여 |
+| `ranged` | 활 원거리 조준 모드(키보드/마우스 타겟팅), 사거리·시야 판정 후 발사 |
 | `item` | 아이템 종류·인벤토리·장비·낙하 아이템 스폰, 글리프 스타일 |
 | `villager` | 마을 NPC 스폰·턴제 이동·대화·퀘스트 NPC 글리프 |
 | `zone` | 존 전환(ZoneTransitionEvent), WorldState 캐시, GlobalSeed 기반 결정론적 맵 재생성 |

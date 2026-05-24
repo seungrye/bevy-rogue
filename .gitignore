@@ -3,3 +3,7 @@
 /save
 refactor.py
 fix.py
+coverage/
+
+# coverage 부산물
+*.profraw
