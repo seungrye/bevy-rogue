@@ -276,4 +276,13 @@
         pickup_message: "기밀 문서를 손에 넣었다. 봉랍이 깨지지 않도록 품속 깊이 숨긴다.",
         image_path: "scene/open-chest.png",
     ),
+    QuestItemDef(
+        id: "stark_signet",
+        display_name: "스타크 가문 인장",
+        glyph_ascii: "@",
+        glyph_unicode: "\u{2638}",
+        glyph_game_icon: "\u{2638}",
+        pickup_message: "스타크 가문의 인장을 되찾았다. 늑대 머리가 새겨진 차가운 강철이 손에 묵직하다.",
+        image_path: "scene/open-chest.png",
+    ),
 ]

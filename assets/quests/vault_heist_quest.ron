@@ -1,0 +1,157 @@
+#![enable(implicit_some)]
+
+// ─────────────────────────────────────────────────────────────────
+// vault_heist_quest — 얼어붙은 금고
+//
+// 두 번째 잠입(스텔스) 퀘스트. infiltration_quest.ron 과 동일 구조,
+// 다른 giver/구역/목표/테마.
+//   - giver: 상인(merchant) — villager 레지스트리에 존재, 기존 어떤
+//     퀘스트의 giver 도 아님(burgomaster 가 첫 잠입 퀘스트를 씀).
+//   - 테마: 북부. 적대 가문이 약탈해간 스타크 가문의 인장을 그들의
+//     얼어붙은 지하 금고(드레드포트)에 잠입해 되찾는다.
+//   - 수락 시: stealth_blown 초기화 → 금고(Named "dreadfort_vault") 포탈
+//     개방(bsp_indoor — 첫 퀘스트의 walled_town 과 다른 등록 생성기) →
+//     가드(방향 시야) 스폰.
+//   - 금고에서 스타크 가문 인장(stark_signet) 회수.
+//   - 가드에게 탐지되면 monster 모듈이 stealth_blown 플래그를 set.
+//   - 무탐지(Not HasFlag stealth_blown) 로 회수 시 보너스, 탐지 시 일반 보상.
+//
+// 사용 기능:
+//   QuestAction:    ClearFlag, OpenPortal, SpawnGuards, ClosePortal,
+//                   GiveItems, GiveItem, RemoveItem, Log
+//   QuestCondition: HasItem, HasFlag, Not
+//   QuestSpawn:     zone(Named) + phase 조건
+// ─────────────────────────────────────────────────────────────────
+QuestDef(
+    id: "vault_heist_quest",
+    title: "얼어붙은 금고",
+    giver_npc: "merchant",
+    initial_phase: "locked",
+    spawn_chance: 0.65,
+
+    phases: {
+        // ── 0단계: 선행 퀘스트 미완료 (잠금) ────────────────────
+        //   첫 잠입 퀘스트 'infiltration_quest'(그림자 속의 회수)가
+        //   끝나야 이 의뢰가 열린다. 그 기밀 문서가 금고의 단서.
+        "locked": QuestPhaseDef(
+            dialog: [
+                "거래? 아직은 아니오. 자네는 준비가 덜 됐소.",
+                "촌장이 의뢰한 그 '기밀 문서' 일... 그것부터 끝내고 오시오.",
+                "그 문서에 내가 노리는 물건의 행방이 적혀 있거든. 순서가 있는 법이오.",
+            ],
+            objective: Some("먼저 촌장의 의뢰 '그림자 속의 회수'를 끝내라."),
+        ),
+
+        // ── 1단계: 잠입 의뢰 (선행 완료 후 개방) ────────────────
+        "not_started": QuestPhaseDef(
+            dialog: [
+                "촌장이 회수한 그 기밀 문서, 내가 사본을 봤소. 돈 냄새 말고 핏줄 냄새가 나는 일이 적혀 있더군.",
+                "북부의 옛 가문, 스타크. 그 집안의 인장이 약탈당했소이다.",
+                "지금 그건 드레드포트의 얼어붙은 지하 금고에 처박혀 있다오.",
+                "그 가문은 가죽 벗기기로 유명하지. 정면승부는 자살이오.",
+                "벽을 따라, 그림자를 밟고, 경비병의 등 뒤로만 움직이시오.",
+                "들키지 않고 인장을 가져오면... 값을 후하게 쳐드리리다. 어떻소?",
+            ],
+            objective: Some("상인의 은밀한 거래를 들어볼까."),
+        ),
+
+        // ── 2단계: 잠입 진행 중 ─────────────────────────────────
+        "infiltrating": QuestPhaseDef(
+            dialog: [
+                "아직 인장을 못 찾았소? 금고는 깊고, 추위는 더 깊지.",
+                "경비병의 시선은 앞이 넓고 뒤가 좁다오. 등 뒤를 노리시오.",
+                "한 번이라도 들키면 값은 깎이오. 그래도 인장만 가져오면 거래는 성립이지.",
+            ],
+            objective: Some("얼어붙은 금고에 들어가 스타크 가문 인장을 회수하라. 경비병에게 들키지 마라."),
+        ),
+
+        // ── 3단계: 회수 완료, 상인에게 귀환 ─────────────────────
+        "recovered": QuestPhaseDef(
+            dialog: [
+                "돌아왔구려! 그래, 인장은?",
+                "어디 봅시다... 늑대 머리, 틀림없는 진품이오. 손이 다 떨리는군.",
+            ],
+            objective: Some("스타크 가문 인장을 상인에게 전달하라."),
+        ),
+
+        // ── 4-A단계: 무탐지 완료 (보너스) ──────────────────────
+        "done_clean": QuestPhaseDef(
+            dialog: [
+                "금고에 손댄 흔적조차 없었다더군. 드레드포트는 아직도 모르고 있을 거요.",
+                "이런 솜씨라면... 약속한 값에 두둑이 얹어드리리다.",
+                "당신 같은 사람과는 또 거래하고 싶소이다. 신뢰가 장사의 전부니까.",
+            ],
+            objective: Some("잠입 완료! 들키지 않고 인장을 되찾았다."),
+        ),
+
+        // ── 4-B단계: 탐지 완료 (일반 보상) ─────────────────────
+        "done_blown": QuestPhaseDef(
+            dialog: [
+                "인장은 받았소만... 들켰구려. 드레드포트가 발칵 뒤집혔다는 소문이오.",
+                "어쨌든 물건은 손에 들어왔으니 약속한 값은 치르리다.",
+                "다음엔 좀 더 조용히 움직이시오. 소문은 장사꾼에게 독이라오.",
+            ],
+            objective: Some("거래 완료. 다만 잠입은 발각되었다."),
+        ),
+    },
+
+    transitions: [
+        // 선행 퀘스트('그림자 속의 회수')가 끝나야 의뢰가 열린다 (퀘스트 체이닝).
+        // 두 결말(무탐지/탐지) 어느 쪽이든 완료로 인정.
+        Transition(from: "locked", trigger: Auto,
+            when: Or([
+                PhaseIs(quest: "infiltration_quest", phase: "done_clean"),
+                PhaseIs(quest: "infiltration_quest", phase: "done_blown"),
+            ]),
+            to: "not_started"),
+
+        // 수락 → stealth_blown 초기화 + 금고 포탈 개방 + 가드 스폰
+        Transition(from: "not_started", trigger: Interact,
+            actions: [
+                ClearFlag("stealth_blown"),
+                OpenPortal(zone: "dreadfort_vault", generator: "bsp_indoor", placement: Border),
+                SpawnGuards(count: 6),
+                Log("상인: 포탈을 열어뒀소. 그림자 속으로 사라지시오."),
+            ],
+            to: "infiltrating"),
+
+        // 인장 회수 시 자동으로 귀환 단계로
+        Transition(from: "infiltrating", trigger: Auto,
+            when: HasItem("stark_signet"),
+            to: "recovered"),
+
+        // ── recovered: 탐지 여부에 따른 보상 분기 (첫 매칭만 실행) ──
+        // ① 무탐지(Not stealth_blown) → 보너스 보상
+        Transition(from: "recovered", trigger: Interact,
+            when: Not(HasFlag("stealth_blown")),
+            actions: [
+                RemoveItem("stark_signet"),
+                Log("상인: 완벽한 솜씨였소. 이건 약속한 것 이상이오."),
+                GiveItems(item: "health_potion", count: 5),
+                GiveItem("eternal_gem"),
+                ClosePortal("dreadfort_vault"),
+                ClearFlag("stealth_blown"),
+            ],
+            to: "done_clean"),
+
+        // ② 탐지됨(fallback) → 일반 보상
+        Transition(from: "recovered", trigger: Interact,
+            actions: [
+                RemoveItem("stark_signet"),
+                Log("상인: 시끄러웠지만, 어쨌든 인장은 손에 들어왔구려."),
+                GiveItems(item: "health_potion", count: 2),
+                ClosePortal("dreadfort_vault"),
+                ClearFlag("stealth_blown"),
+            ],
+            to: "done_blown"),
+    ],
+
+    spawns: [
+        // 스타크 가문 인장 — 잠입 진행 중일 때 금고에 스폰
+        QuestSpawn(
+            phase: "infiltrating",
+            item: "stark_signet",
+            zone: Named("dreadfort_vault"),
+        ),
+    ],
+)

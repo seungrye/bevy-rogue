@@ -2557,4 +2557,149 @@ mod tests {
             "탐지 시에는 보너스 아이템이 지급되지 않아야 한다"
         );
     }
+
+    // ── vault_heist_quest (두 번째 잠입 퀘스트) 콘텐츠 검증 ────────────────────
+
+    /// 실제 두 번째 잠입 퀘스트 RON 파일을 로드한다.
+    fn load_vault_heist_quest() -> QuestDef {
+        let text = std::fs::read_to_string("assets/quests/vault_heist_quest.ron")
+            .expect("vault_heist_quest.ron 이 존재해야 한다");
+        ron::de::from_str::<QuestDef>(&text)
+            .expect("vault_heist_quest.ron 이 파싱돼야 한다")
+    }
+
+    #[test]
+    fn 금고잠입퀘스트는_파싱되고_시맨틱검증을_통과한다() {
+        let def = load_vault_heist_quest();
+        assert_eq!(def.id, "vault_heist_quest");
+        // 첫 잠입 퀘스트(burgomaster)와 다른 giver 여야 한다.
+        assert_eq!(def.giver_npc, "merchant", "giver 는 첫 잠입 퀘스트와 다른 상인이어야 한다");
+        assert_ne!(def.giver_npc, "burgomaster", "burgomaster 는 이미 첫 잠입 퀘스트의 giver 다");
+        let errors = validate_quest_def(&def, qi());
+        assert!(errors.is_empty(), "시맨틱 검증 통과해야 한다: {:?}", errors);
+    }
+
+    #[test]
+    fn 금고잠입퀘스트의_스타크인장ID가_kind로_매핑된다() {
+        let _ = qi();
+        assert_eq!(
+            item_id_to_kind("stark_signet", qi()),
+            Some(ItemKind::QuestItem(QuestItemKind("stark_signet"))),
+        );
+    }
+
+    #[test]
+    fn 금고잠입퀘스트_수락전이는_플래그초기화와_포탈개방과_가드스폰을_실행한다() {
+        let def = load_vault_heist_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "not_started" && t.trigger == TriggerKind::Interact)
+            .expect("수락 전이가 있어야 한다");
+        assert!(t.actions.iter().any(|a| matches!(a, QuestAction::ClearFlag(f) if f == "stealth_blown")),
+            "수락 시 stealth_blown 플래그를 초기화해야 한다");
+        // 첫 잠입 퀘스트(infiltration)와 다른 구역으로 포탈을 열어야 한다.
+        assert!(t.actions.iter().any(|a| matches!(a, QuestAction::OpenPortal { zone, .. } if zone == "dreadfort_vault")),
+            "수락 시 금고 구역 포탈을 열어야 한다");
+        assert!(t.actions.iter().any(|a| matches!(a, QuestAction::SpawnGuards { count } if (4..=6).contains(count))),
+            "수락 시 가드 4~6마리를 스폰해야 한다");
+    }
+
+    #[test]
+    fn 금고잠입퀘스트는_등록된_생성기로_포탈을_연다() {
+        // OpenPortal generator 가 map 모듈에 등록된 생성기 이름이어야 한다.
+        // (첫 잠입 퀘스트는 walled_town, 이 퀘스트는 bsp_indoor 로 차별화.)
+        let def = load_vault_heist_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "not_started" && t.trigger == TriggerKind::Interact)
+            .expect("수락 전이가 있어야 한다");
+        let gen = t.actions.iter().find_map(|a| match a {
+            QuestAction::OpenPortal { generator, .. } => Some(generator.as_str()),
+            _ => None,
+        }).expect("OpenPortal 액션이 있어야 한다");
+        assert_eq!(gen, "bsp_indoor", "첫 잠입 퀘스트(walled_town)와 다른 등록 생성기여야 한다");
+    }
+
+    #[test]
+    fn 금고잠입퀘스트는_스타크인장을_금고구역_진행페이즈에_스폰한다() {
+        use crate::modules::zone::ZoneId;
+        let def = load_vault_heist_quest();
+        let spawn = def.spawns.iter()
+            .find(|s| s.item == "stark_signet")
+            .expect("스타크 인장 스폰이 있어야 한다");
+        assert_eq!(spawn.zone, ZoneId::Named("dreadfort_vault".into()), "금고 구역에 스폰돼야 한다");
+        assert_eq!(spawn.phase, "infiltrating", "잠입 진행 페이즈에 스폰돼야 한다");
+    }
+
+    /// recovered 페이즈에서 탐지 여부(stealth_blown 플래그)에 따라 어느 보상 전이가
+    /// 선택되는지를 실제 RON 의 transition 순서/조건으로 재현한다.
+    fn select_vault_recovered_transition<'a>(def: &'a QuestDef, state: &QuestState) -> &'a QuestTransition {
+        let inv = make_inventory_with(&["stark_signet"]);
+        let world = make_world();
+        def.transitions.iter()
+            .filter(|t| t.from == "recovered" && t.trigger == TriggerKind::Interact)
+            .find(|t| t.when.as_ref()
+                .map(|c| eval_condition(c, &inv, &world, state, qi()))
+                .unwrap_or(true))
+            .expect("recovered 에서 매칭되는 전이가 있어야 한다")
+    }
+
+    #[test]
+    fn 금고잠입퀘스트_무탐지시_보너스분기가_선택된다() {
+        let def = load_vault_heist_quest();
+        // stealth_blown 플래그 없음 → 무탐지
+        let state = QuestState::default();
+        let t = select_vault_recovered_transition(&def, &state);
+        assert_eq!(t.to, "done_clean", "무탐지면 보너스(done_clean) 분기로 가야 한다");
+        // 보너스: 추가 보상 아이템(영원의 보석) 지급이 포함돼야 한다
+        assert!(
+            t.actions.iter().any(|a| matches!(a, QuestAction::GiveItem(id) if id == "eternal_gem")),
+            "무탐지 보너스에는 추가 보상 아이템이 있어야 한다"
+        );
+    }
+
+    #[test]
+    fn 금고잠입퀘스트_탐지시_일반보상분기가_선택된다() {
+        let def = load_vault_heist_quest();
+        // stealth_blown=true → 탐지됨 → 보너스 조건(Not HasFlag) 불충족 → fallback
+        let mut state = QuestState::default();
+        state.set_flag("stealth_blown", "true");
+        let t = select_vault_recovered_transition(&def, &state);
+        assert_eq!(t.to, "done_blown", "탐지되면 일반 보상(done_blown) fallback 으로 가야 한다");
+        // 일반 보상에는 보너스 전용 아이템이 없어야 한다
+        assert!(
+            !t.actions.iter().any(|a| matches!(a, QuestAction::GiveItem(id) if id == "eternal_gem")),
+            "탐지 시에는 보너스 아이템이 지급되지 않아야 한다"
+        );
+    }
+
+    #[test]
+    fn 금고잠입퀘스트는_첫_잠입퀘스트_완료_전에는_잠겨있고_완료후_열린다() {
+        // 퀘스트 체이닝: vault_heist 는 locked 로 시작하고,
+        // infiltration_quest 가 끝나야(어느 결말이든) not_started 로 열린다.
+        let def = load_vault_heist_quest();
+        assert_eq!(def.initial_phase, "locked", "선행 미완료 상태(locked)로 시작해야 한다");
+        let gate = def.transitions.iter()
+            .find(|t| t.from == "locked" && t.to == "not_started")
+            .and_then(|t| t.when.clone())
+            .expect("locked→not_started 게이트 전이에 선행 완료 조건이 있어야 한다");
+
+        let inv = PlayerInventory::default();
+        let world = make_world();
+
+        // 첫 잠입 퀘스트 미완료 → 잠김
+        let locked_state = QuestState::default();
+        assert!(!eval_condition(&gate, &inv, &world, &locked_state, qi()),
+            "첫 잠입 퀘스트 완료 전에는 열리지 않아야 한다");
+
+        // 무탐지 완료 → 열림
+        let mut clean_state = QuestState::default();
+        clean_state.set_phase("infiltration_quest", "done_clean");
+        assert!(eval_condition(&gate, &inv, &world, &clean_state, qi()),
+            "첫 잠입을 무탐지로 끝내면 열려야 한다");
+
+        // 탐지 완료여도 열림
+        let mut blown_state = QuestState::default();
+        blown_state.set_phase("infiltration_quest", "done_blown");
+        assert!(eval_condition(&gate, &inv, &world, &blown_state, qi()),
+            "첫 잠입을 탐지된 채 끝내도(완료이므로) 열려야 한다");
+    }
 }
