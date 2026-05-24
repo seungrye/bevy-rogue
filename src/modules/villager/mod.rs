@@ -1199,6 +1199,16 @@ mod tests {
     }
 
     #[test]
+    fn 스킬시험_퀘스트의_giver_전투마법사는_villager로_매칭된다() {
+        assert_giver_resolves("skill_trial_quest", "battlemage");
+    }
+
+    #[test]
+    fn 파밍_퀘스트의_giver_보물사냥꾼은_villager로_매칭된다() {
+        assert_giver_resolves("loot_farming_quest", "treasure_hunter");
+    }
+
+    #[test]
     fn 퀘스트_NPC_마커는_giver_매칭으로만_표시된다() {
         // 퀘스트 NPC만 마커. 새 모델: quest_registry 에서 giver_npc 매칭.
         // (test 환경에선 quest_registry 가 없으므로 villager id 기반으로 시뮬.)

@@ -3375,4 +3375,284 @@ mod tests {
         assert_eq!(app.world.resource::<Events<SpawnQuestPortalEvent>>().len(), 1,
             "폭발 후 숨겨진 던전 포탈이 열려야 한다");
     }
+
+    // ── skill_trial_quest (액티브 스킬 활용 퀘스트) 콘텐츠 검증 ────────────────
+
+    /// 실제 액티브 스킬 활용 퀘스트 RON 파일을 로드한다.
+    fn load_skill_trial_quest() -> QuestDef {
+        let text = std::fs::read_to_string("assets/quests/skill_trial_quest.ron")
+            .expect("skill_trial_quest.ron 이 존재해야 한다");
+        ron::de::from_str::<QuestDef>(&text)
+            .expect("skill_trial_quest.ron 이 파싱돼야 한다")
+    }
+
+    #[test]
+    fn 스킬시험퀘스트는_파싱되고_시맨틱검증을_통과한다() {
+        let def = load_skill_trial_quest();
+        assert_eq!(def.id, "skill_trial_quest");
+        // giver 는 새 주민 전투마법사여야 한다(기존 giver 와 겹치지 않음).
+        assert_eq!(def.giver_npc, "battlemage", "giver 는 새 주민 전투마법사여야 한다");
+        let errors = validate_quest_def(&def, qi());
+        assert!(errors.is_empty(), "시맨틱 검증 통과해야 한다: {:?}", errors);
+    }
+
+    #[test]
+    fn 스킬시험퀘스트의_비전초점ID가_kind로_매핑된다() {
+        let _ = qi();
+        assert_eq!(
+            item_id_to_kind("arcane_focus", qi()),
+            Some(ItemKind::QuestItem(QuestItemKind("arcane_focus"))),
+        );
+    }
+
+    #[test]
+    fn 스킬시험퀘스트는_다단계로_not_started부터_done까지_정의된다() {
+        let def = load_skill_trial_quest();
+        for phase in ["not_started", "trial", "passed", "done"] {
+            assert!(def.phases.contains_key(phase), "phase '{}' 가 정의돼야 한다", phase);
+        }
+        assert_eq!(def.initial_phase, "not_started", "시작 페이즈는 not_started");
+    }
+
+    #[test]
+    fn 스킬시험퀘스트_수락전이는_시험장포탈을_등록생성기로_열고_생존물약을_지급한다() {
+        let def = load_skill_trial_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "not_started" && t.trigger == TriggerKind::Interact)
+            .expect("수락 전이가 있어야 한다");
+        // 시험장 포탈 — 등록된 생성기(coastal)로 연다(물길/파괴가능 지형이 함께 나옴).
+        let gen = t.actions.iter().find_map(|a| match a {
+            QuestAction::OpenPortal { zone, generator, .. } if zone == "skill_trial" => Some(generator.as_str()),
+            _ => None,
+        }).expect("skill_trial 포탈을 여는 OpenPortal 이 있어야 한다");
+        assert_eq!(gen, "coastal", "시험장은 coastal 생성기로 열어야 한다");
+        // 험지 생존용 물약을 지급해 스킬 운용(특히 치유 대체)을 돕는다.
+        assert!(
+            t.actions.iter().any(|a| matches!(a,
+                QuestAction::GiveItems { item, count } if item == "health_potion" && *count >= 1)),
+            "수락 시 험지 생존용 체력 물약을 지급해야 한다",
+        );
+    }
+
+    #[test]
+    fn 스킬시험퀘스트의_objective는_세_스킬_운용을_서사로_안내한다() {
+        // 스킬 사용을 코드로 강제할 수 없으므로 objective/대사로 강하게 유도한다.
+        let def = load_skill_trial_quest();
+        let trial = def.phases.get("trial").expect("trial 페이즈");
+        let obj = trial.objective.as_ref().expect("trial objective 가 있어야 한다");
+        assert!(obj.contains("파이어볼"), "objective 가 파이어볼(벽 파괴)을 안내해야 한다");
+        assert!(obj.contains("점멸"), "objective 가 점멸(물·틈 건너기)을 안내해야 한다");
+        assert!(obj.contains("치유"), "objective 가 치유(험지 생존)를 안내해야 한다");
+    }
+
+    #[test]
+    fn 스킬시험퀘스트는_비전초점을_시험장_돌파페이즈에_스폰한다() {
+        use crate::modules::zone::ZoneId;
+        let def = load_skill_trial_quest();
+        let spawn = def.spawns.iter()
+            .find(|s| s.item == "arcane_focus")
+            .expect("비전의 초점 스폰이 있어야 한다");
+        assert_eq!(spawn.zone, ZoneId::Named("skill_trial".into()), "시험장 구역에 스폰돼야 한다");
+        assert_eq!(spawn.phase, "trial", "돌파 진행 페이즈에 스폰돼야 한다");
+    }
+
+    #[test]
+    fn 스킬시험퀘스트는_초점을_회수하면_자동으로_귀환단계로_전진한다() {
+        let def = load_skill_trial_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "trial" && t.trigger == TriggerKind::Auto)
+            .expect("돌파 중 자동 전이가 있어야 한다");
+        assert_eq!(t.to, "passed", "회수 시 귀환(passed) 단계로 가야 한다");
+
+        let cond = t.when.as_ref().expect("회수 자동 전이에 HasItem 조건이 있어야 한다");
+        let world = make_world();
+        let state = QuestState::default();
+        let empty = PlayerInventory::default();
+        assert!(!eval_condition(cond, &empty, &world, &state, qi()),
+            "초점이 없으면 전진하지 않아야 한다");
+        let with_focus = make_inventory_with(&["arcane_focus"]);
+        assert!(eval_condition(cond, &with_focus, &world, &state, qi()),
+            "초점을 회수하면 전진 조건이 충족돼야 한다");
+    }
+
+    #[test]
+    fn 스킬시험퀘스트_완료전이는_초점반납과_포탈정리와_보상지급으로_done에_도달한다() {
+        let def = load_skill_trial_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "passed" && t.trigger == TriggerKind::Interact)
+            .expect("완료 전이가 있어야 한다");
+        assert_eq!(t.to, "done", "전달하면 완료(done)에 도달해야 한다");
+        assert!(
+            t.actions.iter().any(|a| matches!(a, QuestAction::RemoveItem(id) if id == "arcane_focus")),
+            "완료 시 초점을 반납해야 한다",
+        );
+        assert!(
+            t.actions.iter().any(|a| matches!(a, QuestAction::ClosePortal(z) if z == "skill_trial")),
+            "완료 시 시험장 포탈을 닫아 정리해야 한다",
+        );
+        assert!(
+            t.actions.iter().any(|a| matches!(a, QuestAction::GiveItem(_) | QuestAction::GiveItems { .. })),
+            "완료 시 보상을 지급해야 한다",
+        );
+    }
+
+    #[test]
+    fn 스킬시험퀘스트의_giver_전투마법사는_다른_퀘스트의_giver와_겹치지_않는다() {
+        let mut reg = QuestRegistry::default();
+        for (path, def) in load_all_quest_defs() {
+            assert!(
+                reg.quests.insert(def.id.clone(), def).is_none(),
+                "{}: 퀘스트 id 가 중복된다", path
+            );
+        }
+        let givers: Vec<&str> = reg.quests.values()
+            .filter(|q| q.giver_npc == "battlemage")
+            .map(|q| q.id.as_str())
+            .collect();
+        assert_eq!(givers, vec!["skill_trial_quest"],
+            "전투마법사를 giver 로 쓰는 퀘스트는 skill_trial_quest 하나뿐이어야 한다");
+    }
+
+    // ── loot_farming_quest (파밍·드롭 퀘스트) 콘텐츠 검증 ──────────────────────
+
+    /// 실제 파밍·드롭 퀘스트 RON 파일을 로드한다.
+    fn load_loot_farming_quest() -> QuestDef {
+        let text = std::fs::read_to_string("assets/quests/loot_farming_quest.ron")
+            .expect("loot_farming_quest.ron 이 존재해야 한다");
+        ron::de::from_str::<QuestDef>(&text)
+            .expect("loot_farming_quest.ron 이 파싱돼야 한다")
+    }
+
+    #[test]
+    fn 파밍퀘스트는_파싱되고_시맨틱검증을_통과한다() {
+        let def = load_loot_farming_quest();
+        assert_eq!(def.id, "loot_farming_quest");
+        // giver 는 새 주민 보물사냥꾼이어야 한다(기존 giver 와 겹치지 않음).
+        assert_eq!(def.giver_npc, "treasure_hunter", "giver 는 새 주민 보물사냥꾼이어야 한다");
+        let errors = validate_quest_def(&def, qi());
+        assert!(errors.is_empty(), "시맨틱 검증 통과해야 한다: {:?}", errors);
+    }
+
+    #[test]
+    fn 파밍퀘스트의_목표전리품ID는_드롭가능한_실재_방어구로_매핑된다() {
+        // 목표는 quest item 이 아니라 armors.ron 의 실재 방어구 id 여야
+        // "사냥으로 파밍" 서사가 HasItem 으로 성립한다.
+        let _ = qi();
+        let def = load_loot_farming_quest();
+        let cond = def.transitions.iter()
+            .find(|t| t.from == "farming" && t.trigger == TriggerKind::Auto)
+            .and_then(|t| t.when.as_ref())
+            .expect("파밍 완료 자동 전이에 HasItem 조건이 있어야 한다");
+        let target = match cond {
+            QuestCondition::HasItem(id) => id.as_str(),
+            other => panic!("목표 조건은 HasItem 이어야 한다: {:?}", other),
+        };
+        assert_eq!(target, "knight_armor", "목표 전리품은 기사 갑옷이어야 한다");
+        // item_id_to_kind 가 armor 레지스트리에서 조회해 Armor 로 매핑한다.
+        assert_eq!(
+            item_id_to_kind(target, qi()),
+            Some(ItemKind::Armor(crate::modules::item::ArmorKind("knight_armor"))),
+            "목표 id 는 실재 방어구로 매핑돼야 한다",
+        );
+    }
+
+    #[test]
+    fn 파밍퀘스트의_목표전리품은_레벨스케일_드롭으로_실제로_나올_수_있다() {
+        // pick_leveled_armor 가 knight_armor 를 뽑을 수 있어야 "사냥으로 파밍" 이 성립.
+        // 충분히 많이 굴려 통계적으로 한 번이라도 목표 id 가 나오는지 확인한다.
+        use crate::modules::item::{pick_leveled_armor, ArmorKind};
+        let mut rng = rand::thread_rng();
+        let target = ArmorKind("knight_armor");
+        // knight_armor 는 T3. 그 티어가 충분히 잘 뽑히는 레벨대(중간 레벨)에서 굴린다.
+        let appeared = (0..5000).any(|_| pick_leveled_armor(7, qi(), &mut rng) == Some(target));
+        assert!(appeared, "knight_armor 가 레벨스케일 드롭으로 나올 수 있어야 한다(파밍 가능 근거)");
+    }
+
+    #[test]
+    fn 파밍퀘스트의_보상장비ID도_드롭레지스트리의_실재_방어구다() {
+        // 보상은 상위 티어 장비여야 한다(paladin_armor T5).
+        let _ = qi();
+        let def = load_loot_farming_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "gathered" && t.trigger == TriggerKind::Interact)
+            .expect("완료 전이가 있어야 한다");
+        let gives_paladin = t.actions.iter().any(|a| matches!(a,
+            QuestAction::GiveItem(id) if id == "paladin_armor"));
+        assert!(gives_paladin, "완료 시 상위 티어 장비(paladin_armor)를 보상으로 줘야 한다");
+        assert_eq!(
+            item_id_to_kind("paladin_armor", qi()),
+            Some(ItemKind::Armor(crate::modules::item::ArmorKind("paladin_armor"))),
+            "보상 id 도 실재 방어구로 매핑돼야 한다",
+        );
+    }
+
+    #[test]
+    fn 파밍퀘스트_수락전이는_사냥터포탈을_등록생성기로_연다() {
+        let def = load_loot_farming_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "not_started" && t.trigger == TriggerKind::Interact)
+            .expect("수락 전이가 있어야 한다");
+        let gen = t.actions.iter().find_map(|a| match a {
+            QuestAction::OpenPortal { zone, generator, .. } if zone == "hunting_ground" => Some(generator.as_str()),
+            _ => None,
+        }).expect("hunting_ground 포탈을 여는 OpenPortal 이 있어야 한다");
+        assert_eq!(gen, "forest", "사냥터는 forest 생성기로 열어야 한다");
+    }
+
+    #[test]
+    fn 파밍퀘스트는_전리품을_파밍하면_자동으로_귀환단계로_전진한다() {
+        let def = load_loot_farming_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "farming" && t.trigger == TriggerKind::Auto)
+            .expect("파밍 중 자동 전이가 있어야 한다");
+        assert_eq!(t.to, "gathered", "파밍 시 귀환(gathered) 단계로 가야 한다");
+
+        let cond = t.when.as_ref().expect("파밍 자동 전이에 HasItem 조건이 있어야 한다");
+        let world = make_world();
+        let state = QuestState::default();
+        let empty = PlayerInventory::default();
+        assert!(!eval_condition(cond, &empty, &world, &state, qi()),
+            "전리품이 없으면 전진하지 않아야 한다");
+        let with_loot = make_inventory_with(&["knight_armor"]);
+        assert!(eval_condition(cond, &with_loot, &world, &state, qi()),
+            "전리품을 파밍하면 전진 조건이 충족돼야 한다");
+    }
+
+    #[test]
+    fn 파밍퀘스트_완료전이는_전리품반납과_포탈정리와_보상지급으로_done에_도달한다() {
+        let def = load_loot_farming_quest();
+        let t = def.transitions.iter()
+            .find(|t| t.from == "gathered" && t.trigger == TriggerKind::Interact)
+            .expect("완료 전이가 있어야 한다");
+        assert_eq!(t.to, "done", "넘기면 완료(done)에 도달해야 한다");
+        assert!(
+            t.actions.iter().any(|a| matches!(a, QuestAction::RemoveItem(id) if id == "knight_armor")),
+            "완료 시 전리품을 반납해야 한다",
+        );
+        assert!(
+            t.actions.iter().any(|a| matches!(a, QuestAction::ClosePortal(z) if z == "hunting_ground")),
+            "완료 시 사냥터 포탈을 닫아 정리해야 한다",
+        );
+        assert!(
+            t.actions.iter().any(|a| matches!(a, QuestAction::GiveItem(_) | QuestAction::GiveItems { .. })),
+            "완료 시 보상을 지급해야 한다",
+        );
+    }
+
+    #[test]
+    fn 파밍퀘스트의_giver_보물사냥꾼은_다른_퀘스트의_giver와_겹치지_않는다() {
+        let mut reg = QuestRegistry::default();
+        for (path, def) in load_all_quest_defs() {
+            assert!(
+                reg.quests.insert(def.id.clone(), def).is_none(),
+                "{}: 퀘스트 id 가 중복된다", path
+            );
+        }
+        let givers: Vec<&str> = reg.quests.values()
+            .filter(|q| q.giver_npc == "treasure_hunter")
+            .map(|q| q.id.as_str())
+            .collect();
+        assert_eq!(givers, vec!["loot_farming_quest"],
+            "보물사냥꾼을 giver 로 쓰는 퀘스트는 loot_farming_quest 하나뿐이어야 한다");
+    }
 }

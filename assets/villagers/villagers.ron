@@ -283,4 +283,24 @@
         ],
         speed: 0.5,
     ),
+    VillagerDef(
+        id: "battlemage",
+        name: "전투마법사",
+        color: (0.55, 0.35, 0.85),
+        // skill_trial_quest(원소의 시험장)의 giver. 액티브 스킬(파이어볼/점멸/
+        // 치유)의 운용을 가르치는 마법 스승 겸 전투마법사. 퀘스트 NPC 이므로
+        // 일반 대사는 비운다. 기존 어떤 퀘스트의 giver 도 아니다(겹침 없음).
+        dialogs: [],
+        speed: 0.6,
+    ),
+    VillagerDef(
+        id: "treasure_hunter",
+        name: "보물사냥꾼",
+        color: (0.85, 0.65, 0.20),
+        // loot_farming_quest(전리품 사냥)의 giver. 사냥으로 떨어지는 장비를
+        // 모으는 데 잔뼈가 굵은 보물사냥꾼. 퀘스트 NPC 이므로 일반 대사는
+        // 비운다. 기존 어떤 퀘스트의 giver 도 아니다(겹침 없음).
+        dialogs: [],
+        speed: 0.7,
+    ),
 ]

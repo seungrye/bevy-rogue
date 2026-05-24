@@ -1,0 +1,111 @@
+#![enable(implicit_some)]
+
+// ─────────────────────────────────────────────────────────────────
+// loot_farming_quest — 전리품 사냥
+//
+// 파밍·드롭 퀘스트. 무기/방어구 랜덤 스탯·티어·레벨스케일 드롭(파밍 시스템,
+// src/modules/item 의 pick_leveled_weapon/armor)을 정면으로 활용한다.
+//   - giver: 보물사냥꾼(treasure_hunter) — villager 레지스트리에 새로 추가된
+//     NPC. 기존 어떤 퀘스트의 giver 도 아니다(겹침 없음). quest_for_giver 1:1 충족.
+//   - 테마: 보물사냥꾼이 "강한 놈일수록 좋은 물건을 떨군다"며, 사냥으로
+//     특정 전리품(기사 갑옷)을 모아오라 의뢰한다. 운(랜덤 드롭)이 따라야 한다.
+//   - 수락 시: OpenPortal 로 사냥터(Named "hunting_ground", forest 생성기 —
+//     몬스터가 우글대는 숲)를 연다. 사냥터의 몬스터를 잡으면 레벨스케일 드롭으로
+//     장비가 나온다(파밍 시스템). 목표 전리품은 몬스터가 실제로 떨굴 수 있는
+//     실재 방어구 id 'knight_armor'(armors.ron T3 — pick_leveled_armor 가 뽑는 id).
+//   - 목표 전리품을 손에 넣으면(HasItem) 자동으로 귀환 단계로 → 보물사냥꾼에게
+//     돌아가 상위 티어 장비(paladin_armor T5)를 보상으로 받는다.
+//
+// 사용 기능(전부 기존 메커니즘 재사용 — 신규 코드 없음):
+//   QuestAction:    ClearFlag, OpenPortal, RemoveItem, GiveItems, GiveItem,
+//                   ClosePortal, Log
+//   QuestCondition: HasItem
+//   참고: 목표/보상 아이템은 quest item 이 아니라 실재 무기/방어구 id 이며,
+//        item_id_to_kind 가 armor 레지스트리에서 조회해 ItemKind::Armor 로 매핑한다.
+//        knight_armor 는 pick_leveled_armor 로 드롭 가능 → "사냥으로 파밍" 서사가
+//        HasItem 으로 성립한다.
+// ─────────────────────────────────────────────────────────────────
+QuestDef(
+    id: "loot_farming_quest",
+    title: "전리품 사냥",
+    giver_npc: "treasure_hunter",
+    initial_phase: "not_started",
+    spawn_chance: 0.6,
+
+    phases: {
+        // ── 1단계: 의뢰 ────────────────────────────────────────
+        "not_started": QuestPhaseDef(
+            dialog: [
+                "어이, 잠깐. 돈벌이 냄새 맡을 줄 아는 얼굴이군. 마침 일감이 있어.",
+                "나야 보물사냥꾼이지만, 요즘 무릎이 시원찮아 직접 뛰진 못해.",
+                "이 바닥 진리 하나 알려줄까? 강한 놈일수록 좋은 물건을 떨군다네.",
+                "같은 몬스터라도 잡을 때마다 떨구는 게 달라. 어떤 건 날이 더 서 있고, 어떤 건 단단하지.",
+                "내가 찾는 건 멀쩡한 '기사 갑옷' 한 벌이야. 사냥감한테서 떨어지는 그놈 말이지.",
+                "운이 따라야 나오는 물건이라 발품을 좀 팔아야 할 거야. 사냥터는 내가 열어주지.",
+                "어때, 한탕 해보겠나?",
+            ],
+            objective: Some("보물사냥꾼의 의뢰 — 사냥으로 전리품을 모아볼까."),
+        ),
+
+        // ── 2단계: 사냥 진행 중 ────────────────────────────────
+        "farming": QuestPhaseDef(
+            dialog: [
+                "아직 기사 갑옷을 못 구했나? 원래 좋은 물건은 쉽게 안 나와.",
+                "강한 놈을 노려. 약한 놈만 잡아선 잡템만 쌓이거든.",
+                "한 번에 안 나오면 계속 잡아. 떨구는 건 매번 다르니, 결국 운이 따라줄 걸세.",
+                "쓸 만한 무기나 갑옷이 나오면 챙겨 입어. 사냥이 한결 수월해질 거야.",
+            ],
+            objective: Some("사냥터의 몬스터를 사냥해 '기사 갑옷'을 파밍하라. 강한 적일수록 좋은 전리품을 떨군다. (드롭은 랜덤)"),
+        ),
+
+        // ── 3단계: 파밍 완료, 보물사냥꾼에게 귀환 ──────────────
+        "gathered": QuestPhaseDef(
+            dialog: [
+                "돌아왔군! 그래, 건졌나? 어디 보세.",
+                "오, 이거야 이거! 상태도 멀쩡하군. 운이 제대로 따라줬어. 솜씨 좋은데?",
+            ],
+            objective: Some("파밍한 기사 갑옷을 보물사냥꾼에게 넘겨라."),
+        ),
+
+        // ── 4단계: 완료 (보상) ─────────────────────────────────
+        "done": QuestPhaseDef(
+            dialog: [
+                "약속한 사례일세. 이건 내가 예전에 큰 놈한테서 건진 물건이야. 자네가 더 잘 쓸 것 같군.",
+                "사냥은 운빨이라고들 하지만, 결국 발품 판 만큼 나오는 거라네. 자네는 그걸 아는 사람이야.",
+                "또 좋은 사냥감 소문 들리면 알려줌세. 자네 같은 사냥꾼이라면 언제든 환영이야.",
+            ],
+            objective: Some("의뢰 완료! 사냥으로 전리품을 파밍해 더 좋은 장비를 얻었다."),
+        ),
+    },
+
+    transitions: [
+        // 수락 → 사냥터 포탈 개방
+        Transition(from: "not_started", trigger: Interact,
+            actions: [
+                ClearFlag("loot_farming_done"),
+                Log("보물사냥꾼: 사냥터로 가는 문을 열었네. 몬스터가 바글거리는 숲이지. 마음껏 잡아."),
+                OpenPortal(zone: "hunting_ground", generator: "forest", placement: Border),
+                Log("보물사냥꾼: 기억하게 — 강한 놈일수록 좋은 걸 떨군다. 운이 따라야 멀쩡한 갑옷이 나오지."),
+            ],
+            to: "farming"),
+
+        // 목표 전리품(기사 갑옷) 파밍 시 자동으로 귀환 단계로
+        Transition(from: "farming", trigger: Auto,
+            when: HasItem("knight_armor"),
+            to: "gathered"),
+
+        // 귀환 → 전리품 반납 + 사냥터 정리(포탈 닫기) + 상위 티어 장비 보상
+        Transition(from: "gathered", trigger: Interact,
+            actions: [
+                RemoveItem("knight_armor"),
+                Log("보물사냥꾼: 거래는 거래지. 약속한 물건일세, 받게."),
+                GiveItem("paladin_armor"),
+                GiveItems(item: "health_potion", count: 3),
+                ClosePortal("hunting_ground"),
+                ClearFlag("loot_farming_done"),
+            ],
+            to: "done"),
+    ],
+
+    spawns: [],
+)

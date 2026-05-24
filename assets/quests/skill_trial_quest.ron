@@ -1,0 +1,118 @@
+#![enable(implicit_some)]
+
+// ─────────────────────────────────────────────────────────────────
+// skill_trial_quest — 원소의 시험장
+//
+// 액티브 스킬 활용 퀘스트. 스킬(파이어볼/점멸/치유)은 이미 코드로 구현돼
+// 있으므로(src/modules/skill), 이 퀘스트는 스킬 사용을 "서사·레벨디자인"으로
+// 강하게 유도한다 — 코드로 스킬 사용을 강제하진 않는다.
+//   - giver: 전투마법사(battlemage) — villager 레지스트리에 새로 추가된 NPC.
+//     기존 어떤 퀘스트의 giver 도 아니다(겹침 없음). quest_for_giver 1:1 충족.
+//   - 테마: 마법 스승이 옛 마법사들이 남긴 '원소의 시험장'으로 제자를 보낸다.
+//     시험장에는 부술 수 있는 돌벽(파이어볼)과 물길·틈(점멸)이 목표물을
+//     가로막고, 험한 지형에서 다치기 쉽다(치유). 안쪽에 '비전의 초점'이 있다.
+//   - 수락 시: OpenPortal 로 시험장(Named "skill_trial", coastal 생성기 —
+//     물길/해자와 파괴가능 지형이 함께 나오는 수상 맵)을 열고, 험지 생존을
+//     돕도록 체력 물약을 쥐여 준다. objective/대사로 "파괴가능한 벽은 파이어볼
+//     (1)로 부수고, 물·틈은 점멸(2)로 건너고, 위험하면 치유(3)하라(MP 소모)"를
+//     핍진성 있게 안내한다.
+//   - 시험장 안의 '비전의 초점'(arcane_focus)을 회수(HasItem) → 자동으로 귀환
+//     단계로 → 전투마법사에게 돌아가 보상.
+//
+// 사용 기능(전부 기존 메커니즘 재사용 — 신규 코드 없음):
+//   QuestAction:    ClearFlag, GiveItems, OpenPortal, RemoveItem, ClosePortal, Log
+//   QuestCondition: HasItem
+//   QuestSpawn:     zone(Named) + phase 조건
+// ─────────────────────────────────────────────────────────────────
+QuestDef(
+    id: "skill_trial_quest",
+    title: "원소의 시험장",
+    giver_npc: "battlemage",
+    initial_phase: "not_started",
+    spawn_chance: 0.6,
+
+    phases: {
+        // ── 1단계: 의뢰 ────────────────────────────────────────
+        "not_started": QuestPhaseDef(
+            dialog: [
+                "자네, 검만 휘두를 줄 알았지 마력을 다루는 법은 모르는 모양이군.",
+                "내가 가르쳐 주지. 손끝에 모은 마나로 세 가지 술법을 쓸 수 있다네.",
+                "숫자 1은 파이어볼 — 불꽃이 터지며 부술 수 있는 벽까지 무너뜨리지. 길을 여는 술법이야.",
+                "숫자 2는 점멸 — 보이는 빈 자리로 순식간에 몸을 옮긴다네. 물길이든 갈라진 틈이든 건너뛰지.",
+                "숫자 3은 치유 — 마나를 깎아 상처를 메운다. 험한 곳일수록 목숨줄이 되어 줄 걸세.",
+                "옛 마법사들이 남긴 '원소의 시험장'이 있어. 안에 '비전의 초점'이 잠들어 있지.",
+                "벽과 물이 그것을 에워싸고 있다네. 술법 없이는 닿을 수 없어. 가서 가져오겠나?",
+            ],
+            objective: Some("전투마법사의 시험 — 술법으로 시험장을 돌파해볼까."),
+        ),
+
+        // ── 2단계: 시험장 돌파 중 ──────────────────────────────
+        "trial": QuestPhaseDef(
+            dialog: [
+                "아직 초점을 손에 넣지 못했나? 조급해 말고 마나를 아껴 쓰게.",
+                "막힌 돌벽은 파이어볼(1)로 부수게. 불꽃이 지형을 갈라낼 걸세.",
+                "물길이나 갈라진 틈은 점멸(2)로 건너뛰게. 보이는 빈 자리라면 닿을 수 있어.",
+                "다치거든 무리하지 말고 치유(3)로 추스르게. 마나가 곧 생명이라네.",
+            ],
+            objective: Some("시험장에 들어가 비전의 초점을 회수하라. 막힌 벽은 파이어볼(1)로 부수고, 물·틈은 점멸(2)로 건너고, 위험하면 치유(3)하라. (스킬은 MP 소모)"),
+        ),
+
+        // ── 3단계: 회수 완료, 전투마법사에게 귀환 ──────────────
+        "passed": QuestPhaseDef(
+            dialog: [
+                "돌아왔군! 손에 든 그 빛... 설마 정말로 닿았나?",
+                "비전의 초점이라네. 벽을 부수고 물을 건넌 자만이 가져올 수 있는 것이지. 합격일세.",
+            ],
+            objective: Some("비전의 초점을 전투마법사에게 가져가라."),
+        ),
+
+        // ── 4단계: 완료 (보상) ─────────────────────────────────
+        "done": QuestPhaseDef(
+            dialog: [
+                "자네는 이제 검사이자 술사일세. 마나를 다루는 자는 길이 막혀도 길을 만든다네.",
+                "약속한 사례일세. 마나가 흐르는 한, 자네 앞을 막을 벽도 물도 없을 거야.",
+                "불꽃으로 길을 열고, 점멸로 건너뛰고, 위기엔 스스로를 치유하게. 그것이 술사의 싸움이야.",
+            ],
+            objective: Some("시험 통과! 술법으로 시험장을 돌파했다."),
+        ),
+    },
+
+    transitions: [
+        // 수락 → 시험장 포탈 개방 + 험지 생존용 물약 지급(안내)
+        Transition(from: "not_started", trigger: Interact,
+            actions: [
+                ClearFlag("skill_trial_cleared"),
+                GiveItems(item: "health_potion", count: 3),
+                Log("전투마법사: 험한 곳일세. 이 물약을 챙기게. 마나가 바닥나거든 치유 대신 마시게나."),
+                OpenPortal(zone: "skill_trial", generator: "coastal", placement: Border),
+                Log("전투마법사: 시험장으로 가는 문을 열었네. 벽은 파이어볼로, 물은 점멸로 — 잊지 말게."),
+            ],
+            to: "trial"),
+
+        // 비전의 초점 회수 시 자동으로 귀환 단계로
+        Transition(from: "trial", trigger: Auto,
+            when: HasItem("arcane_focus"),
+            to: "passed"),
+
+        // 귀환 → 초점 반납 + 시험장 정리(포탈 닫기) + 보상
+        Transition(from: "passed", trigger: Interact,
+            actions: [
+                RemoveItem("arcane_focus"),
+                Log("전투마법사: 약속은 약속이지. 술사의 길에 들어선 자네에게 사례하네."),
+                GiveItems(item: "health_potion", count: 5),
+                GiveItem("philosophers_stone"),
+                ClosePortal("skill_trial"),
+                ClearFlag("skill_trial_cleared"),
+            ],
+            to: "done"),
+    ],
+
+    spawns: [
+        // 비전의 초점 — 돌파 진행 중일 때 시험장에 스폰 (벽·물 너머의 목표물)
+        QuestSpawn(
+            phase: "trial",
+            item: "arcane_focus",
+            zone: Named("skill_trial"),
+        ),
+    ],
+)

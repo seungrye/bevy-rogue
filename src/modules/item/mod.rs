@@ -1705,10 +1705,10 @@ mod tests {
     }
 
     #[test]
-    fn 퀘스트아이템_ron은_35종을_모두_로드한다() {
-        // 기존 33종 + 신규 퀘스트 아이템 2종(wyrm_heart, sealed_relic) = 35종.
+    fn 퀘스트아이템_ron은_36종을_모두_로드한다() {
+        // 기존 35종 + 신규 퀘스트 아이템 1종(arcane_focus, 원소의 시험장 퀘스트 목표) = 36종.
         let registry = qi();
-        assert_eq!(registry.quest_items.len(), 35, "quest_items.ron 에 35 종이 정의되어야 한다");
+        assert_eq!(registry.quest_items.len(), 36, "quest_items.ron 에 36 종이 정의되어야 한다");
     }
 
     #[test]

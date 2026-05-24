@@ -321,4 +321,13 @@
         pickup_message: "봉인된 성물을 회수했다. 무너진 던전의 먼지 속에서 은은한 빛을 머금고 있다.",
         image_path: "scene/open-chest.png",
     ),
+    QuestItemDef(
+        id: "arcane_focus",
+        display_name: "비전의 초점",
+        glyph_ascii: "o",
+        glyph_unicode: "\u{25C9}",
+        glyph_game_icon: "\u{25C9}",
+        pickup_message: "비전의 초점을 손에 넣었다. 부서진 벽과 건너온 물길 너머, 마력이 응결된 결정이 손바닥 위에서 맥동한다.",
+        image_path: "scene/open-chest.png",
+    ),
 ]
