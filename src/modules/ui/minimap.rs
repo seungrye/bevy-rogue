@@ -360,11 +360,15 @@ pub(crate) fn full_map_tile_color(map: &Map, x: i32, y: i32, player_x: usize, pl
         match map.tiles[idx].kind {
             TileKind::Wall => C_VISIBLE_WALL,
             TileKind::Floor => C_VISIBLE_FLOOR,
+            TileKind::Water => C_VISIBLE_WATER,
+            TileKind::Sand => C_VISIBLE_SAND,
         }
     } else {
         match map.tiles[idx].kind {
             TileKind::Wall => C_REVEALED_WALL,
             TileKind::Floor => C_REVEALED_FLOOR,
+            TileKind::Water => C_REVEALED_WATER,
+            TileKind::Sand => C_REVEALED_SAND,
         }
     }
 }
@@ -397,8 +401,12 @@ const C_BORDER: [u8; 4] = [168, 132, 72, 255];
 const C_UNEXPLORED: [u8; 4] = [7, 8, 10, 255];
 const C_VISIBLE_WALL: [u8; 4] = [210, 176, 116, 255];
 const C_VISIBLE_FLOOR: [u8; 4] = [92, 128, 92, 255];
+const C_VISIBLE_WATER: [u8; 4] = [64, 128, 230, 255];
+const C_VISIBLE_SAND: [u8; 4] = [216, 200, 128, 255];
 const C_REVEALED_WALL: [u8; 4] = [84, 68, 48, 255];
 const C_REVEALED_FLOOR: [u8; 4] = [34, 48, 42, 255];
+const C_REVEALED_WATER: [u8; 4] = [26, 51, 92, 255];
+const C_REVEALED_SAND: [u8; 4] = [86, 80, 51, 255];
 const C_PLAYER: [u8; 4] = [255, 228, 64, 255];
 
 /// 미니맵 픽셀 하나가 대표할 월드 타일 좌표를 반환한다.
@@ -433,11 +441,15 @@ pub(crate) fn tile_color(map: &Map, x: i32, y: i32, player_x: usize, player_y: u
         match map.tiles[idx].kind {
             TileKind::Wall => C_VISIBLE_WALL,
             TileKind::Floor => C_VISIBLE_FLOOR,
+            TileKind::Water => C_VISIBLE_WATER,
+            TileKind::Sand => C_VISIBLE_SAND,
         }
     } else if map.tiles[idx].revealed {
         match map.tiles[idx].kind {
             TileKind::Wall => C_REVEALED_WALL,
             TileKind::Floor => C_REVEALED_FLOOR,
+            TileKind::Water => C_REVEALED_WATER,
+            TileKind::Sand => C_REVEALED_SAND,
         }
     } else {
         C_UNEXPLORED
@@ -567,17 +579,48 @@ fn update_minimap(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modules::map::{tile_to_world_coords, MapResource};
+
+    // ── AssetServer/이미지가 필요한 렌더 시스템용 App 하네스 ──
+    fn 렌더_하네스() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<Font>();
+        app.init_asset::<Image>();
+        app
+    }
+
+    /// 게임 좌표계에서 (tx, ty) 타일 중심에 놓이는 플레이어 Transform 을 만든다.
+    fn 플레이어_트랜스폼(tx: usize, ty: usize) -> Transform {
+        Transform::from_translation(tile_to_world_coords(tx, ty).extend(0.0))
+    }
+
+    /// 테스트용 빈 미니맵 이미지(MINIMAP_SIDE x MINIMAP_SIDE, Rgba8).
+    fn 빈_미니맵_이미지() -> Image {
+        Image::new_fill(
+            Extent3d { width: MINIMAP_SIDE, height: MINIMAP_SIDE, ..default() },
+            TextureDimension::D2,
+            &[0, 0, 0, 0],
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::MAIN_WORLD,
+        )
+    }
+
+    fn 픽셀(image: &Image, x: u32, y: u32) -> [u8; 4] {
+        let idx = (y * MINIMAP_SIDE + x) as usize * 4;
+        [image.data[idx], image.data[idx + 1], image.data[idx + 2], image.data[idx + 3]]
+    }
+
+    // ── 다이아몬드 형태 판정 ──────────────────────────────────────────────
 
     #[test]
-    fn center_is_inside_diamond() {
-        assert!(!is_outside_diamond(
-            MINIMAP_RADIUS as u32,
-            MINIMAP_RADIUS as u32
-        ));
+    fn 다이아몬드_중심점은_내부로_판정된다() {
+        assert!(!is_outside_diamond(MINIMAP_RADIUS as u32, MINIMAP_RADIUS as u32));
     }
 
     #[test]
-    fn corner_is_outside_diamond() {
+    fn 다이아몬드의_네_모서리는_바깥으로_판정된다() {
         assert!(is_outside_diamond(0, 0));
         assert!(is_outside_diamond(MINIMAP_SIDE - 1, 0));
         assert!(is_outside_diamond(0, MINIMAP_SIDE - 1));
@@ -585,9 +628,8 @@ mod tests {
     }
 
     #[test]
-    fn cardinal_tips_are_inside_diamond() {
+    fn 상하좌우_끝점은_다이아몬드_바깥이_아니다() {
         let r = MINIMAP_RADIUS as u32;
-        // 상하좌우 끝점은 경계(border)에 해당
         assert!(!is_outside_diamond(r, 0));
         assert!(!is_outside_diamond(r, MINIMAP_SIDE - 1));
         assert!(!is_outside_diamond(0, r));
@@ -595,7 +637,7 @@ mod tests {
     }
 
     #[test]
-    fn cardinal_tips_are_on_border() {
+    fn 상하좌우_끝점은_다이아몬드_테두리에_놓인다() {
         let r = MINIMAP_RADIUS as u32;
         assert!(is_diamond_border(r, 0));
         assert!(is_diamond_border(r, MINIMAP_SIDE - 1));
@@ -604,28 +646,35 @@ mod tests {
     }
 
     #[test]
-    fn center_is_not_border() {
-        assert!(!is_diamond_border(
-            MINIMAP_RADIUS as u32,
-            MINIMAP_RADIUS as u32
-        ));
+    fn 다이아몬드_중심점은_테두리가_아니다() {
+        assert!(!is_diamond_border(MINIMAP_RADIUS as u32, MINIMAP_RADIUS as u32));
     }
 
     #[test]
-    fn display_size_is_positive() {
+    fn 테두리_픽셀은_다이아몬드_내부에_속한다() {
+        // 테두리 픽셀은 is_diamond_border 가 참이면서 is_outside_diamond 는 거짓이어야 한다.
+        let r = MINIMAP_RADIUS as u32;
+        assert!(is_diamond_border(r, 0));
+        assert!(!is_outside_diamond(r, 0));
+    }
+
+    #[test]
+    fn 미니맵_표시크기와_변길이는_양수다() {
         assert!(MINIMAP_DISPLAY_SIZE > 0.0);
         assert!(MINIMAP_SIDE > 0);
     }
 
+    // ── 픽셀↔타일 좌표 변환 ───────────────────────────────────────────────
+
     #[test]
-    fn minimap_pixel_to_world_tile_center_returns_player_tile() {
+    fn 미니맵_중앙픽셀은_플레이어_타일을_가리킨다() {
         let tile =
             minimap_pixel_to_world_tile(40, 50, MINIMAP_RADIUS as u32, MINIMAP_RADIUS as u32, 1.0);
         assert_eq!(tile, (40, 50));
     }
 
     #[test]
-    fn minimap_pixel_to_world_tile_zoomed_out_samples_farther_tile() {
+    fn 줌아웃하면_미니맵_픽셀은_더_먼_타일을_샘플링한다() {
         let tile = minimap_pixel_to_world_tile(
             40,
             50,
@@ -636,27 +685,37 @@ mod tests {
         assert_eq!(tile, (44, 56));
     }
 
+    // ── tile_color ───────────────────────────────────────────────────────
+
     #[test]
-    fn tile_color_out_of_bounds_returns_unexplored() {
+    fn 미니맵_범위밖_타일은_미탐험색이다() {
         let map = Map::new(10, 10);
         assert_eq!(tile_color(&map, -1, 0, 0, 0), C_UNEXPLORED);
         assert_eq!(tile_color(&map, 10, 0, 0, 0), C_UNEXPLORED);
     }
 
     #[test]
-    fn tile_color_unrevealed_returns_unexplored() {
+    fn 미니맵의_세로_범위밖_타일도_미탐험색이다() {
+        // x 분기뿐 아니라 y 경계 분기도 양쪽으로 도달시킨다.
+        let map = Map::new(10, 10);
+        assert_eq!(tile_color(&map, 0, -1, 0, 0), C_UNEXPLORED);
+        assert_eq!(tile_color(&map, 0, 10, 0, 0), C_UNEXPLORED);
+    }
+
+    #[test]
+    fn 미니맵에서_미탐험_타일은_미탐험색이다() {
         let map = Map::new(10, 10);
         assert_eq!(tile_color(&map, 5, 5, 0, 0), C_UNEXPLORED);
     }
 
     #[test]
-    fn tile_color_player_returns_yellow() {
+    fn 미니맵에서_플레이어_타일은_노란색이다() {
         let map = Map::new(10, 10);
         assert_eq!(tile_color(&map, 3, 3, 3, 3), C_PLAYER);
     }
 
     #[test]
-    fn tile_color_visible_wall_and_floor_are_distinct() {
+    fn 미니맵에서_보이는_벽과_바닥은_색이_구분된다() {
         let mut map = Map::new(10, 10);
         map.set_tile(4, 4, TileKind::Wall);
         map.set_tile(5, 5, TileKind::Floor);
@@ -671,7 +730,7 @@ mod tests {
     }
 
     #[test]
-    fn tile_color_revealed_wall_and_floor_are_distinct() {
+    fn 미니맵에서_탐험된_벽과_바닥은_색이_구분된다() {
         let mut map = Map::new(10, 10);
         map.set_tile(4, 4, TileKind::Wall);
         map.set_tile(5, 5, TileKind::Floor);
@@ -686,17 +745,35 @@ mod tests {
     }
 
     #[test]
-    fn border_pixels_are_separate_from_tile_mapping() {
-        // border 픽셀(다이아몬드 테두리)은 is_diamond_border로 식별된다
-        // 모든 border 픽셀은 is_outside_diamond가 false여야 한다 (다이아몬드 내부)
-        let r = MINIMAP_RADIUS as u32;
-        assert!(is_diamond_border(r, 0));
-        assert!(!is_outside_diamond(r, 0));
+    fn 미니맵은_물과_모래에_고유한_색을_매핑한다() {
+        let mut map = Map::new(10, 10);
+        map.set_tile(2, 2, TileKind::Water);
+        map.set_tile(3, 3, TileKind::Sand);
+        let water_idx = map.index(2, 2);
+        let sand_idx = map.index(3, 3);
+
+        // 보이는 상태
+        map.tiles[water_idx].visible = true;
+        map.tiles[sand_idx].visible = true;
+        assert_eq!(tile_color(&map, 2, 2, 0, 0), C_VISIBLE_WATER);
+        assert_eq!(tile_color(&map, 3, 3, 0, 0), C_VISIBLE_SAND);
+
+        // 탐험만 된 상태
+        map.tiles[water_idx].visible = false;
+        map.tiles[sand_idx].visible = false;
+        map.tiles[water_idx].revealed = true;
+        map.tiles[sand_idx].revealed = true;
+        assert_eq!(tile_color(&map, 2, 2, 0, 0), C_REVEALED_WATER);
+        assert_eq!(tile_color(&map, 3, 3, 0, 0), C_REVEALED_SAND);
+
+        // 다른 타일들과 색이 구분돼야 한다
+        assert_ne!(C_VISIBLE_WATER, C_VISIBLE_SAND);
+        assert_ne!(C_VISIBLE_WATER, C_VISIBLE_FLOOR);
+        assert_ne!(C_VISIBLE_SAND, C_VISIBLE_WALL);
     }
 
     #[test]
-    fn generator_hint_font_sizes_are_smaller_than_minimap() {
-        // 생성기 이름·Tab 힌트는 미니맵 이미지보다 작아야 한다
+    fn 생성기_힌트_폰트크기는_미니맵보다_작다() {
         let name_font_size: f32 = 13.0;
         let hint_font_size: f32 = 11.0;
         assert!(name_font_size < MINIMAP_DISPLAY_SIZE);
@@ -704,7 +781,7 @@ mod tests {
     }
 
     #[test]
-    fn full_map_open_toggle() {
+    fn 전체맵_열림상태는_토글하면_뒤집힌다() {
         let mut open = FullMapOpen(false);
         open.0 = !open.0;
         assert!(open.0);
@@ -712,20 +789,63 @@ mod tests {
         assert!(!open.0);
     }
 
+    // ── DiscoveredMarkers ────────────────────────────────────────────────
+
     #[test]
-    fn discovered_markers_no_duplicate() {
+    fn 동일_위치종류존_마커는_중복으로_추가되지_않는다() {
         let mut dm = DiscoveredMarkers::default();
         dm.add(5, 5, MarkerKind::Portal, ZoneId::Town);
         dm.add(5, 5, MarkerKind::Portal, ZoneId::Town);
-        assert_eq!(
-            dm.0.len(),
-            1,
-            "동일 위치·종류의 마커는 중복 추가되지 않아야 한다"
-        );
+        assert_eq!(dm.0.len(), 1, "동일 위치·종류의 마커는 중복 추가되지 않아야 한다");
     }
 
     #[test]
-    fn discovered_markers_different_kind_allowed() {
+    fn add는_같은_x라도_y가_다르면_각각_추가된다() {
+        // add() 의 중복검사 클로저에서 tile_y 비교가 거짓이 되는 경로.
+        let mut dm = DiscoveredMarkers::default();
+        dm.add(5, 5, MarkerKind::Portal, ZoneId::Town);
+        dm.add(5, 6, MarkerKind::Portal, ZoneId::Town);
+        assert_eq!(dm.0.len(), 2);
+    }
+
+    #[test]
+    fn remove_at은_같은_x라도_y가_다르면_제거하지_않는다() {
+        // remove_at retain 클로저에서 tile_y 비교가 거짓이 되는 경로.
+        let mut dm = DiscoveredMarkers::default();
+        dm.add(5, 5, MarkerKind::Portal, ZoneId::Town);
+        dm.remove_at(5, 9, MarkerKind::Portal, &ZoneId::Town);
+        assert_eq!(dm.0.len(), 1, "y 가 다르면 남아 있어야 한다");
+    }
+
+    #[test]
+    fn remove_actor는_actor가_같아도_종류가_다르면_제거하지_않는다() {
+        // remove_actor retain 클로저에서 actor 는 일치하지만 kind 비교가 거짓이 되는 경로.
+        let mut dm = DiscoveredMarkers::default();
+        dm.update_actor_position("엘렌", MarkerKind::QuestGiver, ZoneId::Town, 5, 5);
+        dm.remove_actor("엘렌", MarkerKind::QuestTarget, &ZoneId::Town);
+        assert_eq!(dm.0.len(), 1, "종류가 다르면 남아 있어야 한다");
+    }
+
+    #[test]
+    fn remove_actor는_actor도_종류도_같으면_제거한다() {
+        // remove_actor retain 클로저의 kind 비교가 참이 되는 경로.
+        let mut dm = DiscoveredMarkers::default();
+        dm.update_actor_position("엘렌", MarkerKind::QuestGiver, ZoneId::Town, 5, 5);
+        dm.remove_actor("엘렌", MarkerKind::QuestGiver, &ZoneId::Town);
+        assert!(dm.0.is_empty(), "actor·종류·존이 모두 같으면 제거돼야 한다");
+    }
+
+    #[test]
+    fn update_actor_position은_actor가_같아도_종류가_다르면_새_마커를_추가한다() {
+        // find 클로저에서 actor 는 일치하지만 kind 비교가 거짓이 되어 새 마커가 추가되는 경로.
+        let mut dm = DiscoveredMarkers::default();
+        dm.update_actor_position("엘렌", MarkerKind::QuestGiver, ZoneId::Town, 5, 5);
+        dm.update_actor_position("엘렌", MarkerKind::QuestTarget, ZoneId::Town, 9, 9);
+        assert_eq!(dm.0.len(), 2, "같은 actor 라도 종류가 다르면 별도 마커");
+    }
+
+    #[test]
+    fn 같은_위치라도_종류가_다르면_각각_추가된다() {
         let mut dm = DiscoveredMarkers::default();
         dm.add(5, 5, MarkerKind::Portal, ZoneId::Town);
         dm.add(5, 5, MarkerKind::QuestGiver, ZoneId::Town);
@@ -734,7 +854,7 @@ mod tests {
     }
 
     #[test]
-    fn discovered_markers_different_zone_allowed() {
+    fn 같은_위치종류라도_존이_다르면_각각_추가된다() {
         let mut dm = DiscoveredMarkers::default();
         dm.add(5, 5, MarkerKind::Portal, ZoneId::Town);
         dm.add(5, 5, MarkerKind::Portal, ZoneId::Forest);
@@ -742,7 +862,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_at_only_removes_matching_marker() {
+    fn remove_at은_위치종류가_정확히_일치하는_마커만_제거한다() {
         let mut dm = DiscoveredMarkers::default();
         dm.add(5, 5, MarkerKind::QuestTarget, ZoneId::Town);
         dm.add(5, 5, MarkerKind::QuestGiver, ZoneId::Town);
@@ -754,11 +874,10 @@ mod tests {
     }
 
     #[test]
-    fn update_actor_position_moves_existing_marker() {
+    fn update_actor_position은_같은_actor의_위치만_갱신한다() {
         let mut dm = DiscoveredMarkers::default();
         dm.update_actor_position("엘렌", MarkerKind::QuestGiver, ZoneId::Town, 5, 5);
         assert_eq!(dm.0.len(), 1);
-        // 같은 actor 의 위치 갱신
         dm.update_actor_position("엘렌", MarkerKind::QuestGiver, ZoneId::Town, 7, 8);
         assert_eq!(dm.0.len(), 1, "같은 actor 는 위치만 갱신, 새 마커 추가 안 됨");
         assert_eq!(dm.0[0].tile_x, 7);
@@ -766,7 +885,7 @@ mod tests {
     }
 
     #[test]
-    fn update_actor_position_adds_new_for_different_actor() {
+    fn update_actor_position은_다른_actor면_새_마커를_추가한다() {
         let mut dm = DiscoveredMarkers::default();
         dm.update_actor_position("엘렌", MarkerKind::QuestGiver, ZoneId::Town, 5, 5);
         dm.update_actor_position("장로", MarkerKind::QuestGiver, ZoneId::Town, 8, 8);
@@ -774,7 +893,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_actor_removes_only_matching_actor() {
+    fn remove_actor는_지정한_actor의_마커만_제거한다() {
         let mut dm = DiscoveredMarkers::default();
         dm.update_actor_position("엘렌", MarkerKind::QuestGiver, ZoneId::Town, 5, 5);
         dm.update_actor_position("장로", MarkerKind::QuestGiver, ZoneId::Town, 8, 8);
@@ -783,23 +902,24 @@ mod tests {
         assert_eq!(dm.0[0].actor.as_deref(), Some("장로"));
     }
 
+    // ── full_map_tile_color ──────────────────────────────────────────────
+
     #[test]
-    fn full_map_tile_color_unrevealed_returns_black() {
+    fn 전체맵에서_미탐험_타일은_검정이다() {
         let map = Map::new(10, 10);
-        // revealed 안 된 wall — 검정
         let c = full_map_tile_color(&map, 3, 3, 5, 5);
         assert_eq!(c, [0, 0, 0, 255]);
     }
 
     #[test]
-    fn full_map_tile_color_player_returns_player_color() {
+    fn 전체맵에서_플레이어_타일은_플레이어색이다() {
         let map = Map::new(10, 10);
         let c = full_map_tile_color(&map, 5, 5, 5, 5);
         assert_eq!(c, C_PLAYER);
     }
 
     #[test]
-    fn full_map_tile_color_revealed_floor_distinct_from_wall() {
+    fn 전체맵에서_탐험된_바닥과_벽은_색이_구분된다() {
         let mut map = Map::new(10, 10);
         let f_idx = map.index(3, 3);
         map.tiles[f_idx].kind = TileKind::Floor;
@@ -809,17 +929,59 @@ mod tests {
         let cf = full_map_tile_color(&map, 3, 3, 0, 0);
         let cw = full_map_tile_color(&map, 4, 3, 0, 0);
         assert_ne!(cf, cw);
+        assert_eq!(cf, C_REVEALED_FLOOR);
+        assert_eq!(cw, C_REVEALED_WALL);
     }
 
     #[test]
-    fn full_map_tile_color_oob_returns_black() {
+    fn 전체맵에서_탐험된_물과_모래는_고유한_색이다() {
+        let mut map = Map::new(10, 10);
+        map.set_tile(2, 2, TileKind::Water);
+        map.set_tile(3, 3, TileKind::Sand);
+        let wi = map.index(2, 2);
+        let si = map.index(3, 3);
+        map.tiles[wi].revealed = true;
+        map.tiles[si].revealed = true;
+        assert_eq!(full_map_tile_color(&map, 2, 2, 0, 0), C_REVEALED_WATER);
+        assert_eq!(full_map_tile_color(&map, 3, 3, 0, 0), C_REVEALED_SAND);
+    }
+
+    #[test]
+    fn 전체맵에서_보이는_타일은_네_지형색을_모두_가진다() {
+        // visible 분기의 Wall/Floor/Water/Sand arm 을 전부 도달시킨다.
+        let mut map = Map::new(10, 10);
+        let kinds = [
+            (1, 1, TileKind::Wall, C_VISIBLE_WALL),
+            (2, 2, TileKind::Floor, C_VISIBLE_FLOOR),
+            (3, 3, TileKind::Water, C_VISIBLE_WATER),
+            (4, 4, TileKind::Sand, C_VISIBLE_SAND),
+        ];
+        for &(x, y, kind, _) in &kinds {
+            map.set_tile(x, y, kind);
+            let idx = map.index(x, y);
+            // full_map_tile_color 는 revealed 가 아니면 검정을 먼저 반환하므로 둘 다 켠다.
+            map.tiles[idx].revealed = true;
+            map.tiles[idx].visible = true;
+        }
+        for &(x, y, _, expected) in &kinds {
+            assert_eq!(full_map_tile_color(&map, x as i32, y as i32, 0, 0), expected);
+        }
+    }
+
+    #[test]
+    fn 전체맵에서_범위밖_타일은_검정이다() {
         let map = Map::new(10, 10);
+        // x<0, y<0, x>=width, y>=height 네 경계 분기를 모두 도달시킨다.
         assert_eq!(full_map_tile_color(&map, -1, 5, 0, 0), [0, 0, 0, 255]);
+        assert_eq!(full_map_tile_color(&map, 5, -1, 0, 0), [0, 0, 0, 255]);
+        assert_eq!(full_map_tile_color(&map, 10, 5, 0, 0), [0, 0, 0, 255]);
         assert_eq!(full_map_tile_color(&map, 5, 10, 0, 0), [0, 0, 0, 255]);
     }
 
+    // ── MapMarker / MarkerKind ───────────────────────────────────────────
+
     #[test]
-    fn legacy_map_marker_without_actor_field_parses() {
+    fn actor필드가_없는_과거_마커_데이터도_파싱된다() {
         // actor 필드 없는 기존 저장 데이터 호환성 (#[serde(default)])
         let legacy = r#"(tile_x: 5, tile_y: 7, kind: Portal, zone: Town)"#;
         let parsed: MapMarker = ron::de::from_str(legacy).expect("legacy 파싱 성공");
@@ -829,17 +991,37 @@ mod tests {
     }
 
     #[test]
-    fn quest_target_marker_uses_distinct_color() {
-        assert_ne!(
-            MarkerKind::QuestTarget.color(),
-            MarkerKind::QuestGiver.color()
-        );
+    fn 퀘스트목표_마커는_퀘스트제공_마커와_색이_다르다() {
+        assert_ne!(MarkerKind::QuestTarget.color(), MarkerKind::QuestGiver.color());
         assert_eq!(MarkerKind::QuestTarget.color(), [255, 0, 255, 255]);
     }
 
     #[test]
-    fn marker_pixel_coords_in_range_for_center_tile() {
-        // 플레이어와 동일 위치 마커는 미니맵 정중앙 픽셀에 놓인다.
+    fn 모든_마커종류는_서로_다른_고유색을_가진다() {
+        // color() 의 다섯 arm 을 모두 도달시키고 색이 전부 다른지 확인한다.
+        let colors = [
+            MarkerKind::QuestGiver.color(),
+            MarkerKind::QuestTarget.color(),
+            MarkerKind::Portal.color(),
+            MarkerKind::StairDown.color(),
+            MarkerKind::StairUp.color(),
+        ];
+        assert_eq!(colors[0], [255, 255, 0, 255]);
+        assert_eq!(colors[1], [255, 0, 255, 255]);
+        assert_eq!(colors[2], [0, 255, 255, 255]);
+        assert_eq!(colors[3], [255, 153, 0, 255]);
+        assert_eq!(colors[4], [128, 255, 128, 255]);
+        for i in 0..colors.len() {
+            for j in (i + 1)..colors.len() {
+                assert_ne!(colors[i], colors[j], "마커 색은 서로 구분돼야 한다");
+            }
+        }
+    }
+
+    // ── marker_pixel_coords ──────────────────────────────────────────────
+
+    #[test]
+    fn 플레이어와_같은_타일_마커는_미니맵_중앙픽셀이다() {
         assert_eq!(
             marker_pixel_coords(40, 50, 40, 50, 1.0),
             Some((MINIMAP_RADIUS as u32, MINIMAP_RADIUS as u32)),
@@ -847,17 +1029,542 @@ mod tests {
     }
 
     #[test]
-    fn marker_pixel_coords_outside_range_returns_none() {
+    fn 가로로_화면밖에_있는_마커는_좌표가_없다() {
+        // mtx 가 음수가 되어 None.
         assert_eq!(marker_pixel_coords(40, 50, 0, 50, 1.0), None);
     }
 
     #[test]
-    fn marker_pixel_at_player_position_is_center() {
-        // 마커가 플레이어 위치에 있으면 미니맵 중앙 픽셀이 된다 — 1 픽셀 마커
-        let center = MINIMAP_RADIUS as u32;
-        assert_eq!(
-            marker_pixel_coords(40, 50, 40, 50, 1.0),
-            Some((center, center))
-        );
+    fn 세로로_화면밖에_있는_마커는_좌표가_없다() {
+        // mty 가 음수가 되어 None — 위쪽 경계 분기.
+        assert_eq!(marker_pixel_coords(40, 50, 40, 0, 1.0), None);
+    }
+
+    #[test]
+    fn 미니맵_변길이를_넘는_위치의_마커는_좌표가_없다() {
+        // mtx/mty 가 MINIMAP_SIDE 이상이 되는 분기 (오른쪽/아래쪽 경계).
+        let far = (MINIMAP_RADIUS as usize) + (MINIMAP_SIDE as usize) + 5;
+        assert_eq!(marker_pixel_coords(0, 100, far, 100, 1.0), None);
+        assert_eq!(marker_pixel_coords(100, 0, 100, far, 1.0), None);
+    }
+
+    #[test]
+    fn 다이아몬드_바깥에_떨어지는_마커는_좌표가_없다() {
+        // 범위 안이지만 다이아몬드 밖이라 None — is_outside_diamond 분기.
+        // 플레이어로부터 대각선으로 RADIUS 보다 멀리 떨어진 위치.
+        let r = MINIMAP_RADIUS as usize;
+        assert_eq!(marker_pixel_coords(40, 50, 40 + r, 50 + r, 1.0), None);
+    }
+
+    #[test]
+    fn 다이아몬드_테두리에_정확히_놓이는_마커는_좌표가_없다() {
+        // is_outside_diamond 는 거짓이지만 is_diamond_border 가 참이라 None 인 분기.
+        // mtx = RADIUS + (mx-px), mty = RADIUS. 오른쪽 끝점(테두리)이 되도록 mx = px + RADIUS.
+        let r = MINIMAP_RADIUS as usize;
+        let (px, py) = (40, 50);
+        assert!(is_diamond_border((MINIMAP_RADIUS + MINIMAP_RADIUS) as u32, MINIMAP_RADIUS as u32));
+        assert_eq!(marker_pixel_coords(px, py, px + r, py, 1.0), None);
+    }
+
+    // ── write_minimap_pixel ──────────────────────────────────────────────
+
+    #[test]
+    fn 미니맵_내부_픽셀쓰기는_해당_픽셀을_색칠한다() {
+        let mut image = 빈_미니맵_이미지();
+        let c = MarkerKind::Portal.color();
+        let center = MINIMAP_RADIUS as i32;
+        write_minimap_pixel(&mut image, center, center, c);
+        assert_eq!(픽셀(&image, center as u32, center as u32), c);
+    }
+
+    #[test]
+    fn 음수좌표_픽셀쓰기는_무시된다() {
+        let mut image = 빈_미니맵_이미지();
+        write_minimap_pixel(&mut image, -1, 5, [9, 9, 9, 9]);
+        write_minimap_pixel(&mut image, 5, -1, [9, 9, 9, 9]);
+        // 아무 픽셀도 바뀌지 않아야 한다.
+        assert!(image.data.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn 변길이를_넘는_좌표_픽셀쓰기는_무시된다() {
+        let mut image = 빈_미니맵_이미지();
+        write_minimap_pixel(&mut image, MINIMAP_SIDE as i32, 5, [9, 9, 9, 9]);
+        write_minimap_pixel(&mut image, 5, MINIMAP_SIDE as i32, [9, 9, 9, 9]);
+        assert!(image.data.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn 다이아몬드_바깥과_테두리_픽셀쓰기는_무시된다() {
+        let mut image = 빈_미니맵_이미지();
+        // 모서리(바깥) + 끝점(테두리)
+        write_minimap_pixel(&mut image, 0, 0, [9, 9, 9, 9]);
+        write_minimap_pixel(&mut image, MINIMAP_RADIUS, 0, [9, 9, 9, 9]);
+        assert!(image.data.iter().all(|&b| b == 0));
+    }
+
+    // ── setup/spawn 렌더 시스템 (App 하네스) ─────────────────────────────
+
+    #[test]
+    fn 미니맵_셋업은_미니맵이미지_리소스를_삽입한다() {
+        let mut app = 렌더_하네스();
+        app.add_systems(Startup, setup_minimap);
+        app.update();
+        let res = app.world.resource::<MinimapImage>();
+        let images = app.world.resource::<Assets<Image>>();
+        let img = images.get(&res.0).expect("미니맵 이미지 존재");
+        assert_eq!(img.texture_descriptor.size.width, MINIMAP_SIDE);
+        assert_eq!(img.texture_descriptor.size.height, MINIMAP_SIDE);
+    }
+
+    #[test]
+    fn 전체맵_셋업은_전체맵이미지_리소스를_삽입한다() {
+        let mut app = 렌더_하네스();
+        app.add_systems(Startup, setup_full_map);
+        app.update();
+        let res = app.world.resource::<FullMapImage>();
+        let images = app.world.resource::<Assets<Image>>();
+        let img = images.get(&res.0).expect("전체맵 이미지 존재");
+        assert_eq!(img.texture_descriptor.size.width, FULL_MAP_W);
+        assert_eq!(img.texture_descriptor.size.height, FULL_MAP_H);
+    }
+
+    #[test]
+    fn 미니맵_오버레이_스폰은_오버레이와_생성기이름_노드를_만든다() {
+        let mut app = 렌더_하네스();
+        app.insert_resource(MapGeneratorRegistry::new());
+        app.add_systems(Startup, (setup_minimap, spawn_minimap_overlay.after(setup_minimap)));
+        app.update();
+        assert_eq!(app.world.query::<&MinimapOverlay>().iter(&app.world).count(), 1);
+        assert_eq!(app.world.query::<&GeneratorNameText>().iter(&app.world).count(), 1);
+    }
+
+    #[test]
+    fn 전체맵_오버레이_스폰은_숨김상태의_패널을_만든다() {
+        let mut app = 렌더_하네스();
+        app.add_systems(Startup, (setup_full_map, spawn_full_map_overlay.after(setup_full_map)));
+        app.update();
+        let mut q = app.world.query::<(&FullMapPanel, &Visibility)>();
+        let (_, vis) = q.single(&app.world);
+        assert_eq!(*vis, Visibility::Hidden);
+    }
+
+    // ── toggle_full_map ──────────────────────────────────────────────────
+
+    fn 토글_하네스() -> App {
+        let mut app = App::new();
+        app.insert_resource(ButtonInput::<KeyCode>::default());
+        app.init_resource::<FullMapOpen>();
+        app.add_systems(Update, toggle_full_map);
+        app
+    }
+
+    #[test]
+    fn M키를_누르면_전체맵_열림상태가_뒤집힌다() {
+        let mut app = 토글_하네스();
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyM);
+        app.update();
+        assert!(app.world.resource::<FullMapOpen>().0);
+    }
+
+    #[test]
+    fn M키를_누르지_않으면_전체맵_열림상태는_유지된다() {
+        let mut app = 토글_하네스();
+        app.update();
+        assert!(!app.world.resource::<FullMapOpen>().0);
+    }
+
+    #[test]
+    fn 플레이어가_쓰러진_상태면_M키는_전체맵을_열지_않는다() {
+        let mut app = 토글_하네스();
+        app.world.spawn(crate::modules::combat::Defeated);
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyM);
+        app.update();
+        assert!(!app.world.resource::<FullMapOpen>().0, "쓰러진 동안에는 토글되지 않아야 한다");
+    }
+
+    // ── update_full_map_visibility ───────────────────────────────────────
+
+    fn 가시성_하네스(open: bool) -> App {
+        let mut app = App::new();
+        app.insert_resource(FullMapOpen(open));
+        app.world.spawn((FullMapPanel, Visibility::Hidden));
+        app.add_systems(Update, update_full_map_visibility);
+        app
+    }
+
+    #[test]
+    fn 전체맵이_열리면_패널_가시성이_표시로_바뀐다() {
+        let mut app = 가시성_하네스(true);
+        app.update();
+        let mut q = app.world.query::<(&FullMapPanel, &Visibility)>();
+        assert_eq!(*q.single(&app.world).1, Visibility::Inherited);
+    }
+
+    #[test]
+    fn 전체맵이_닫히면_패널_가시성이_숨김으로_바뀐다() {
+        let mut app = 가시성_하네스(false);
+        // 변경 감지 트리거: 리소스를 한 번 건드린다.
+        app.world.resource_mut::<FullMapOpen>().0 = false;
+        app.update();
+        let mut q = app.world.query::<(&FullMapPanel, &Visibility)>();
+        assert_eq!(*q.single(&app.world).1, Visibility::Hidden);
+    }
+
+    #[test]
+    fn 전체맵_열림상태가_변하지_않으면_가시성을_갱신하지_않는다() {
+        let mut app = 가시성_하네스(true);
+        app.update(); // 첫 update 에서 Inherited 로 변경
+        // 두 번째 update 전에 패널을 숨김으로 직접 바꿔두고, open 은 그대로 둔다.
+        {
+            let mut q = app.world.query::<(&FullMapPanel, &mut Visibility)>();
+            let mut e = q.iter_mut(&mut app.world);
+            let (_, mut vis) = e.next().unwrap();
+            *vis = Visibility::Hidden;
+        }
+        app.update(); // open 이 안 변했으므로 시스템은 일찍 return → 숨김 유지
+        let mut q = app.world.query::<(&FullMapPanel, &Visibility)>();
+        assert_eq!(*q.single(&app.world).1, Visibility::Hidden);
+    }
+
+    #[test]
+    fn 패널이_없으면_가시성_갱신은_조용히_넘어간다() {
+        // 도달 가능: 패널 엔티티가 아직 스폰되지 않은 프레임.
+        let mut app = App::new();
+        app.insert_resource(FullMapOpen(true));
+        app.add_systems(Update, update_full_map_visibility);
+        app.update(); // panic 없이 통과해야 한다
+    }
+
+    // ── update_generator_name ────────────────────────────────────────────
+
+    #[test]
+    fn 생성기가_바뀌면_생성기이름_텍스트가_갱신된다() {
+        let mut app = 렌더_하네스();
+        app.insert_resource(MapGeneratorRegistry::new());
+        app.world.spawn((
+            TextBundle::from_section("초기값", TextStyle::default()),
+            GeneratorNameText,
+        ));
+        app.add_systems(Update, update_generator_name);
+        app.update();
+        let mut q = app.world.query_filtered::<&Text, With<GeneratorNameText>>();
+        // 빈 레지스트리의 current_name() 은 "없음".
+        assert_eq!(q.single(&app.world).sections[0].value, "없음");
+    }
+
+    #[test]
+    fn 이름텍스트_엔티티가_없으면_생성기이름_갱신은_조용히_넘어간다() {
+        // registry 는 막 삽입되어 is_changed 참이지만 GeneratorNameText 엔티티가 없는 경우.
+        // get_single_mut() 이 Err → 내부 if let 의 Err 분기.
+        let mut app = 렌더_하네스();
+        app.insert_resource(MapGeneratorRegistry::new());
+        app.add_systems(Update, update_generator_name);
+        app.update(); // panic 없이 통과해야 한다
+    }
+
+    #[test]
+    fn 생성기가_바뀌지_않은_프레임에는_이름텍스트를_건드리지_않는다() {
+        let mut app = 렌더_하네스();
+        app.insert_resource(MapGeneratorRegistry::new());
+        app.world.spawn((
+            TextBundle::from_section("그대로", TextStyle::default()),
+            GeneratorNameText,
+        ));
+        app.add_systems(Update, update_generator_name);
+        app.update(); // 첫 프레임: is_changed → 갱신
+        // 텍스트를 다시 표식값으로 바꿔두고, 레지스트리는 건드리지 않는다.
+        {
+            let mut q = app.world.query_filtered::<&mut Text, With<GeneratorNameText>>();
+            q.single_mut(&mut app.world).sections[0].value = "표식".into();
+        }
+        app.update(); // is_changed 거짓 → 시스템이 건드리지 않음
+        let mut q = app.world.query_filtered::<&Text, With<GeneratorNameText>>();
+        assert_eq!(q.single(&app.world).sections[0].value, "표식");
+    }
+
+    // ── update_minimap ───────────────────────────────────────────────────
+
+    /// 미니맵 갱신 시스템에 필요한 리소스/엔티티를 모두 갖춘 App.
+    fn 미니맵갱신_하네스(player_tile: (usize, usize)) -> App {
+        let mut app = 렌더_하네스();
+        app.add_systems(Startup, setup_minimap);
+        app.update(); // MinimapImage 삽입
+        let mut map = Map::new(crate::modules::map::MAP_WIDTH, crate::modules::map::MAP_HEIGHT);
+        // 플레이어 주변 일부를 보이게/탐험되게 설정해 색칠 분기를 다양하게 탄다.
+        let (px, py) = player_tile;
+        map.set_tile(px + 1, py, TileKind::Floor);
+        let idx = map.index(px + 1, py);
+        map.tiles[idx].visible = true;
+        map.set_tile(px, py + 1, TileKind::Wall);
+        let idx2 = map.index(px, py + 1);
+        map.tiles[idx2].revealed = true;
+        app.insert_resource(MapResource(map));
+        app.init_resource::<WorldState>();
+        app.init_resource::<DiscoveredMarkers>();
+        app.world.spawn((Player, 플레이어_트랜스폼(px, py)));
+        app.add_systems(Update, update_minimap);
+        app
+    }
+
+    #[test]
+    fn 미니맵_갱신은_중앙에_플레이어_픽셀을_그린다() {
+        let mut app = 미니맵갱신_하네스((40, 25));
+        app.update();
+        let res = app.world.resource::<MinimapImage>().0.clone();
+        let images = app.world.resource::<Assets<Image>>();
+        let img = images.get(&res).unwrap();
+        let c = MINIMAP_RADIUS as u32;
+        assert_eq!(픽셀(img, c, c), C_PLAYER, "중앙 픽셀은 플레이어색이어야 한다");
+    }
+
+    #[test]
+    fn 미니맵_갱신은_현재존_마커를_단일픽셀로_그린다() {
+        let mut app = 미니맵갱신_하네스((40, 25));
+        // 플레이어 바로 옆(다이아몬드 내부)에 포털 마커를 둔다.
+        app.world.resource_mut::<DiscoveredMarkers>()
+            .add(41, 25, MarkerKind::Portal, ZoneId::Town);
+        app.update();
+        let res = app.world.resource::<MinimapImage>().0.clone();
+        let images = app.world.resource::<Assets<Image>>();
+        let img = images.get(&res).unwrap();
+        let Some((mx, my)) = marker_pixel_coords(40, 25, 41, 25, 1.0) else {
+            panic!("마커가 미니맵 범위 안에 있어야 한다");
+        };
+        assert_eq!(픽셀(img, mx, my), MarkerKind::Portal.color());
+    }
+
+    #[test]
+    fn 다른_존의_마커는_미니맵에_그려지지_않는다() {
+        let mut app = 미니맵갱신_하네스((40, 25));
+        // 현재 존은 Town. Forest 마커는 무시되어야 한다.
+        app.world.resource_mut::<DiscoveredMarkers>()
+            .add(41, 25, MarkerKind::Portal, ZoneId::Forest);
+        app.update();
+        let res = app.world.resource::<MinimapImage>().0.clone();
+        let images = app.world.resource::<Assets<Image>>();
+        let img = images.get(&res).unwrap();
+        let (mx, my) = marker_pixel_coords(40, 25, 41, 25, 1.0).unwrap();
+        // 옆 타일은 미탐험이라 마커색이 아니라 C_UNEXPLORED 여야 한다.
+        assert_ne!(픽셀(img, mx, my), MarkerKind::Portal.color());
+    }
+
+    #[test]
+    fn 다이아몬드_범위밖의_마커는_미니맵에_그려지지_않는다() {
+        // marker_pixel_coords 가 None 을 반환해 continue 하는 경로.
+        let mut app = 미니맵갱신_하네스((40, 25));
+        // 플레이어로부터 RADIUS 보다 훨씬 먼 마커 (화면 밖).
+        app.world.resource_mut::<DiscoveredMarkers>()
+            .add(0, 25, MarkerKind::Portal, ZoneId::Town);
+        app.update(); // panic 없이 통과 (continue 분기)
+        assert!(marker_pixel_coords(40, 25, 0, 25, 1.0).is_none());
+    }
+
+    #[test]
+    fn 미니맵이_숨김상태면_텍스처를_갱신하지_않는다() {
+        let mut app = 미니맵갱신_하네스((40, 25));
+        // 숨김 오버레이 추가.
+        app.world.spawn((MinimapOverlay, Visibility::Hidden));
+        // 이미지를 표식 바이트로 채워두고, 시스템이 건드리지 않았는지 확인.
+        let res = app.world.resource::<MinimapImage>().0.clone();
+        {
+            let mut images = app.world.resource_mut::<Assets<Image>>();
+            let img = images.get_mut(&res).unwrap();
+            for b in img.data.iter_mut() { *b = 7; }
+        }
+        app.update();
+        let images = app.world.resource::<Assets<Image>>();
+        let img = images.get(&res).unwrap();
+        assert!(img.data.iter().all(|&b| b == 7), "숨김 상태면 텍스처가 그대로여야 한다");
+    }
+
+    #[test]
+    fn 미니맵_오버레이가_보이는_상태면_텍스처를_갱신한다() {
+        // 오버레이가 존재하고 Hidden 이 아니면 숨김 분기를 통과해 정상 갱신해야 한다.
+        let mut app = 미니맵갱신_하네스((40, 25));
+        app.world.spawn((MinimapOverlay, Visibility::Inherited));
+        app.update();
+        let res = app.world.resource::<MinimapImage>().0.clone();
+        let images = app.world.resource::<Assets<Image>>();
+        let img = images.get(&res).unwrap();
+        let c = MINIMAP_RADIUS as u32;
+        assert_eq!(픽셀(img, c, c), C_PLAYER, "보이는 상태면 정상 갱신돼야 한다");
+    }
+
+    #[test]
+    fn 미니맵_이미지_핸들이_무효면_조용히_넘어간다() {
+        // 도달 가능한 방어 분기: MinimapImage 가 가리키는 에셋이 제거된 경우.
+        let mut app = 미니맵갱신_하네스((40, 25));
+        let res = app.world.resource::<MinimapImage>().0.clone();
+        app.world.resource_mut::<Assets<Image>>().remove(&res);
+        app.update(); // images.get_mut 이 None → 일찍 return, panic 없음
+    }
+
+    #[test]
+    fn 플레이어가_없으면_미니맵_갱신은_조용히_넘어간다() {
+        let mut app = 렌더_하네스();
+        app.add_systems(Startup, setup_minimap);
+        app.update();
+        app.insert_resource(MapResource(Map::new(
+            crate::modules::map::MAP_WIDTH,
+            crate::modules::map::MAP_HEIGHT,
+        )));
+        app.init_resource::<WorldState>();
+        app.init_resource::<DiscoveredMarkers>();
+        app.add_systems(Update, update_minimap);
+        app.update(); // 플레이어 쿼리 실패 → 일찍 return, panic 없음
+    }
+
+    #[test]
+    fn 위치가_같아도_마커가_바뀌면_미니맵을_다시_그린다() {
+        // 535 행: Some(current_pos) == last_pos 는 참이지만 마커가 바뀌어
+        // !markers.is_changed() 가 거짓 → early return 하지 않고 다시 그린다.
+        let mut app = 미니맵갱신_하네스((40, 25));
+        app.update(); // 첫 갱신: last_pos 설정
+        // 같은 위치에서 마커 추가 (markers is_changed) 후 텍스처를 표식으로 덮어둔다.
+        app.world.resource_mut::<DiscoveredMarkers>()
+            .add(41, 25, MarkerKind::Portal, ZoneId::Town);
+        let res = app.world.resource::<MinimapImage>().0.clone();
+        {
+            let mut images = app.world.resource_mut::<Assets<Image>>();
+            for b in images.get_mut(&res).unwrap().data.iter_mut() { *b = 9; }
+        }
+        app.update(); // 마커 변경 감지 → 다시 그림
+        let (mx, my) = marker_pixel_coords(40, 25, 41, 25, 1.0).unwrap();
+        let images = app.world.resource::<Assets<Image>>();
+        let img = images.get(&res).unwrap();
+        assert_eq!(픽셀(img, mx, my), MarkerKind::Portal.color(), "마커가 새로 그려져야 한다");
+    }
+
+    #[test]
+    fn 플레이어가_같은_타일에_머물면_미니맵을_다시_그리지_않는다() {
+        let mut app = 미니맵갱신_하네스((40, 25));
+        app.update(); // 첫 갱신 (last_pos 설정)
+        // 텍스처를 표식으로 덮어쓰고, 같은 위치에서 다시 update.
+        let res = app.world.resource::<MinimapImage>().0.clone();
+        {
+            let mut images = app.world.resource_mut::<Assets<Image>>();
+            for b in images.get_mut(&res).unwrap().data.iter_mut() { *b = 3; }
+        }
+        app.update(); // 위치 동일 + 마커 불변 → 일찍 return
+        let images = app.world.resource::<Assets<Image>>();
+        assert!(images.get(&res).unwrap().data.iter().all(|&b| b == 3));
+    }
+
+    // ── update_full_map_image ────────────────────────────────────────────
+
+    fn 전체맵갱신_하네스(open: bool, player_tile: (usize, usize)) -> App {
+        let mut app = 렌더_하네스();
+        app.add_systems(Startup, setup_full_map);
+        app.update(); // FullMapImage 삽입
+        app.insert_resource(FullMapOpen(open));
+        let mut map = Map::new(crate::modules::map::MAP_WIDTH, crate::modules::map::MAP_HEIGHT);
+        let (px, py) = player_tile;
+        let idx = map.index(px + 1, py);
+        map.set_tile(px + 1, py, TileKind::Floor);
+        map.tiles[idx].revealed = true;
+        app.insert_resource(MapResource(map));
+        app.init_resource::<WorldState>();
+        app.init_resource::<DiscoveredMarkers>();
+        app.world.spawn((Player, 플레이어_트랜스폼(px, py)));
+        app.add_systems(Update, update_full_map_image);
+        app
+    }
+
+    #[test]
+    fn 전체맵이_열려있으면_플레이어_픽셀을_그린다() {
+        let (px, py) = (40, 25);
+        let mut app = 전체맵갱신_하네스(true, (px, py));
+        app.update();
+        let res = app.world.resource::<FullMapImage>().0.clone();
+        let images = app.world.resource::<Assets<Image>>();
+        let img = images.get(&res).unwrap();
+        let pixel_y = FULL_MAP_H as usize - 1 - py;
+        let idx = (pixel_y * FULL_MAP_W as usize + px) * 4;
+        assert_eq!(&img.data[idx..idx + 4], &C_PLAYER);
+    }
+
+    #[test]
+    fn 전체맵이_열려있으면_현재존_마커를_그린다() {
+        let (px, py) = (40, 25);
+        let mut app = 전체맵갱신_하네스(true, (px, py));
+        app.world.resource_mut::<DiscoveredMarkers>()
+            .add(10, 10, MarkerKind::StairDown, ZoneId::Town);
+        app.update();
+        let res = app.world.resource::<FullMapImage>().0.clone();
+        let images = app.world.resource::<Assets<Image>>();
+        let img = images.get(&res).unwrap();
+        let pixel_y = FULL_MAP_H as usize - 1 - 10;
+        let idx = (pixel_y * FULL_MAP_W as usize + 10) * 4;
+        assert_eq!(&img.data[idx..idx + 4], &MarkerKind::StairDown.color());
+    }
+
+    #[test]
+    fn 전체맵의_범위밖_마커는_무시된다() {
+        // marker.tile_x/y 가 FULL_MAP 범위를 넘으면 continue.
+        let mut app = 전체맵갱신_하네스(true, (40, 25));
+        app.world.resource_mut::<DiscoveredMarkers>().0.push(MapMarker {
+            tile_x: FULL_MAP_W as usize + 10,
+            tile_y: 5,
+            kind: MarkerKind::Portal,
+            zone: ZoneId::Town,
+            actor: None,
+        });
+        app.world.resource_mut::<DiscoveredMarkers>().0.push(MapMarker {
+            tile_x: 5,
+            tile_y: FULL_MAP_H as usize + 10,
+            kind: MarkerKind::Portal,
+            zone: ZoneId::Town,
+            actor: None,
+        });
+        app.update(); // panic 없이 통과 (범위 검사 continue)
+    }
+
+    #[test]
+    fn 전체맵이_닫혀있으면_이미지를_갱신하지_않는다() {
+        let mut app = 전체맵갱신_하네스(false, (40, 25));
+        let res = app.world.resource::<FullMapImage>().0.clone();
+        {
+            let mut images = app.world.resource_mut::<Assets<Image>>();
+            for b in images.get_mut(&res).unwrap().data.iter_mut() { *b = 5; }
+        }
+        app.update(); // open.0 == false → 일찍 return
+        let images = app.world.resource::<Assets<Image>>();
+        assert!(images.get(&res).unwrap().data.iter().all(|&b| b == 5));
+    }
+
+    #[test]
+    fn 전체맵_이미지_핸들이_무효면_조용히_넘어간다() {
+        // 도달 가능한 방어 분기: FullMapImage 가 가리키는 에셋이 제거된 경우.
+        let mut app = 전체맵갱신_하네스(true, (40, 25));
+        let res = app.world.resource::<FullMapImage>().0.clone();
+        app.world.resource_mut::<Assets<Image>>().remove(&res);
+        app.update(); // images.get_mut 이 None → 일찍 return, panic 없음
+    }
+
+    #[test]
+    fn 전체맵에서_플레이어가_없으면_조용히_넘어간다() {
+        let mut app = 렌더_하네스();
+        app.add_systems(Startup, setup_full_map);
+        app.update();
+        app.insert_resource(FullMapOpen(true));
+        app.insert_resource(MapResource(Map::new(
+            crate::modules::map::MAP_WIDTH,
+            crate::modules::map::MAP_HEIGHT,
+        )));
+        app.init_resource::<WorldState>();
+        app.init_resource::<DiscoveredMarkers>();
+        app.add_systems(Update, update_full_map_image);
+        app.update(); // 플레이어 쿼리 실패 → 일찍 return
+    }
+
+    // ── 플러그인 빌드 ─────────────────────────────────────────────────────
+
+    #[test]
+    fn 미니맵_플러그인이_정상적으로_빌드된다() {
+        let mut app = App::new();
+        app.add_plugins(MinimapPlugin);
+        assert!(app.world.get_resource::<DiscoveredMarkers>().is_some());
+        assert!(app.world.get_resource::<FullMapOpen>().is_some());
     }
 }

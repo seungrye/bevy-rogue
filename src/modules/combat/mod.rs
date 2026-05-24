@@ -33,7 +33,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn speed_energy_accumulates_per_turn() {
+    fn 속도_에너지는_매턴_누적된다() {
         let mut s = Speed::new(0.5);
         s.energy += s.value;
         assert!(s.energy < 1.0, "0.5 속도는 첫 턴에 행동 불가");
@@ -42,7 +42,7 @@ mod tests {
     }
 
     #[test]
-    fn speed_fast_acts_twice_per_turn() {
+    fn 속도가_빠르면_한턴에_두번_행동한다() {
         let mut s = Speed::new(2.0);
         s.energy += s.value;
         let mut actions = 0;
@@ -51,7 +51,7 @@ mod tests {
     }
 
     #[test]
-    fn speed_energy_carries_over() {
+    fn 남은_속도에너지는_다음턴으로_이월된다() {
         let mut s = Speed::new(1.5);
         s.energy += s.value; // 1.5
         let mut actions = 0;
@@ -61,22 +61,22 @@ mod tests {
     }
 
     #[test]
-    fn calc_damage_exceeds_defense() {
+    fn 공격력이_방어력보다_크면_차이만큼_피해를_준다() {
         assert_eq!(calc_damage(5, 2), 3);
     }
 
     #[test]
-    fn calc_damage_equals_defense() {
+    fn 공격력과_방어력이_같으면_최소_1피해다() {
         assert_eq!(calc_damage(3, 3), 1);
     }
 
     #[test]
-    fn calc_damage_minimum_is_one() {
+    fn 방어력이_더_높아도_최소_1피해는_보장된다() {
         assert_eq!(calc_damage(1, 10), 1);
     }
 
     #[test]
-    fn calc_damage_zero_defense() {
+    fn 방어력이_0이면_공격력_전부가_피해다() {
         assert_eq!(calc_damage(5, 0), 5);
     }
 }

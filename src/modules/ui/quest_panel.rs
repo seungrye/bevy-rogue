@@ -371,8 +371,10 @@ mod tests {
         sections.iter().map(|s| s.value.as_str()).collect()
     }
 
+    // ── 패널 텍스트 빌더 ─────────────────────────────────────────────────
+
     #[test]
-    fn empty_state_shows_no_quests_message() {
+    fn 진행중인_퀘스트가_없으면_없음_안내가_나온다() {
         let reg = QuestRegistry::default();
         let st  = QuestState::default();
         let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default(), qi());
@@ -381,7 +383,7 @@ mod tests {
     }
 
     #[test]
-    fn active_quest_shows_title_and_objective() {
+    fn 진행중인_퀘스트는_제목과_목표를_보여준다() {
         let (reg, st) = make_registry_and_state("active");
         let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default(), qi());
         let all_text = all_text(sections);
@@ -390,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn active_quest_shows_target_zone_and_progress() {
+    fn 진행중인_퀘스트는_대상_존과_진행도를_보여준다() {
         let (reg, st) = make_registry_and_state("active");
         let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default(), qi());
         let all_text = all_text(sections);
@@ -399,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    fn active_quest_marks_current_zone_when_target_matches_world() {
+    fn 대상존이_현재위치와_같으면_현재위치로_표시한다() {
         let (reg, st) = make_registry_and_state("active");
         let mut world = default_world();
         world.current = ZoneId::Dungeon(2);
@@ -409,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn active_quest_progress_counts_inventory_items() {
+    fn 진행도는_인벤토리의_퀘스트아이템_수를_센다() {
         let (reg, st) = make_registry_and_state("active");
         let mut inventory = default_inventory();
         let _ = qi();
@@ -420,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn ready_quest_hints_giver_dialogue() {
+    fn 제출_준비된_퀘스트는_제공자와_대화하라는_힌트를_준다() {
         let (reg, st) = make_registry_and_state("ready");
         let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default(), qi());
         let all_text = all_text(sections);
@@ -428,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn ready_quest_hints_current_zone_marker_when_giver_discovered() {
+    fn 제공자_마커가_현재존에서_발견되면_미니맵_표시_힌트가_붙는다() {
         let (reg, st) = make_registry_and_state("ready");
         let mut markers = DiscoveredMarkers::default();
         markers.add(4, 5, MarkerKind::QuestGiver, ZoneId::Town);
@@ -440,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn done_quest_shows_completed_mark() {
+    fn 완료된_퀘스트는_완료_표식을_보여준다() {
         let (reg, st) = make_registry_and_state("done");
         let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default(), qi());
         let all_text = all_text(sections);
@@ -448,7 +450,7 @@ mod tests {
     }
 
     #[test]
-    fn phase_without_objective_falls_back_to_phase_id() {
+    fn 목표가_없는_페이즈는_페이즈ID로_대체_표시한다() {
         let mut reg = QuestRegistry::default();
         let mut phases = HashMap::new();
         phases.insert("active".to_string(), QuestPhaseDef {
@@ -473,7 +475,40 @@ mod tests {
     }
 
     #[test]
-    fn nested_zone_conditions_are_collected_once() {
+    fn 제공자가_없는_퀘스트는_대화_힌트를_띄우지_않는다() {
+        // should_hint_giver_dialogue 의 거짓 분기 + giver 빈 문자열로 패널 빌드.
+        let mut reg = QuestRegistry::default();
+        let mut phases = HashMap::new();
+        phases.insert("active".to_string(), phase("뭔가를 해라"));
+        reg.quests.insert("q".into(), QuestDef {
+            id: "q".into(),
+            title: "이름없는 의뢰".into(),
+            giver_npc: "".into(),
+            initial_phase: "active".into(),
+            phases,
+            transitions: vec![
+                QuestTransition {
+                    from: "active".into(),
+                    trigger: TriggerKind::Interact,
+                    when: None,
+                    actions: vec![],
+                    to: "done".into(),
+                },
+            ],
+            spawns: vec![],
+            spawn_chance: 1.0,
+        });
+        let mut st = QuestState::default();
+        st.set_phase("q", "active");
+        let sections = build_quest_sections(&reg, &st, &default_inventory(), &default_world(), &DiscoveredMarkers::default(), &Handle::default(), qi());
+        let all_text = all_text(sections);
+        assert!(!all_text.contains("다음:"));
+    }
+
+    // ── 조건 존 수집 ─────────────────────────────────────────────────────
+
+    #[test]
+    fn 중첩된_존_조건은_중복없이_한번씩만_수집된다() {
         let condition = QuestCondition::And(vec![
             QuestCondition::InZone(ZoneId::Forest),
             QuestCondition::Or(vec![
@@ -487,7 +522,25 @@ mod tests {
     }
 
     #[test]
-    fn auto_transition_zone_conditions_become_location_hints() {
+    fn Not조건_안의_존도_수집된다() {
+        // collect_condition_zones 의 Not arm 도달.
+        let condition = QuestCondition::Not(Box::new(QuestCondition::InZone(ZoneId::Forest)));
+        let mut zones = Vec::new();
+        collect_condition_zones(&condition, &mut zones);
+        assert_eq!(zones, vec![ZoneId::Forest]);
+    }
+
+    #[test]
+    fn 존과_무관한_조건들은_존을_수집하지_않는다() {
+        // HasItem/PhaseIs/FlagIs/HasFlag 의 빈 arm 도달.
+        let mut zones = Vec::new();
+        collect_condition_zones(&QuestCondition::HasItem("x".into()), &mut zones);
+        collect_condition_zones(&QuestCondition::HasFlag("f".into()), &mut zones);
+        assert!(zones.is_empty());
+    }
+
+    #[test]
+    fn Auto전이의_존_조건은_위치_힌트가_된다() {
         let mut phases = HashMap::new();
         phases.insert("travel".to_string(), phase("숲으로 이동"));
         phases.insert("done".to_string(), phase("완료"));
@@ -511,5 +564,386 @@ mod tests {
         };
         let hints = quest_location_hints(&def, "travel", &QuestState::default(), &default_world());
         assert_eq!(hints, vec!["위치: 숲".to_string()]);
+    }
+
+    #[test]
+    fn 조건없는_Auto전이는_위치_힌트를_만들지_않는다() {
+        // quest_location_hints: t.when == None 분기.
+        let mut phases = HashMap::new();
+        phases.insert("a".to_string(), phase("진행"));
+        phases.insert("done".to_string(), phase("완료"));
+        let def = QuestDef {
+            id: "q".into(),
+            title: "t".into(),
+            giver_npc: "npc".into(),
+            initial_phase: "a".into(),
+            phases,
+            transitions: vec![
+                QuestTransition {
+                    from: "a".into(),
+                    trigger: TriggerKind::Auto,
+                    when: None,
+                    actions: vec![],
+                    to: "done".into(),
+                },
+            ],
+            spawns: vec![],
+            spawn_chance: 1.0,
+        };
+        let hints = quest_location_hints(&def, "a", &QuestState::default(), &default_world());
+        assert!(hints.is_empty());
+    }
+
+    #[test]
+    fn 알수없는_아이템ID의_스폰은_진행도에서_건너뛴다() {
+        // quest_progress_hints: item_id_to_kind None → continue 분기.
+        let mut phases = HashMap::new();
+        phases.insert("a".to_string(), phase("진행"));
+        let def = QuestDef {
+            id: "q".into(),
+            title: "t".into(),
+            giver_npc: "npc".into(),
+            initial_phase: "a".into(),
+            phases,
+            transitions: vec![],
+            spawns: vec![QuestSpawn {
+                phase: "a".into(),
+                item: "존재하지_않는_아이템".into(),
+                zone: ZoneId::Town,
+                count: 1,
+                condition: None,
+            }],
+            spawn_chance: 1.0,
+        };
+        let lines = quest_progress_hints(&def, "a", &QuestState::default(), &default_inventory(), qi());
+        assert!(lines.is_empty());
+    }
+
+    // ── 제공자 마커 힌트 순수 함수 ───────────────────────────────────────
+
+    #[test]
+    fn 제공자가_빈_문자열이면_마커_힌트는_빈_문자열이다() {
+        // quest_giver_marker_hint 의 giver 비어있음 조기 반환.
+        let def = QuestDef {
+            id: "q".into(),
+            title: "t".into(),
+            giver_npc: "   ".into(),
+            initial_phase: "a".into(),
+            phases: HashMap::new(),
+            transitions: vec![],
+            spawns: vec![],
+            spawn_chance: 1.0,
+        };
+        let hint = quest_giver_marker_hint(&def, &default_world(), &DiscoveredMarkers::default());
+        assert_eq!(hint, "");
+    }
+
+    #[test]
+    fn 현재존에_제공자가_아닌_마커만_있으면_힌트는_빈_문자열이다() {
+        // has_marker_here 판정의 && 두번째 피연산자(kind == QuestGiver) 거짓.
+        let def = QuestDef {
+            id: "q".into(),
+            title: "t".into(),
+            giver_npc: "장로".into(),
+            initial_phase: "a".into(),
+            phases: HashMap::new(),
+            transitions: vec![],
+            spawns: vec![],
+            spawn_chance: 1.0,
+        };
+        let mut markers = DiscoveredMarkers::default();
+        // 현재 존(Town)에 있지만 QuestGiver 가 아닌 마커.
+        markers.add(1, 1, MarkerKind::Portal, ZoneId::Town);
+        let hint = quest_giver_marker_hint(&def, &default_world(), &markers);
+        assert_eq!(hint, "");
+    }
+
+    #[test]
+    fn 제공자_마커가_현재존에_없으면_힌트는_빈_문자열이다() {
+        // has_marker_here == false 분기.
+        let def = QuestDef {
+            id: "q".into(),
+            title: "t".into(),
+            giver_npc: "장로".into(),
+            initial_phase: "a".into(),
+            phases: HashMap::new(),
+            transitions: vec![],
+            spawns: vec![],
+            spawn_chance: 1.0,
+        };
+        let hint = quest_giver_marker_hint(&def, &default_world(), &DiscoveredMarkers::default());
+        assert_eq!(hint, "");
+    }
+
+    #[test]
+    fn 다른_존의_제공자_마커는_현재존_힌트를_만들지_않는다() {
+        // && 첫 피연산자(marker.zone == world.current) 거짓 분기.
+        let def = QuestDef {
+            id: "q".into(),
+            title: "t".into(),
+            giver_npc: "장로".into(),
+            initial_phase: "a".into(),
+            phases: HashMap::new(),
+            transitions: vec![],
+            spawns: vec![],
+            spawn_chance: 1.0,
+        };
+        let mut markers = DiscoveredMarkers::default();
+        // 현재 존(Town)이 아닌 다른 존의 제공자 마커.
+        markers.add(2, 2, MarkerKind::QuestGiver, ZoneId::Forest);
+        let hint = quest_giver_marker_hint(&def, &default_world(), &markers);
+        assert_eq!(hint, "");
+    }
+
+    // ── App 하네스: 플러그인 / 셋업 / 토글 / 갱신 ────────────────────────
+
+    fn 렌더_하네스() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<Font>();
+        app.init_resource::<QuestPanelOpen>()
+            .init_resource::<QuestRegistry>()
+            .init_resource::<QuestState>()
+            .init_resource::<PlayerInventory>()
+            .init_resource::<WorldState>()
+            .init_resource::<DiscoveredMarkers>()
+            .insert_resource(crate::modules::item::build_test_registry());
+        app
+    }
+
+    fn 키_입력_하네스() -> App {
+        let mut app = 렌더_하네스();
+        app.insert_resource(ButtonInput::<KeyCode>::default());
+        app
+    }
+
+    #[test]
+    fn 플러그인을_등록하면_퀘스트패널_상태가_초기화된다() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<Font>();
+        app.init_resource::<QuestRegistry>()
+            .init_resource::<QuestState>()
+            .init_resource::<PlayerInventory>()
+            .init_resource::<WorldState>()
+            .init_resource::<DiscoveredMarkers>()
+            .insert_resource(ButtonInput::<KeyCode>::default())
+            .insert_resource(crate::modules::item::build_test_registry());
+        app.add_plugins(QuestPanelPlugin);
+        assert!(app.world.contains_resource::<QuestPanelOpen>());
+    }
+
+    #[test]
+    fn 시작시_퀘스트_패널과_텍스트가_생성된다() {
+        let mut app = 렌더_하네스();
+        app.add_systems(Startup, setup_quest_panel);
+        app.update();
+        assert_eq!(app.world.query_filtered::<(), With<QuestPanel>>().iter(&app.world).count(), 1);
+        assert_eq!(app.world.query_filtered::<(), With<QuestPanelContent>>().iter(&app.world).count(), 1);
+    }
+
+    #[test]
+    fn Q키를_누르면_패널이_열리고_보임으로_바뀐다() {
+        let mut app = 키_입력_하네스();
+        app.add_systems(Update, toggle_quest_panel);
+        app.world.spawn((Visibility::Hidden, QuestPanel));
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyQ);
+        app.update();
+        assert!(app.world.resource::<QuestPanelOpen>().0);
+        let vis = *app.world.query_filtered::<&Visibility, With<QuestPanel>>().single(&app.world);
+        assert!(matches!(vis, Visibility::Inherited));
+    }
+
+    #[test]
+    fn 열린_상태에서_Q키를_다시_누르면_닫히고_숨김으로_바뀐다() {
+        let mut app = 키_입력_하네스();
+        app.add_systems(Update, toggle_quest_panel);
+        app.world.spawn((Visibility::Inherited, QuestPanel));
+        app.world.resource_mut::<QuestPanelOpen>().0 = true;
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyQ);
+        app.update();
+        assert!(!app.world.resource::<QuestPanelOpen>().0);
+        let vis = *app.world.query_filtered::<&Visibility, With<QuestPanel>>().single(&app.world);
+        assert!(matches!(vis, Visibility::Hidden));
+    }
+
+    #[test]
+    fn Q키가_아니면_토글은_아무것도_안한다() {
+        let mut app = 키_입력_하네스();
+        app.add_systems(Update, toggle_quest_panel);
+        app.world.spawn((Visibility::Hidden, QuestPanel));
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
+        app.update();
+        assert!(!app.world.resource::<QuestPanelOpen>().0);
+    }
+
+    #[test]
+    fn 패배_상태면_Q키_토글이_무시된다() {
+        let mut app = 키_입력_하네스();
+        app.add_systems(Update, toggle_quest_panel);
+        app.world.spawn(crate::modules::combat::Defeated);
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyQ);
+        app.update();
+        assert!(!app.world.resource::<QuestPanelOpen>().0);
+    }
+
+    #[test]
+    fn 패널_엔티티가_없어도_토글은_안전하다() {
+        // panel_q.get_single_mut() Err 분기.
+        let mut app = 키_입력_하네스();
+        app.add_systems(Update, toggle_quest_panel);
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyQ);
+        app.update();
+        assert!(app.world.resource::<QuestPanelOpen>().0);
+    }
+
+    fn 갱신_하네스() -> App {
+        let mut app = 렌더_하네스();
+        app.add_systems(Update, update_quest_panel);
+        app.world.spawn((Visibility::Hidden, QuestPanel));
+        app.world.spawn((Text::default(), QuestPanelContent));
+        app
+    }
+
+    #[test]
+    fn 패널이_열리면_갱신시_보임으로_바뀌고_텍스트가_채워진다() {
+        let mut app = 갱신_하네스();
+        let (reg, st) = make_registry_and_state("active");
+        app.insert_resource(reg);
+        app.insert_resource(st);
+        app.world.resource_mut::<QuestPanelOpen>().0 = true;
+        app.update();
+        let vis = *app.world.query_filtered::<&Visibility, With<QuestPanel>>().single(&app.world);
+        assert!(matches!(vis, Visibility::Inherited));
+        let text = app.world.query_filtered::<&Text, With<QuestPanelContent>>().single(&app.world);
+        assert!(!text.sections.is_empty());
+    }
+
+    #[test]
+    fn 패널이_닫히면_갱신시_숨김으로_바뀐다() {
+        let mut app = 갱신_하네스();
+        app.world.resource_mut::<QuestPanelOpen>().0 = true;
+        app.update();
+        app.world.resource_mut::<QuestPanelOpen>().0 = false;
+        app.update();
+        let vis = *app.world.query_filtered::<&Visibility, With<QuestPanel>>().single(&app.world);
+        assert!(matches!(vis, Visibility::Hidden));
+    }
+
+    #[test]
+    fn 패널이_열린채_퀘스트상태만_바뀌어도_텍스트가_갱신된다() {
+        // panel_open 은 변경 없지만 state 변경 → 갱신 가드의 뒤쪽 && 피연산자들 도달.
+        let mut app = 갱신_하네스();
+        app.world.resource_mut::<QuestPanelOpen>().0 = true;
+        app.update(); // 1회 채움(panel_open 변경됨)
+        {
+            let mut text = app.world.query_filtered::<&mut Text, With<QuestPanelContent>>().single_mut(&mut app.world);
+            text.sections.clear();
+        }
+        // panel_open 은 안 건드리고 state 만 변경.
+        let (reg, st) = make_registry_and_state("active");
+        app.insert_resource(reg);
+        app.insert_resource(st);
+        app.update();
+        let text = app.world.query_filtered::<&Text, With<QuestPanelContent>>().single(&app.world);
+        assert!(!text.sections.is_empty());
+    }
+
+    #[test]
+    fn 패널이_열린채_인벤토리만_바뀌어도_텍스트가_갱신된다() {
+        // 갱신 가드 && 체인의 !inventory.is_changed() 피연산자 False(=변경됨) 도달.
+        let mut app = 갱신_하네스();
+        app.world.resource_mut::<QuestPanelOpen>().0 = true;
+        app.update();
+        {
+            let mut text = app.world.query_filtered::<&mut Text, With<QuestPanelContent>>().single_mut(&mut app.world);
+            text.sections.clear();
+        }
+        // panel_open/state 는 그대로, 인벤토리만 변경.
+        app.world.resource_mut::<PlayerInventory>().gold += 1;
+        app.update();
+        let text = app.world.query_filtered::<&Text, With<QuestPanelContent>>().single(&app.world);
+        assert!(!text.sections.is_empty());
+    }
+
+    #[test]
+    fn 패널이_열린채_세계상태만_바뀌어도_텍스트가_갱신된다() {
+        // !world.is_changed() 피연산자 False 도달.
+        let mut app = 갱신_하네스();
+        app.world.resource_mut::<QuestPanelOpen>().0 = true;
+        app.update();
+        {
+            let mut text = app.world.query_filtered::<&mut Text, With<QuestPanelContent>>().single_mut(&mut app.world);
+            text.sections.clear();
+        }
+        app.world.resource_mut::<WorldState>().current = ZoneId::Forest;
+        app.update();
+        let text = app.world.query_filtered::<&Text, With<QuestPanelContent>>().single(&app.world);
+        assert!(!text.sections.is_empty());
+    }
+
+    #[test]
+    fn 패널이_열린채_마커만_바뀌어도_텍스트가_갱신된다() {
+        // !markers.is_changed() 피연산자 False 도달.
+        let mut app = 갱신_하네스();
+        app.world.resource_mut::<QuestPanelOpen>().0 = true;
+        app.update();
+        {
+            let mut text = app.world.query_filtered::<&mut Text, With<QuestPanelContent>>().single_mut(&mut app.world);
+            text.sections.clear();
+        }
+        app.world.resource_mut::<DiscoveredMarkers>().add(1, 1, MarkerKind::QuestGiver, ZoneId::Town);
+        app.update();
+        let text = app.world.query_filtered::<&Text, With<QuestPanelContent>>().single(&app.world);
+        assert!(!text.sections.is_empty());
+    }
+
+    #[test]
+    fn 닫힌_패널은_갱신시_텍스트를_채우지_않는다() {
+        let mut app = 갱신_하네스();
+        app.update(); // open=false
+        let text = app.world.query_filtered::<&Text, With<QuestPanelContent>>().single(&app.world);
+        assert!(text.sections.is_empty());
+    }
+
+    #[test]
+    fn 변경이_없으면_열린_패널도_텍스트를_다시_채우지_않는다() {
+        // 두 번째 update: panel_open/state/inventory/world/markers 모두 변경 없음 → 조기 반환.
+        let mut app = 갱신_하네스();
+        app.world.resource_mut::<QuestPanelOpen>().0 = true;
+        app.update(); // 첫 채움
+        // 텍스트를 일부러 비운다.
+        {
+            let mut text = app.world.query_filtered::<&mut Text, With<QuestPanelContent>>().single_mut(&mut app.world);
+            text.sections.clear();
+        }
+        app.update(); // 변경 없음 → 다시 채우지 않음
+        let text = app.world.query_filtered::<&Text, With<QuestPanelContent>>().single(&app.world);
+        assert!(text.sections.is_empty());
+    }
+
+    #[test]
+    fn 텍스트_엔티티가_없으면_갱신은_조기_반환한다() {
+        // text_q.get_single_mut() Err 분기.
+        let mut app = 렌더_하네스();
+        app.add_systems(Update, update_quest_panel);
+        app.world.spawn((Visibility::Hidden, QuestPanel));
+        app.world.resource_mut::<QuestPanelOpen>().0 = true;
+        app.update(); // 텍스트 엔티티 없음 → 패닉 없음
+    }
+
+    #[test]
+    fn 패널_엔티티가_없으면_갱신의_visibility_동기화는_건너뛴다() {
+        // 첫 if 의 panel_q.get_single_mut() Err 분기.
+        let mut app = 렌더_하네스();
+        app.add_systems(Update, update_quest_panel);
+        app.world.spawn((Text::default(), QuestPanelContent));
+        app.world.resource_mut::<QuestPanelOpen>().0 = true;
+        app.update();
+        // 패널 엔티티가 없어도 텍스트는 채워진다(빈 퀘스트 메시지).
+        let text = app.world.query_filtered::<&Text, With<QuestPanelContent>>().single(&app.world);
+        assert!(!text.sections.is_empty());
     }
 }

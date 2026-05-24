@@ -171,9 +171,12 @@ fn push(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modules::combat::Defeated;
+
+    // ── 순수 텍스트 빌더 ───────────────────────────────────────────────────
 
     #[test]
-    fn help_text_lists_core_commands() {
+    fn 도움말_텍스트는_이동_전투_패널_게임오버_핵심키를_모두_나열한다() {
         let text: String = help_sections(&Handle::default())
             .iter()
             .map(|s| s.value.as_str())
@@ -183,5 +186,170 @@ mod tests {
         assert!(text.contains("미니맵"));
         assert!(text.contains("장비"));
         assert!(text.contains("Game Over"));
+    }
+
+    // ── App 하네스 ─────────────────────────────────────────────────────────
+
+    /// AssetServer(폰트 로드)가 필요한 도움말 렌더 시스템용 App 하네스.
+    fn 렌더_하네스() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<Font>();
+        app
+    }
+
+    /// 키 입력만 다루는 토글 시스템용 App 하네스.
+    fn 토글_하네스() -> App {
+        let mut app = App::new();
+        app.insert_resource(ButtonInput::<KeyCode>::default());
+        app.init_resource::<HelpPanelOpen>();
+        app.add_systems(Update, toggle_help_overlay);
+        app
+    }
+
+    #[test]
+    fn 플러그인을_추가하면_시작시_숨김상태의_도움말_오버레이가_생성된다() {
+        let mut app = 렌더_하네스();
+        // 플러그인이 등록하는 toggle 시스템이 키 입력 리소스를 읽으므로 함께 넣는다.
+        app.insert_resource(ButtonInput::<KeyCode>::default());
+        app.add_plugins(HelpPlugin);
+        app.update();
+
+        let mut q = app.world.query_filtered::<&Visibility, With<HelpOverlay>>();
+        assert_eq!(*q.single(&app.world), Visibility::Hidden);
+        assert_eq!(app.world.query::<&HelpText>().iter(&app.world).count(), 1);
+        assert!(app.world.get_resource::<HelpPanelOpen>().is_some());
+    }
+
+    #[test]
+    fn H키를_누르면_도움말_열림상태가_뒤집힌다() {
+        let mut app = 토글_하네스();
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyH);
+        app.update();
+        assert!(app.world.resource::<HelpPanelOpen>().0);
+    }
+
+    #[test]
+    fn Shift와_Slash를_함께_누르면_물음표로_도움말이_토글된다() {
+        let mut app = 토글_하네스();
+        {
+            let mut k = app.world.resource_mut::<ButtonInput<KeyCode>>();
+            k.press(KeyCode::ShiftLeft);
+            k.press(KeyCode::Slash);
+        }
+        app.update();
+        assert!(app.world.resource::<HelpPanelOpen>().0);
+    }
+
+    #[test]
+    fn Shift없이_Slash만_누르면_도움말은_열리지_않는다() {
+        let mut app = 토글_하네스();
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Slash);
+        app.update();
+        assert!(!app.world.resource::<HelpPanelOpen>().0);
+    }
+
+    #[test]
+    fn 도움말이_열린_상태에서_Esc를_누르면_닫힌다() {
+        let mut app = 토글_하네스();
+        app.world.resource_mut::<HelpPanelOpen>().0 = true;
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        app.update();
+        assert!(!app.world.resource::<HelpPanelOpen>().0);
+    }
+
+    #[test]
+    fn 도움말이_닫힌_상태에서_Esc를_눌러도_상태는_그대로다() {
+        let mut app = 토글_하네스();
+        // open.0 == false 이므로 else if 의 첫 조건에서 걸러진다.
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        app.update();
+        assert!(!app.world.resource::<HelpPanelOpen>().0);
+    }
+
+    #[test]
+    fn 도움말이_열린_상태에서_Esc가_아닌_키는_도움말을_닫지_않는다() {
+        let mut app = 토글_하네스();
+        app.world.resource_mut::<HelpPanelOpen>().0 = true;
+        // open.0 은 참이라 else if 의 우변(Escape 여부)을 평가하지만, Esc 가 아니므로 닫히지 않는다.
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Space);
+        app.update();
+        assert!(app.world.resource::<HelpPanelOpen>().0);
+    }
+
+    #[test]
+    fn 아무_키도_누르지_않으면_도움말_상태는_변하지_않는다() {
+        let mut app = 토글_하네스();
+        app.update();
+        assert!(!app.world.resource::<HelpPanelOpen>().0);
+    }
+
+    #[test]
+    fn 플레이어가_쓰러진_상태면_H키를_눌러도_도움말이_열리지_않는다() {
+        let mut app = 토글_하네스();
+        app.world.spawn(Defeated);
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyH);
+        app.update();
+        assert!(!app.world.resource::<HelpPanelOpen>().0);
+    }
+
+    #[test]
+    fn 도움말이_열리면_오버레이가_보이도록_갱신된다() {
+        let mut app = 렌더_하네스();
+        app.init_resource::<HelpPanelOpen>();
+        app.add_systems(Startup, setup_help_overlay);
+        app.add_systems(Update, update_help_overlay);
+        app.update(); // setup + 초기 동기화
+
+        app.world.resource_mut::<HelpPanelOpen>().0 = true;
+        app.update();
+
+        let mut q = app.world.query_filtered::<&Visibility, With<HelpOverlay>>();
+        assert_eq!(*q.single(&app.world), Visibility::Inherited);
+    }
+
+    #[test]
+    fn 도움말이_닫히면_오버레이가_숨겨지도록_갱신된다() {
+        let mut app = 렌더_하네스();
+        app.insert_resource(HelpPanelOpen(true));
+        app.add_systems(Startup, setup_help_overlay);
+        app.add_systems(Update, update_help_overlay);
+        app.update(); // 열린 상태로 동기화
+
+        app.world.resource_mut::<HelpPanelOpen>().0 = false;
+        app.update();
+
+        let mut q = app.world.query_filtered::<&Visibility, With<HelpOverlay>>();
+        assert_eq!(*q.single(&app.world), Visibility::Hidden);
+    }
+
+    #[test]
+    fn 열림상태가_바뀌지_않은_프레임에는_오버레이_visibility를_건드리지_않는다() {
+        let mut app = 렌더_하네스();
+        app.init_resource::<HelpPanelOpen>();
+        app.add_systems(Startup, setup_help_overlay);
+        app.add_systems(Update, update_help_overlay);
+        app.update(); // 첫 프레임: is_changed 참 → 동기화
+
+        // 오버레이를 일부러 보이게 바꿔 두고, 리소스는 그대로 둔다.
+        {
+            let mut q = app.world.query_filtered::<&mut Visibility, With<HelpOverlay>>();
+            *q.single_mut(&mut app.world) = Visibility::Inherited;
+        }
+        app.update(); // open 미변경 → early return, visibility 유지
+
+        let mut q = app.world.query_filtered::<&Visibility, With<HelpOverlay>>();
+        assert_eq!(*q.single(&app.world), Visibility::Inherited);
+    }
+
+    #[test]
+    fn 오버레이_엔티티가_없으면_도움말_갱신은_조용히_넘어간다() {
+        let mut app = 렌더_하네스();
+        app.insert_resource(HelpPanelOpen(true)); // is_changed 참이지만 오버레이가 없다
+        app.add_systems(Update, update_help_overlay);
+        app.update(); // get_single_mut 실패 분기로 패닉 없이 통과
+
+        assert_eq!(app.world.query::<&HelpOverlay>().iter(&app.world).count(), 0);
     }
 }

@@ -10,6 +10,7 @@ use crate::modules::{
     quest::{DespawnWorldItemEvent, item_id_to_kind},
 };
 
+#[allow(dead_code)] // 테스트에서만 참조되는 공개 상수 (프로덕션 미사용)
 pub const POTION_HEAL: i32 = 8;
 const Z_ITEM: f32 = 0.3;
 const Z_QUEST_POPUP: i32 = 100;
@@ -107,6 +108,7 @@ fn glyph_game_icon(kind: ItemKind, r: &ItemRegistry) -> &'static str {
 pub struct QuestItemKind(pub &'static str);
 
 impl QuestItemKind {
+    #[allow(dead_code)] // 테스트에서만 참조되는 공개 접근자 (프로덕션 미사용)
     pub fn id(self) -> &'static str { self.0 }
 }
 
@@ -295,6 +297,7 @@ pub fn build_test_registry() -> ItemRegistry {
 pub struct WeaponKind(pub &'static str);
 
 impl WeaponKind {
+    #[allow(dead_code)] // 테스트에서만 참조되는 공개 접근자 (프로덕션 미사용)
     pub fn id(self) -> &'static str { self.0 }
 
     /// 호환 편의: 자주 쓰이는 검/창/활 상수 (ID 기반)
@@ -317,6 +320,7 @@ impl<'de> serde::Deserialize<'de> for WeaponKind {
 pub struct ArmorKind(pub &'static str);
 
 impl ArmorKind {
+    #[allow(dead_code)] // 테스트에서만 참조되는 공개 접근자 (프로덕션 미사용)
     pub fn id(self) -> &'static str { self.0 }
     pub const LEATHER_ARMOR: ArmorKind = ArmorKind("leather_armor");
 }
@@ -335,6 +339,7 @@ impl<'de> serde::Deserialize<'de> for ArmorKind {
 pub struct ConsumableKind(pub &'static str);
 
 impl ConsumableKind {
+    #[allow(dead_code)] // 테스트에서만 참조되는 공개 접근자 (프로덕션 미사용)
     pub fn id(self) -> &'static str { self.0 }
     pub const HEALTH_POTION: ConsumableKind = ConsumableKind("health_potion");
 }
@@ -443,23 +448,26 @@ pub struct StartLoadoutRegistry(pub StartLoadout);
 
 const START_LOADOUT_PATH: &str = "assets/items/start_loadout.ron";
 
-fn load_start_loadout_system(mut registry: ResMut<StartLoadoutRegistry>) {
-    match std::fs::read_to_string(START_LOADOUT_PATH) {
+/// 지정 경로에서 시작 로드아웃을 읽는다. 읽기/파싱 실패 시 기본 로드아웃(gold 50)으로 폴백.
+/// 경로를 인자로 받아 테스트에서 임의 파일(정상/깨진/없는)을 주입할 수 있게 한다.
+fn read_start_loadout(path: &str) -> StartLoadout {
+    match std::fs::read_to_string(path) {
         Ok(text) => match ron::de::from_str::<StartLoadout>(&text) {
             Ok(loadout) => {
-                info!("start_loadout 로드 완료 (gold: {}, items: {}, consumables: {})",
-                    loadout.gold, loadout.items.len(), loadout.consumables.len());
-                registry.0 = loadout;
+                info!("start_loadout 로드 완료 (gold: {}, items: {}, consumables: {})", loadout.gold, loadout.items.len(), loadout.consumables.len());
+                loadout
             }
             Err(e) => {
-                warn!("{} 파싱 실패, 기본 로드아웃 사용: {}", START_LOADOUT_PATH, e);
-                registry.0 = StartLoadout { gold: 50, ..Default::default() };
+                warn!("{} 파싱 실패, 기본 로드아웃 사용: {}", path, e);
+                StartLoadout { gold: 50, ..Default::default() }
             }
         },
-        Err(_) => {
-            registry.0 = StartLoadout { gold: 50, ..Default::default() };
-        }
+        Err(_) => StartLoadout { gold: 50, ..Default::default() },
     }
+}
+
+fn load_start_loadout_system(mut registry: ResMut<StartLoadoutRegistry>) {
+    registry.0 = read_start_loadout(START_LOADOUT_PATH);
 }
 
 /// loadout 을 inventory / equipment 에 적용한다.
@@ -516,10 +524,22 @@ fn apply_start_loadout_if_no_save(
     loadout: Res<StartLoadoutRegistry>,
     registry: Res<ItemRegistry>,
 ) {
-    if std::path::Path::new(crate::modules::save::SAVE_PATH).exists() {
+    apply_loadout_unless_save(&mut inv, &mut eq, &loadout.0, &registry, crate::modules::save::SAVE_PATH);
+}
+
+/// 세이브 경로에 파일이 있으면 아무것도 안 하고, 없으면 로드아웃을 적용한다.
+/// save_path 를 인자로 받아 테스트에서 임의 경로로 양쪽 분기를 검증할 수 있게 한다.
+fn apply_loadout_unless_save(
+    inv: &mut PlayerInventory,
+    eq: &mut PlayerEquipment,
+    loadout: &StartLoadout,
+    registry: &ItemRegistry,
+    save_path: &str,
+) {
+    if std::path::Path::new(save_path).exists() {
         return;
     }
-    apply_start_loadout(&mut inv, &mut eq, &loadout.0, &registry);
+    apply_start_loadout(inv, eq, loadout, registry);
 }
 
 // ── 로드 시스템 ────────────────────────────────────────────────────────────
@@ -1042,72 +1062,72 @@ mod tests {
     }
 
     #[test]
-    fn weapon_attack_sword_is_7() {
+    fn 검의_공격력은_7이다() {
         assert_eq!(weapon_attack(WeaponKind::SWORD, qi()), 7);
     }
 
     #[test]
-    fn weapon_attack_spear_is_9() {
+    fn 창의_공격력은_9이다() {
         assert_eq!(weapon_attack(WeaponKind::SPEAR, qi()), 9);
     }
 
     #[test]
-    fn weapon_attack_bow_is_5() {
+    fn 활의_공격력은_5이다() {
         assert_eq!(weapon_attack(WeaponKind::BOW, qi()), 5);
     }
 
     #[test]
-    fn armor_defense_bonus_leather_is_2() {
+    fn 가죽갑옷의_방어보너스는_2이다() {
         assert_eq!(armor_defense_bonus(ArmorKind::LEATHER_ARMOR, qi()), 2);
     }
 
     #[test]
-    fn effective_attack_no_weapon_equals_player_default() {
+    fn 무기가_없으면_유효공격력은_플레이어_기본값이다() {
         let eq = PlayerEquipment { weapon: None, armor: None };
         assert_eq!(effective_attack(&eq, qi()), PLAYER_ATK);
     }
 
     #[test]
-    fn effective_attack_with_sword_is_7() {
+    fn 검을_장착하면_유효공격력은_7이다() {
         let eq = PlayerEquipment { weapon: Some(WeaponKind::SWORD), armor: None };
         assert_eq!(effective_attack(&eq, qi()), 7);
     }
 
     #[test]
-    fn effective_defense_no_armor_equals_player_default() {
+    fn 방어구가_없으면_유효방어력은_플레이어_기본값이다() {
         let eq = PlayerEquipment { weapon: None, armor: None };
         assert_eq!(effective_defense(&eq, qi()), PLAYER_DEF);
     }
 
     #[test]
-    fn effective_defense_with_leather_adds_bonus() {
+    fn 가죽갑옷을_장착하면_방어보너스가_더해진다() {
         let eq = PlayerEquipment { weapon: None, armor: Some(ArmorKind::LEATHER_ARMOR) };
         assert_eq!(effective_defense(&eq, qi()), PLAYER_DEF + 2);
     }
 
     #[test]
-    fn goblin_drop_table_has_potion_and_sword() {
+    fn 고블린_드롭테이블에는_포션과_검이_있다() {
         let t = monster_drop_table("고블린");
         assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Consumable(ConsumableKind::HEALTH_POTION))));
         assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Weapon(WeaponKind::SWORD))));
     }
 
     #[test]
-    fn orc_drop_table_has_spear_and_armor() {
+    fn 오크_드롭테이블에는_창과_방어구가_있다() {
         let t = monster_drop_table("오크");
         assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Weapon(WeaponKind::SPEAR))));
         assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Armor(ArmorKind::LEATHER_ARMOR))));
     }
 
     #[test]
-    fn troll_drop_table_has_bow_and_armor() {
+    fn 트롤_드롭테이블에는_활과_방어구가_있다() {
         let t = monster_drop_table("트롤");
         assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Weapon(WeaponKind::BOW))));
         assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Armor(ArmorKind::LEATHER_ARMOR))));
     }
 
     #[test]
-    fn add_consumable_stacks_same_kind() {
+    fn 같은_소비아이템을_추가하면_수량이_누적된다() {
         let mut inv = PlayerInventory::default();
         inv.add_consumable(ConsumableKind::HEALTH_POTION);
         inv.add_consumable(ConsumableKind::HEALTH_POTION);
@@ -1116,7 +1136,7 @@ mod tests {
     }
 
     #[test]
-    fn use_consumable_decrements_count() {
+    fn 소비아이템을_사용하면_수량이_감소한다() {
         let mut inv = PlayerInventory::default();
         inv.add_consumable(ConsumableKind::HEALTH_POTION);
         inv.add_consumable(ConsumableKind::HEALTH_POTION);
@@ -1125,7 +1145,7 @@ mod tests {
     }
 
     #[test]
-    fn use_consumable_removes_slot_when_count_zero() {
+    fn 소비아이템_수량이_0이되면_슬롯이_제거된다() {
         let mut inv = PlayerInventory::default();
         inv.add_consumable(ConsumableKind::HEALTH_POTION);
         inv.use_consumable(ConsumableKind::HEALTH_POTION);
@@ -1133,42 +1153,42 @@ mod tests {
     }
 
     #[test]
-    fn use_consumable_returns_false_when_empty() {
+    fn 비어있을때_소비아이템_사용은_실패한다() {
         let mut inv = PlayerInventory::default();
         assert!(!inv.use_consumable(ConsumableKind::HEALTH_POTION));
     }
 
     #[test]
-    fn consumable_heal_amount_equals_constant() {
+    fn 체력물약의_회복량은_상수와_일치한다() {
         assert_eq!(ConsumableKind::HEALTH_POTION.heal_amount(qi()), POTION_HEAL);
     }
 
     #[test]
-    fn equipment_panel_open_default_is_false() {
+    fn 장비창_열림상태의_기본값은_거짓이다() {
         assert!(!EquipmentPanelOpen::default().0);
     }
 
     #[test]
-    fn glyph_style_cycles_through_all_variants() {
+    fn 글리프스타일은_모든_종류를_순환한다() {
         assert_eq!(GlyphStyle::Ascii.next(),    GlyphStyle::Unicode);
         assert_eq!(GlyphStyle::Unicode.next(),  GlyphStyle::GameIcon);
         assert_eq!(GlyphStyle::GameIcon.next(), GlyphStyle::Ascii);
     }
 
     #[test]
-    fn glyph_style_from_str_valid() {
+    fn 유효한_문자열은_글리프스타일로_파싱된다() {
         assert_eq!(GlyphStyle::from_str("ascii"),   Some(GlyphStyle::Ascii));
         assert_eq!(GlyphStyle::from_str("unicode"), Some(GlyphStyle::Unicode));
         assert_eq!(GlyphStyle::from_str("icon"),    Some(GlyphStyle::GameIcon));
     }
 
     #[test]
-    fn glyph_style_from_str_invalid_returns_none() {
+    fn 잘못된_문자열은_글리프스타일_파싱에_실패한다() {
         assert_eq!(GlyphStyle::from_str("unknown"), None);
     }
 
     #[test]
-    fn start_loadout_ron_parses() {
+    fn 시작_로드아웃_ron이_정상적으로_파싱된다() {
         let text = std::fs::read_to_string("assets/items/start_loadout.ron")
             .expect("start_loadout.ron 읽기 실패");
         let loadout: StartLoadout = ron::de::from_str(&text).expect("start_loadout.ron 파싱 실패");
@@ -1178,7 +1198,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_start_loadout_pushes_inventory_items() {
+    fn 시작_로드아웃을_적용하면_인벤토리에_아이템이_들어간다() {
         let mut inv = PlayerInventory::default();
         let mut eq = PlayerEquipment::default();
         let loadout = StartLoadout {
@@ -1198,7 +1218,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_start_loadout_skips_unknown_id() {
+    fn 시작_로드아웃의_알수없는_id는_건너뛴다() {
         let mut inv = PlayerInventory::default();
         let mut eq = PlayerEquipment::default();
         let loadout = StartLoadout {
@@ -1214,19 +1234,40 @@ mod tests {
         assert!(inv.consumables.is_empty(), "알 수 없는 consumable id 는 스킵");
     }
 
+    #[test]
+    fn 시작_로드아웃의_items에_담긴_방어구id는_인벤토리에_방어구로_들어간다() {
+        // items 목록에 방어구 id 가 들어오면 무기가 아니라 Armor 로 push 되고,
+        // 미등록 id 는 건너뛴다 (apply_start_loadout 의 intern_armor / else 분기).
+        let mut inv = PlayerInventory::default();
+        let mut eq = PlayerEquipment::default();
+        let loadout = StartLoadout {
+            gold: 0,
+            weapon: None,
+            armor: None,
+            items: vec!["leather_armor".into(), "없는거".into()],
+            consumables: vec![],
+        };
+        apply_start_loadout(&mut inv, &mut eq, &loadout, qi());
+        assert_eq!(inv.items.len(), 1, "미등록 id 는 스킵되고 방어구만 남는다");
+        assert!(
+            matches!(inv.items[0].kind, ItemKind::Armor(ArmorKind::LEATHER_ARMOR)),
+            "items 의 방어구 id 는 Armor 로 인벤토리에 들어가야 한다",
+        );
+    }
+
     fn lookup_display_name(qk: QuestItemKind) -> &'static str {
         qi().quest_item(qk).map(|m| m.display_name).unwrap_or("???")
     }
 
     #[test]
-    fn glyph_for_style_ascii_returns_ascii_chars() {
+    fn ascii_스타일은_ascii_문자를_반환한다() {
         assert_eq!(glyph_for_style(ItemKind::Weapon(WeaponKind::SWORD), GlyphStyle::Ascii, qi()), "/");
         assert_eq!(glyph_for_style(ItemKind::Weapon(WeaponKind::SPEAR), GlyphStyle::Ascii, qi()), "|");
         assert_eq!(glyph_for_style(ItemKind::Weapon(WeaponKind::BOW),   GlyphStyle::Ascii, qi()), ")");
     }
 
     #[test]
-    fn glyph_for_style_unicode_returns_symbols() {
+    fn 유니코드_스타일은_심볼문자를_반환한다() {
         let s = glyph_for_style(ItemKind::Weapon(WeaponKind::SWORD), GlyphStyle::Unicode, qi());
         assert_eq!(s, "\u{1F5E1}");
         let shield = glyph_for_style(ItemKind::Armor(ArmorKind::LEATHER_ARMOR), GlyphStyle::Unicode, qi());
@@ -1234,7 +1275,7 @@ mod tests {
     }
 
     #[test]
-    fn glyph_for_style_game_icon_returns_pua_codepoints() {
+    fn 게임아이콘_스타일은_pua_코드포인트를_반환한다() {
         let s = glyph_for_style(ItemKind::Weapon(WeaponKind::SWORD), GlyphStyle::GameIcon, qi());
         assert_eq!(s, "\u{E946}");
         let potion = glyph_for_style(ItemKind::Consumable(ConsumableKind::HEALTH_POTION), GlyphStyle::GameIcon, qi());
@@ -1242,18 +1283,18 @@ mod tests {
     }
 
     #[test]
-    fn glyph_style_default_is_ascii() {
+    fn 글리프스타일의_기본값은_ascii이다() {
         assert_eq!(GlyphStyle::default(), GlyphStyle::Ascii);
     }
 
     #[test]
-    fn quest_item_display_names() {
+    fn 퀘스트아이템의_표시이름이_올바르다() {
         assert_eq!(lookup_display_name(QuestItemKind("eternal_gem")), "영원의 보석");
         assert_eq!(lookup_display_name(QuestItemKind("philosophers_stone")), "현자의 돌");
     }
 
     #[test]
-    fn quest_item_glyph_and_pickup_message() {
+    fn 퀘스트아이템의_글리프와_획득메시지가_올바르다() {
         let gem = ItemKind::QuestItem(QuestItemKind("eternal_gem"));
         assert_eq!(gem.glyph(qi()), "*");
         assert_eq!(gem.pickup_message(qi()), "영원의 보석을 획득했다!");
@@ -1262,7 +1303,7 @@ mod tests {
     }
 
     #[test]
-    fn demonsword_items_have_correct_glyphs_and_names() {
+    fn 마검_퀘스트아이템들의_글리프와_이름이_올바르다() {
         assert_eq!(lookup_display_name(QuestItemKind("demon_sword")), "마검");
         assert_eq!(lookup_display_name(QuestItemKind("elenas_memo")), "엘레나의 메모");
         assert_eq!(lookup_display_name(QuestItemKind("ancient_ritual_book")), "고대 의식서");
@@ -1281,7 +1322,7 @@ mod tests {
     }
 
     #[test]
-    fn parry_quest_items_have_correct_glyphs_and_names() {
+    fn 패링_퀘스트아이템들의_글리프와_이름이_올바르다() {
         assert_eq!(lookup_display_name(QuestItemKind("prototype_hammer")), "시제 6식 파암추");
         assert_eq!(lookup_display_name(QuestItemKind("steel_core")),       "강철 갑주 심장");
         assert_eq!(lookup_display_name(QuestItemKind("pilot_badge")),      "전속 파일럿 인증서");
@@ -1300,7 +1341,7 @@ mod tests {
     }
 
     #[test]
-    fn demonsword_items_unicode_glyphs() {
+    fn 마검_퀘스트아이템들의_유니코드_글리프가_올바르다() {
         let sword = glyph_for_style(ItemKind::QuestItem(QuestItemKind("demon_sword")), GlyphStyle::Unicode, qi());
         assert_eq!(sword, "\u{2694}");
         let memo = glyph_for_style(ItemKind::QuestItem(QuestItemKind("elenas_memo")), GlyphStyle::Unicode, qi());
@@ -1310,19 +1351,19 @@ mod tests {
     }
 
     #[test]
-    fn quest_items_ron_loads_all_29_items() {
+    fn 퀘스트아이템_ron은_29종을_모두_로드한다() {
         let registry = qi();
         assert_eq!(registry.quest_items.len(), 29, "quest_items.ron 에 29 종이 정의되어야 한다");
     }
 
     #[test]
-    fn quest_item_meta_returns_none_for_unknown_id() {
+    fn 알수없는_id의_퀘스트아이템_메타는_없음을_반환한다() {
         let unknown = QuestItemKind("does_not_exist");
         assert!(qi().quest_item(unknown).is_none());
     }
 
     #[test]
-    fn intern_quest_id_returns_same_pointer_for_same_id() {
+    fn 같은_퀘스트id는_인턴시_동일한_포인터를_반환한다() {
         let a = qi().intern_quest_item("eternal_gem").expect("등록된 ID 여야 한다");
         let b = qi().intern_quest_item("eternal_gem").expect("등록된 ID 여야 한다");
         // registry 에 등록된 ID 는 동일 &'static str (포인터 일치)
@@ -1330,7 +1371,7 @@ mod tests {
     }
 
     #[test]
-    fn weapons_ron_loads_three_weapons() {
+    fn 무기_ron은_세_종류를_로드한다() {
         assert_eq!(qi().weapons.len(), 3);
         assert!(qi().weapon(WeaponKind::SWORD).is_some());
         assert!(qi().weapon(WeaponKind::SPEAR).is_some());
@@ -1338,21 +1379,21 @@ mod tests {
     }
 
     #[test]
-    fn weapons_have_correct_attack_power() {
+    fn 무기들의_공격력이_정확하다() {
         assert_eq!(qi().weapon(WeaponKind::SWORD).unwrap().attack_power, 7);
         assert_eq!(qi().weapon(WeaponKind::SPEAR).unwrap().attack_power, 9);
         assert_eq!(qi().weapon(WeaponKind::BOW).unwrap().attack_power, 5);
     }
 
     #[test]
-    fn weapons_have_element_strings() {
+    fn 무기들이_원소_문자열을_가진다() {
         assert_eq!(qi().weapon(WeaponKind::SWORD).unwrap().element, Some("fire"));
         assert_eq!(qi().weapon(WeaponKind::SPEAR).unwrap().element, Some("ice"));
         assert_eq!(qi().weapon(WeaponKind::BOW).unwrap().element, Some("lightning"));
     }
 
     #[test]
-    fn armors_ron_loads_leather() {
+    fn 방어구_ron은_가죽갑옷을_로드한다() {
         assert_eq!(qi().armors.len(), 1);
         let leather = qi().armor(ArmorKind::LEATHER_ARMOR).unwrap();
         assert_eq!(leather.display_name, "가죽 갑옷");
@@ -1360,14 +1401,14 @@ mod tests {
     }
 
     #[test]
-    fn consumables_ron_loads_health_potion_with_heal_effect() {
+    fn 소비아이템_ron은_회복효과를_가진_체력물약을_로드한다() {
         assert_eq!(qi().consumables.len(), 1);
         let potion = qi().consumable(ConsumableKind::HEALTH_POTION).unwrap();
         assert!(matches!(potion.effect, ConsumableEffect::Heal(8)));
     }
 
     #[test]
-    fn weapon_kind_serde_roundtrip() {
+    fn 무기종류는_serde_직렬화_왕복이_보존된다() {
         let wk = WeaponKind::SWORD;
         let s = ron::ser::to_string(&wk).unwrap();
         assert_eq!(s, "\"sword\"");
@@ -1376,11 +1417,774 @@ mod tests {
     }
 
     #[test]
-    fn quest_item_kind_serde_roundtrip() {
+    fn 퀘스트아이템종류는_serde_직렬화_왕복이_보존된다() {
         let qk = QuestItemKind("eternal_gem");
         let s = ron::ser::to_string(&qk).unwrap();
         assert_eq!(s, "\"eternal_gem\"");
         let parsed: QuestItemKind = ron::de::from_str(&s).unwrap();
         assert_eq!(parsed, qk);
+    }
+
+    // ── 추가: 순수 로직 분기 커버리지 ───────────────────────────────────────
+
+    #[test]
+    fn 아이템_색상은_카테고리마다_구분된다() {
+        assert_eq!(ItemKind::Weapon(WeaponKind::SWORD).color(),     Color::rgb(1.0, 1.0, 0.2));
+        assert_eq!(ItemKind::Armor(ArmorKind::LEATHER_ARMOR).color(), Color::rgb(0.2, 0.4, 1.0));
+        assert_eq!(ItemKind::Consumable(ConsumableKind::HEALTH_POTION).color(), Color::rgb(0.2, 0.9, 0.2));
+        assert_eq!(ItemKind::QuestItem(QuestItemKind("eternal_gem")).color(), Color::rgb(0.8, 0.3, 1.0));
+    }
+
+    #[test]
+    fn 골드를_획득하면_잔액이_증가한다() {
+        let mut inv = PlayerInventory::default();
+        let before = inv.gold;
+        inv.earn_gold(25);
+        assert_eq!(inv.gold, before + 25);
+    }
+
+    #[test]
+    fn 잔액이_충분하면_골드_소비에_성공한다() {
+        let mut inv = PlayerInventory::default();
+        inv.gold = 100;
+        assert!(inv.spend_gold(40));
+        assert_eq!(inv.gold, 60);
+    }
+
+    #[test]
+    fn 잔액이_부족하면_골드_소비에_실패하고_잔액이_유지된다() {
+        let mut inv = PlayerInventory::default();
+        inv.gold = 30;
+        assert!(!inv.spend_gold(40));
+        assert_eq!(inv.gold, 30, "실패 시 잔액은 변하지 않아야 한다");
+    }
+
+    #[test]
+    fn 잔액과_정확히_같은_금액은_소비에_성공한다() {
+        let mut inv = PlayerInventory::default();
+        inv.gold = 50;
+        assert!(inv.spend_gold(50));
+        assert_eq!(inv.gold, 0);
+    }
+
+    #[test]
+    fn 알수없는_몬스터의_드롭테이블은_포션만_반환한다() {
+        let t = monster_drop_table("듣보잡몬스터");
+        assert_eq!(t.len(), 1);
+        assert!(matches!(t[0].0, ItemKind::Consumable(ConsumableKind::HEALTH_POTION)));
+    }
+
+    #[test]
+    fn 방어구종류는_serde_직렬화_왕복이_보존된다() {
+        let ak = ArmorKind::LEATHER_ARMOR;
+        let s = ron::ser::to_string(&ak).unwrap();
+        assert_eq!(s, "\"leather_armor\"");
+        let parsed: ArmorKind = ron::de::from_str(&s).unwrap();
+        assert_eq!(parsed, ak);
+    }
+
+    #[test]
+    fn 소비아이템종류는_serde_직렬화_왕복이_보존된다() {
+        let ck = ConsumableKind::HEALTH_POTION;
+        let s = ron::ser::to_string(&ck).unwrap();
+        assert_eq!(s, "\"health_potion\"");
+        let parsed: ConsumableKind = ron::de::from_str(&s).unwrap();
+        assert_eq!(parsed, ck);
+    }
+
+    #[test]
+    fn 모든_아이템종류가_serde_직렬화_왕복이_보존된다() {
+        for kind in [
+            ItemKind::Weapon(WeaponKind::SWORD),
+            ItemKind::Armor(ArmorKind::LEATHER_ARMOR),
+            ItemKind::Consumable(ConsumableKind::HEALTH_POTION),
+            ItemKind::QuestItem(QuestItemKind("eternal_gem")),
+        ] {
+            let s = ron::ser::to_string(&kind).unwrap();
+            let parsed: ItemKind = ron::de::from_str(&s).unwrap();
+            assert_eq!(parsed, kind);
+        }
+    }
+
+    #[test]
+    fn 등록되지_않은_무기의_공격력은_0이다() {
+        assert_eq!(weapon_attack(WeaponKind("does_not_exist"), qi()), 0);
+    }
+
+    #[test]
+    fn 등록되지_않은_방어구의_방어보너스는_0이다() {
+        assert_eq!(armor_defense_bonus(ArmorKind("does_not_exist"), qi()), 0);
+    }
+
+    #[test]
+    fn 등록되지_않은_종류의_글리프는_물음표로_폴백된다() {
+        // 각 카테고리의 미등록 ID 는 "?" 로 폴백.
+        assert_eq!(ItemKind::Weapon(WeaponKind("nope")).glyph(qi()), "?");
+        assert_eq!(ItemKind::Armor(ArmorKind("nope")).glyph(qi()), "?");
+        assert_eq!(ItemKind::Consumable(ConsumableKind("nope")).glyph(qi()), "?");
+        assert_eq!(ItemKind::QuestItem(QuestItemKind("nope")).glyph(qi()), "?");
+    }
+
+    #[test]
+    fn 등록되지_않은_종류의_유니코드와_아이콘_글리프도_폴백된다() {
+        for style in [GlyphStyle::Unicode, GlyphStyle::GameIcon] {
+            assert_eq!(glyph_for_style(ItemKind::Weapon(WeaponKind("nope")), style, qi()), "?");
+            assert_eq!(glyph_for_style(ItemKind::Armor(ArmorKind("nope")), style, qi()), "?");
+            assert_eq!(glyph_for_style(ItemKind::Consumable(ConsumableKind("nope")), style, qi()), "?");
+            assert_eq!(glyph_for_style(ItemKind::QuestItem(QuestItemKind("nope")), style, qi()), "?");
+        }
+    }
+
+    #[test]
+    fn 등록되지_않은_종류의_표시이름은_물음표로_폴백된다() {
+        assert_eq!(ItemKind::Weapon(WeaponKind("nope")).display_name(qi()), "???");
+        assert_eq!(ItemKind::Armor(ArmorKind("nope")).display_name(qi()), "???");
+        assert_eq!(ItemKind::Consumable(ConsumableKind("nope")).display_name(qi()), "???");
+        assert_eq!(ItemKind::QuestItem(QuestItemKind("nope")).display_name(qi()), "???");
+    }
+
+    #[test]
+    fn 등록되지_않은_종류의_획득메시지는_카테고리별_기본문구로_폴백된다() {
+        assert_eq!(ItemKind::Weapon(WeaponKind("nope")).pickup_message(qi()), "무기를 획득했다!");
+        assert_eq!(ItemKind::Armor(ArmorKind("nope")).pickup_message(qi()), "방어구를 획득했다!");
+        assert_eq!(ItemKind::Consumable(ConsumableKind("nope")).pickup_message(qi()), "소모품을 획득했다!");
+        assert_eq!(ItemKind::QuestItem(QuestItemKind("nope")).pickup_message(qi()), "아이템을 획득했다!");
+    }
+
+    #[test]
+    fn 글리프폰트핸들이_각_스타일에_맞는_핸들을_돌려준다() {
+        // GlyphFontHandles::for_style 의 3개 arm 매핑 (핸들 동등성).
+        let h = GlyphFontHandles {
+            ascii: Handle::weak_from_u128(1),
+            unicode: Handle::weak_from_u128(2),
+            game_icon: Handle::weak_from_u128(3),
+        };
+        assert_eq!(h.for_style(GlyphStyle::Ascii), h.ascii);
+        assert_eq!(h.for_style(GlyphStyle::Unicode), h.unicode);
+        assert_eq!(h.for_style(GlyphStyle::GameIcon), h.game_icon);
+    }
+
+    #[test]
+    fn 다른_종류만_있을때_해당_소비아이템_사용은_실패한다() {
+        // consumables 에 슬롯은 있지만 요청한 kind 가 아닌 경우 (position None 경로)
+        let mut inv = PlayerInventory::default();
+        inv.add_consumable(ConsumableKind::HEALTH_POTION);
+        assert!(!inv.use_consumable(ConsumableKind("mana_potion")));
+        assert_eq!(inv.consumables[0].1, 1, "다른 kind 사용 실패는 기존 수량 보존");
+    }
+
+    // ── 추가: Bevy 시스템 App 하네스 테스트 ─────────────────────────────────
+    use crate::modules::combat::Defeated;
+
+    #[test]
+    fn 등록되지_않은_퀘스트아이템의_이미지경로는_기본값으로_폴백된다() {
+        // 미등록 quest item → 기본 이미지 경로 폴백
+        assert_eq!(quest_item_image_path(QuestItemKind("nope"), qi()), "scene/open-chest.png");
+    }
+
+    #[test]
+    fn 등록된_퀘스트아이템은_지정된_이미지경로를_반환한다() {
+        // 등록된 quest item 은 registry 의 image_path 를 그대로 반환 (Some 경로)
+        let expected = qi().quest_item(QuestItemKind("eternal_gem")).unwrap().image_path;
+        assert_eq!(quest_item_image_path(QuestItemKind("eternal_gem"), qi()), expected);
+    }
+
+    // ── load_*_system: RON 파일을 registry 로 적재 ──
+    #[test]
+    fn 무기_로드_시스템이_레지스트리를_채운다() {
+        let mut app = App::new();
+        app.init_resource::<ItemRegistry>()
+            .add_systems(Startup, load_weapons_system);
+        app.update();
+        let r = app.world.resource::<ItemRegistry>();
+        assert!(r.weapon(WeaponKind::SWORD).is_some());
+    }
+
+    #[test]
+    fn 방어구_로드_시스템이_레지스트리를_채운다() {
+        let mut app = App::new();
+        app.init_resource::<ItemRegistry>()
+            .add_systems(Startup, load_armors_system);
+        app.update();
+        assert!(app.world.resource::<ItemRegistry>().armor(ArmorKind::LEATHER_ARMOR).is_some());
+    }
+
+    #[test]
+    fn 소비아이템_로드_시스템이_레지스트리를_채운다() {
+        let mut app = App::new();
+        app.init_resource::<ItemRegistry>()
+            .add_systems(Startup, load_consumables_system);
+        app.update();
+        assert!(app.world.resource::<ItemRegistry>().consumable(ConsumableKind::HEALTH_POTION).is_some());
+    }
+
+    #[test]
+    fn 퀘스트아이템_로드_시스템이_레지스트리를_채운다() {
+        let mut app = App::new();
+        app.init_resource::<QuestItemRegistry>()
+            .add_systems(Startup, load_quest_items_system);
+        app.update();
+        assert!(app.world.resource::<QuestItemRegistry>().quest_items.len() >= 1);
+    }
+
+    #[test]
+    fn 시작로드아웃_로드_시스템이_시작골드를_읽어온다() {
+        let mut app = App::new();
+        app.init_resource::<StartLoadoutRegistry>()
+            .add_systems(Startup, load_start_loadout_system);
+        app.update();
+        assert_eq!(app.world.resource::<StartLoadoutRegistry>().0.gold, 50);
+    }
+
+    // ── cycle_glyph_style ──
+    fn glyph_app() -> App {
+        let mut app = App::new();
+        app.insert_resource(GlyphConfig { style: GlyphStyle::Ascii })
+            .insert_resource(ButtonInput::<KeyCode>::default())
+            .add_event::<LogMessage>()
+            .add_systems(Update, cycle_glyph_style);
+        app
+    }
+
+    #[test]
+    fn G키를_누르면_글리프스타일이_다음으로_바뀐다() {
+        let mut app = glyph_app();
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyG);
+        app.update();
+        assert_eq!(app.world.resource::<GlyphConfig>().style, GlyphStyle::Unicode);
+    }
+
+    #[test]
+    fn 키_입력이_없으면_글리프스타일이_바뀌지_않는다() {
+        let mut app = glyph_app();
+        app.update();
+        assert_eq!(app.world.resource::<GlyphConfig>().style, GlyphStyle::Ascii);
+    }
+
+    #[test]
+    fn 사망_상태에서는_글리프스타일_전환이_차단된다() {
+        let mut app = glyph_app();
+        app.world.spawn(Defeated);
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyG);
+        app.update();
+        assert_eq!(app.world.resource::<GlyphConfig>().style, GlyphStyle::Ascii, "사망 시 글리프 전환 차단");
+    }
+
+    // ── apply_equipment_stats ──
+    #[test]
+    fn 장비가_바뀌면_플레이어_전투스탯이_갱신된다() {
+        let mut app = App::new();
+        app.insert_resource(PlayerEquipment { weapon: Some(WeaponKind::SPEAR), armor: Some(ArmorKind::LEATHER_ARMOR) })
+            .insert_resource(build_test_registry());
+        let e = app.world.spawn((
+            Player,
+            CombatStats { hp: 30, max_hp: 30, mp: 0, max_mp: 0, attack: PLAYER_ATK, defense: PLAYER_DEF },
+        )).id();
+        app.add_systems(Update, apply_equipment_stats);
+        app.update();
+        let stats = app.world.get::<CombatStats>(e).unwrap();
+        assert_eq!(stats.attack, 9, "창 공격력");
+        assert_eq!(stats.defense, PLAYER_DEF + 2, "가죽 갑옷 +2");
+    }
+
+    #[test]
+    fn 플레이어가_없으면_장비스탯_적용은_아무일도_하지_않는다() {
+        let mut app = App::new();
+        app.insert_resource(PlayerEquipment::default())
+            .insert_resource(build_test_registry())
+            .add_systems(Update, apply_equipment_stats);
+        app.update(); // 플레이어 없음 → get_single_mut Err → 조용히 반환 (panic 없음)
+    }
+
+    #[test]
+    fn 장비가_바뀌지_않으면_전투스탯을_재계산하지_않는다() {
+        let mut app = App::new();
+        app.insert_resource(PlayerEquipment { weapon: Some(WeaponKind::SWORD), armor: None })
+            .insert_resource(build_test_registry());
+        let e = app.world.spawn((
+            Player,
+            CombatStats { hp: 30, max_hp: 30, mp: 0, max_mp: 0, attack: PLAYER_ATK, defense: PLAYER_DEF },
+        )).id();
+        app.add_systems(Update, apply_equipment_stats);
+        app.update(); // 1회차: 변경됨 → 적용 (attack=7)
+        assert_eq!(app.world.get::<CombatStats>(e).unwrap().attack, 7);
+        // 외부에서 attack 을 임의로 바꿔도 2회차엔 equipment 미변경 → 덮어쓰지 않음
+        app.world.get_mut::<CombatStats>(e).unwrap().attack = 999;
+        app.update();
+        assert_eq!(app.world.get::<CombatStats>(e).unwrap().attack, 999, "equipment 미변경 시 재계산 안 함");
+    }
+
+    // ── handle_despawn_world_item ──
+    #[test]
+    fn 월드아이템_제거이벤트는_일치하는_종류의_아이템을_제거한다() {
+        let mut app = App::new();
+        app.insert_resource(build_test_registry())
+            .add_event::<crate::modules::quest::DespawnWorldItemEvent>()
+            .add_systems(Update, handle_despawn_world_item);
+        let e = app.world.spawn(Item {
+            kind: ItemKind::QuestItem(QuestItemKind("eternal_gem")),
+            tile_x: 1, tile_y: 1,
+        }).id();
+        app.world.send_event(crate::modules::quest::DespawnWorldItemEvent("eternal_gem".to_string()));
+        app.update();
+        assert!(app.world.get_entity(e).is_none(), "해당 아이템 엔티티 제거됨");
+    }
+
+    #[test]
+    fn 월드아이템_제거이벤트는_종류가_다른_아이템은_남겨둔다() {
+        // 일치하는 종류만 제거하고, kind 가 다른 아이템은 보존 (item.kind == kind 의 False 분기).
+        let mut app = App::new();
+        app.insert_resource(build_test_registry())
+            .add_event::<crate::modules::quest::DespawnWorldItemEvent>()
+            .add_systems(Update, handle_despawn_world_item);
+        let target = app.world.spawn(Item {
+            kind: ItemKind::QuestItem(QuestItemKind("eternal_gem")),
+            tile_x: 1, tile_y: 1,
+        }).id();
+        let other = app.world.spawn(Item {
+            kind: ItemKind::QuestItem(QuestItemKind("philosophers_stone")),
+            tile_x: 2, tile_y: 2,
+        }).id();
+        app.world.send_event(crate::modules::quest::DespawnWorldItemEvent("eternal_gem".to_string()));
+        app.update();
+        assert!(app.world.get_entity(target).is_none(), "일치 종류는 제거");
+        assert!(app.world.get_entity(other).is_some(), "다른 종류는 보존");
+    }
+
+    #[test]
+    fn 월드아이템_제거이벤트는_알수없는_id를_무시한다() {
+        let mut app = App::new();
+        app.insert_resource(build_test_registry())
+            .add_event::<crate::modules::quest::DespawnWorldItemEvent>()
+            .add_systems(Update, handle_despawn_world_item);
+        let e = app.world.spawn(Item {
+            kind: ItemKind::QuestItem(QuestItemKind("eternal_gem")),
+            tile_x: 1, tile_y: 1,
+        }).id();
+        app.world.send_event(crate::modules::quest::DespawnWorldItemEvent("does_not_exist".to_string()));
+        app.update();
+        assert!(app.world.get_entity(e).is_some(), "미등록 id 는 무시");
+    }
+
+    // ── pickup_items ──
+    fn pickup_app() -> App {
+        let mut app = App::new();
+        app.insert_resource(build_test_registry())
+            .init_resource::<PlayerInventory>()
+            .init_resource::<crate::modules::ui::minimap::DiscoveredMarkers>()
+            .init_resource::<crate::modules::zone::WorldState>()
+            .add_event::<PlayerActedEvent>()
+            .add_event::<LogMessage>()
+            .add_event::<QuestItemAcquiredEvent>()
+            .add_systems(Update, pickup_items);
+        app
+    }
+
+    fn spawn_player_at(app: &mut App, px: usize, py: usize) {
+        let pos = tile_to_world_coords(px, py).extend(0.0);
+        app.world.spawn((Player, Transform::from_translation(pos)));
+    }
+
+    #[test]
+    fn 턴_이벤트가_없으면_아이템을_줍지_않는다() {
+        let mut app = pickup_app();
+        spawn_player_at(&mut app, 5, 5);
+        let item = app.world.spawn(Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 5, tile_y: 5 }).id();
+        app.update(); // PlayerActedEvent 없음 → 반환
+        assert!(app.world.get_entity(item).is_some());
+        assert!(app.world.resource::<PlayerInventory>().items.is_empty());
+    }
+
+    #[test]
+    fn 플레이어가_없으면_아이템을_줍지_않는다() {
+        // 턴 이벤트는 있지만 플레이어가 없으면 get_single Err → 조용히 반환 (panic 없음).
+        let mut app = pickup_app();
+        app.world.spawn(Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 5, tile_y: 5 });
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert!(app.world.resource::<PlayerInventory>().items.is_empty());
+    }
+
+    #[test]
+    fn 주운_무기는_인벤토리에_들어간다() {
+        let mut app = pickup_app();
+        spawn_player_at(&mut app, 5, 5);
+        app.world.spawn(Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 5, tile_y: 5 });
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        let inv = app.world.resource::<PlayerInventory>();
+        assert_eq!(inv.items.len(), 1);
+        assert!(matches!(inv.items[0].kind, ItemKind::Weapon(_)));
+    }
+
+    #[test]
+    fn 주운_방어구는_인벤토리에_들어간다() {
+        let mut app = pickup_app();
+        spawn_player_at(&mut app, 5, 5);
+        app.world.spawn(Item { kind: ItemKind::Armor(ArmorKind::LEATHER_ARMOR), tile_x: 5, tile_y: 5 });
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert_eq!(app.world.resource::<PlayerInventory>().items.len(), 1);
+    }
+
+    #[test]
+    fn 주운_소비아이템은_인벤토리에서_누적된다() {
+        let mut app = pickup_app();
+        spawn_player_at(&mut app, 5, 5);
+        app.world.spawn(Item { kind: ItemKind::Consumable(ConsumableKind::HEALTH_POTION), tile_x: 5, tile_y: 5 });
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        let inv = app.world.resource::<PlayerInventory>();
+        assert!(inv.items.is_empty());
+        assert_eq!(inv.consumables.len(), 1);
+    }
+
+    #[test]
+    fn 퀘스트아이템을_주우면_획득이벤트가_발행되고_수집된다() {
+        let mut app = pickup_app();
+        spawn_player_at(&mut app, 5, 5);
+        app.world.spawn(Item { kind: ItemKind::QuestItem(QuestItemKind("eternal_gem")), tile_x: 5, tile_y: 5 });
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert_eq!(app.world.resource::<PlayerInventory>().items.len(), 1);
+        let events = app.world.resource::<Events<QuestItemAcquiredEvent>>();
+        assert!(events.len() >= 1, "퀘스트 아이템 획득 이벤트 발행");
+    }
+
+    #[test]
+    fn 플레이어_타일에_없는_아이템은_줍지_않는다() {
+        let mut app = pickup_app();
+        spawn_player_at(&mut app, 5, 5);
+        app.world.spawn(Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 9, tile_y: 9 });
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert!(app.world.resource::<PlayerInventory>().items.is_empty(), "다른 타일 아이템은 안 주움");
+    }
+
+    #[test]
+    fn 이동중이면_목적지_타일을_기준으로_아이템을_줍는다() {
+        // MovingTo 가 있으면 그 목적지 타일 기준으로 줍는다
+        let mut app = pickup_app();
+        let pos = tile_to_world_coords(5, 5).extend(0.0);
+        let target = tile_to_world_coords(7, 7).extend(0.0);
+        app.world.spawn((Player, Transform::from_translation(pos), MovingTo { target }));
+        app.world.spawn(Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 7, tile_y: 7 });
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert_eq!(app.world.resource::<PlayerInventory>().items.len(), 1);
+    }
+
+    // ── spawn_dropped_items (rng 기반 — 통계적 커버) ──
+    #[test]
+    fn 드롭_이벤트가_충분히_많으면_아이템이_월드에_스폰된다() {
+        let mut app = App::new();
+        app.insert_resource(GlyphConfig { style: GlyphStyle::Ascii })
+            .insert_resource(GlyphFontHandles {
+                ascii: Handle::default(), unicode: Handle::default(), game_icon: Handle::default(),
+            })
+            .insert_resource(build_test_registry())
+            .add_event::<ItemDropEvent>()
+            .add_systems(Update, spawn_dropped_items);
+        // 트롤은 포션 0.5 확률 — 200개 이벤트면 사실상 확실히 일부 드롭
+        for _ in 0..200 {
+            app.world.send_event(ItemDropEvent { tile_x: 3, tile_y: 3, monster_name: "트롤".into() });
+        }
+        app.update();
+        let count = app.world.query::<&Item>().iter(&app.world).count();
+        assert!(count > 0, "다수 이벤트 시 최소 한 개는 드롭되어야 한다");
+    }
+
+    // ── update_item_glyphs ──
+    #[test]
+    fn 글리프설정이_바뀌면_월드_아이템_글리프가_갱신된다() {
+        let mut app = App::new();
+        app.insert_resource(GlyphConfig { style: GlyphStyle::Unicode })
+            .insert_resource(GlyphFontHandles {
+                ascii: Handle::default(), unicode: Handle::default(), game_icon: Handle::default(),
+            })
+            .insert_resource(build_test_registry());
+        let e = app.world.spawn((
+            Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 0, tile_y: 0 },
+            Text::from_section("/", TextStyle::default()),
+        )).id();
+        app.add_systems(Update, update_item_glyphs);
+        app.update();
+        let text = app.world.get::<Text>(e).unwrap();
+        assert_eq!(text.sections[0].value, "\u{1F5E1}", "유니코드 글리프로 갱신");
+    }
+
+    #[test]
+    fn 글리프설정이_바뀌지_않으면_아이템_글리프를_갱신하지_않는다() {
+        let mut app = App::new();
+        app.insert_resource(GlyphConfig { style: GlyphStyle::Ascii })
+            .insert_resource(GlyphFontHandles {
+                ascii: Handle::default(), unicode: Handle::default(), game_icon: Handle::default(),
+            })
+            .insert_resource(build_test_registry());
+        let e = app.world.spawn((
+            Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 0, tile_y: 0 },
+            Text::from_section("X", TextStyle::default()),
+        )).id();
+        app.add_systems(Update, update_item_glyphs);
+        app.update(); // 1회차: config 변경됨 → "/" 로 갱신
+        assert_eq!(app.world.get::<Text>(e).unwrap().sections[0].value, "/");
+        app.world.get_mut::<Text>(e).unwrap().sections[0].value = "Z".into();
+        app.update(); // 2회차: config 미변경 → 갱신 안 함
+        assert_eq!(app.world.get::<Text>(e).unwrap().sections[0].value, "Z");
+    }
+
+    // ── AssetServer 의존 시스템 (폰트/팝업) ──
+    fn asset_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<Font>();
+        app.init_asset::<Image>();
+        app
+    }
+
+    #[test]
+    fn 글리프폰트_셋업이_폰트핸들_리소스를_삽입한다() {
+        let mut app = asset_app();
+        app.add_systems(Startup, setup_glyph_fonts);
+        app.update();
+        assert!(app.world.get_resource::<GlyphFontHandles>().is_some());
+    }
+
+    #[test]
+    fn 퀘스트아이템_획득이벤트가_오면_팝업이_생성된다() {
+        let mut app = asset_app();
+        app.insert_resource(build_test_registry())
+            .add_event::<QuestItemAcquiredEvent>()
+            .add_systems(Update, spawn_quest_item_popup);
+        app.world.spawn((Player, Transform::default()));
+        app.world.send_event(QuestItemAcquiredEvent(QuestItemKind("eternal_gem")));
+        app.update();
+        assert_eq!(app.world.query::<&QuestItemPopup>().iter(&app.world).count(), 1);
+    }
+
+    #[test]
+    fn 이벤트가_없으면_퀘스트아이템_팝업을_만들지_않는다() {
+        let mut app = asset_app();
+        app.insert_resource(build_test_registry())
+            .add_event::<QuestItemAcquiredEvent>()
+            .add_systems(Update, spawn_quest_item_popup);
+        app.world.spawn((Player, Transform::default()));
+        app.update();
+        assert_eq!(app.world.query::<&QuestItemPopup>().iter(&app.world).count(), 0);
+    }
+
+    #[test]
+    fn 팝업이_이미_열려있으면_새_팝업을_만들지_않는다() {
+        let mut app = asset_app();
+        app.insert_resource(build_test_registry())
+            .add_event::<QuestItemAcquiredEvent>()
+            .add_systems(Update, spawn_quest_item_popup);
+        app.world.spawn((Player, Transform::default()));
+        app.world.spawn(QuestItemPopup { tile_x: 0, tile_y: 0 });
+        app.world.send_event(QuestItemAcquiredEvent(QuestItemKind("eternal_gem")));
+        app.update();
+        assert_eq!(app.world.query::<&QuestItemPopup>().iter(&app.world).count(), 1, "이미 열려 있으면 추가 안 함");
+    }
+
+    #[test]
+    fn 플레이어가_없으면_퀘스트아이템_팝업을_만들지_않는다() {
+        let mut app = asset_app();
+        app.insert_resource(build_test_registry())
+            .add_event::<QuestItemAcquiredEvent>()
+            .add_systems(Update, spawn_quest_item_popup);
+        app.world.send_event(QuestItemAcquiredEvent(QuestItemKind("eternal_gem")));
+        app.update();
+        assert_eq!(app.world.query::<&QuestItemPopup>().iter(&app.world).count(), 0);
+    }
+
+    // ── close_quest_item_popup ──
+    fn close_popup_app() -> App {
+        let mut app = App::new();
+        app.insert_resource(ButtonInput::<KeyCode>::default())
+            .add_systems(Update, close_quest_item_popup);
+        app
+    }
+
+    #[test]
+    fn 팝업이_없으면_닫기_시스템은_아무일도_하지_않는다() {
+        let mut app = close_popup_app();
+        app.world.spawn((Player, Transform::default()));
+        app.update(); // 팝업 없음 → 즉시 반환
+    }
+
+    #[test]
+    fn ESC를_누르면_퀘스트아이템_팝업이_닫힌다() {
+        let mut app = close_popup_app();
+        app.world.spawn((Player, Transform::default()));
+        let p = app.world.spawn(QuestItemPopup { tile_x: 0, tile_y: 0 }).id();
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        app.update();
+        assert!(app.world.get_entity(p).is_none());
+    }
+
+    #[test]
+    fn 플레이어가_타일을_벗어나면_팝업이_닫힌다() {
+        let mut app = close_popup_app();
+        app.world.spawn((Player, Transform::from_translation(tile_to_world_coords(0, 0).extend(0.0))));
+        let p = app.world.spawn(QuestItemPopup { tile_x: 5, tile_y: 5 }).id();
+        app.update();
+        assert!(app.world.get_entity(p).is_none(), "다른 타일로 이동 시 닫힘");
+    }
+
+    #[test]
+    fn 플레이어가_같은_타일에_있으면_팝업이_유지된다() {
+        let mut app = close_popup_app();
+        app.world.spawn((Player, Transform::from_translation(tile_to_world_coords(3, 3).extend(0.0))));
+        let p = app.world.spawn(QuestItemPopup { tile_x: 3, tile_y: 3 }).id();
+        app.update();
+        assert!(app.world.get_entity(p).is_some(), "같은 타일이면 유지");
+    }
+
+    #[test]
+    fn x는_같지만_y가_다르면_팝업이_닫힌다() {
+        // px == tile_x 이지만 py != tile_y → `px != tile_x || py != tile_y` 의 우변을 True 로 평가.
+        let mut app = close_popup_app();
+        app.world.spawn((Player, Transform::from_translation(tile_to_world_coords(3, 3).extend(0.0))));
+        let p = app.world.spawn(QuestItemPopup { tile_x: 3, tile_y: 8 }).id();
+        app.update();
+        assert!(app.world.get_entity(p).is_none(), "x 같고 y 다르면 닫힘");
+    }
+
+    #[test]
+    fn 팝업이_있어도_플레이어가_없으면_닫기는_조용히_반환한다() {
+        // ESC 없이 팝업만 있고 플레이어가 없으면 get_single Err → 조용히 반환 (panic 없음).
+        let mut app = close_popup_app();
+        let p = app.world.spawn(QuestItemPopup { tile_x: 3, tile_y: 3 }).id();
+        app.update();
+        assert!(app.world.get_entity(p).is_some(), "플레이어 없으면 팝업 유지");
+    }
+
+    // ── 나머지 분기 보강 (display_name / default / id / heal / 로드아웃 seam / 플러그인) ──
+
+    #[test]
+    fn 글리프스타일의_표시이름이_종류별로_올바르다() {
+        assert_eq!(GlyphStyle::Ascii.display_name(),    "ASCII");
+        assert_eq!(GlyphStyle::Unicode.display_name(),  "유니코드");
+        assert_eq!(GlyphStyle::GameIcon.display_name(), "RPG 아이콘");
+    }
+
+    #[test]
+    fn 글리프설정의_기본값은_ascii이다() {
+        assert_eq!(GlyphConfig::default().style, GlyphStyle::Ascii);
+    }
+
+    #[test]
+    fn 각_아이템종류의_id가_내부식별자를_돌려준다() {
+        assert_eq!(WeaponKind::SWORD.id(), "sword");
+        assert_eq!(ArmorKind::LEATHER_ARMOR.id(), "leather_armor");
+        assert_eq!(ConsumableKind::HEALTH_POTION.id(), "health_potion");
+        assert_eq!(QuestItemKind("eternal_gem").id(), "eternal_gem");
+    }
+
+    #[test]
+    fn 미등록_소비아이템의_회복량은_0이다() {
+        assert_eq!(ConsumableKind("nope").heal_amount(qi()), 0);
+    }
+
+    #[test]
+    fn 시작로드아웃은_유효한_무기와_방어구를_장착한다() {
+        let mut inv = PlayerInventory::default();
+        let mut eq = PlayerEquipment::default();
+        let loadout = StartLoadout {
+            gold: 10,
+            weapon: Some("sword".into()),
+            armor: Some("leather_armor".into()),
+            items: vec![],
+            consumables: vec![],
+        };
+        apply_start_loadout(&mut inv, &mut eq, &loadout, qi());
+        assert_eq!(eq.weapon, Some(WeaponKind::SWORD));
+        assert_eq!(eq.armor, Some(ArmorKind::LEATHER_ARMOR));
+    }
+
+    #[test]
+    fn 시작로드아웃의_알수없는_방어구id는_장착하지_않는다() {
+        let mut inv = PlayerInventory::default();
+        let mut eq = PlayerEquipment::default();
+        let loadout = StartLoadout {
+            gold: 0,
+            weapon: None,
+            armor: Some("ghost_armor".into()),
+            items: vec![],
+            consumables: vec![],
+        };
+        apply_start_loadout(&mut inv, &mut eq, &loadout, qi());
+        assert!(eq.armor.is_none());
+    }
+
+    #[test]
+    fn 시작로드아웃파일을_정상적으로_읽는다() {
+        let l = read_start_loadout("assets/items/start_loadout.ron");
+        assert!(!l.items.is_empty(), "실제 파일엔 시작 무기들이 있다");
+    }
+
+    #[test]
+    fn 없는_시작로드아웃파일은_기본값으로_폴백한다() {
+        let l = read_start_loadout("/no/such/start_loadout_xyz.ron");
+        assert_eq!(l.gold, 50);
+        assert!(l.items.is_empty());
+    }
+
+    #[test]
+    fn 깨진_시작로드아웃파일은_기본값으로_폴백한다() {
+        let p = std::env::temp_dir().join("bevy_rogue_bad_loadout_test.ron");
+        std::fs::write(&p, "not valid ron {{{ <<<").unwrap();
+        let l = read_start_loadout(p.to_str().unwrap());
+        assert_eq!(l.gold, 50);
+        assert!(l.items.is_empty());
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn 세이브가_없으면_로드아웃을_적용한다() {
+        let mut inv = PlayerInventory::default();
+        let mut eq = PlayerEquipment::default();
+        let loadout = StartLoadout {
+            gold: 99, weapon: None, armor: None,
+            items: vec!["sword".into()], consumables: vec![],
+        };
+        apply_loadout_unless_save(&mut inv, &mut eq, &loadout, qi(), "/no/such/save_path.ron");
+        assert_eq!(inv.gold, 99);
+        assert_eq!(inv.items.len(), 1);
+    }
+
+    #[test]
+    fn 세이브가_있으면_로드아웃을_적용하지_않는다() {
+        let p = std::env::temp_dir().join("bevy_rogue_fake_save_test.ron");
+        std::fs::write(&p, "x").unwrap();
+        let mut inv = PlayerInventory::default();
+        let before = inv.gold;
+        let mut eq = PlayerEquipment::default();
+        let loadout = StartLoadout {
+            gold: 99, weapon: None, armor: None,
+            items: vec!["sword".into()], consumables: vec![],
+        };
+        apply_loadout_unless_save(&mut inv, &mut eq, &loadout, qi(), p.to_str().unwrap());
+        assert_eq!(inv.gold, before, "세이브가 있으면 로드아웃 미적용");
+        assert!(inv.items.is_empty());
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn 무세이브_로드아웃_시스템이_패닉없이_실행된다() {
+        let mut app = App::new();
+        app.insert_resource(build_test_registry())
+            .init_resource::<PlayerInventory>()
+            .init_resource::<PlayerEquipment>()
+            .init_resource::<StartLoadoutRegistry>()
+            .add_systems(Update, apply_start_loadout_if_no_save);
+        app.update();
+    }
+
+    #[test]
+    fn 아이템플러그인이_정상적으로_빌드된다() {
+        let mut app = App::new();
+        app.add_plugins(ItemPlugin::default());
     }
 }

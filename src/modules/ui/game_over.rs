@@ -318,9 +318,12 @@ fn section(value: impl Into<String>, font: &Handle<Font>, size: f32, color: Colo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modules::map::MapGenerator;
+
+    // ── 순수 텍스트 빌더 ───────────────────────────────────────────────────
 
     #[test]
-    fn game_over_text_includes_actions_and_summary() {
+    fn 게임오버_텍스트는_제목과_생존요약과_조작안내를_담는다() {
         let sections = game_over_sections(42, "던전 1층", &Handle::default());
         let text: String = sections.iter().map(|s| s.value.as_str()).collect();
         assert!(text.contains("GAME OVER"));
@@ -328,5 +331,385 @@ mod tests {
         assert!(text.contains("42"));
         assert!(text.contains("R / N"));
         assert!(text.contains("Esc"));
+    }
+
+    #[test]
+    fn 섹션_빌더는_주어진_값과_스타일로_텍스트섹션을_만든다() {
+        let section = section("안녕", &Handle::default(), 21.0, Color::WHITE);
+        assert_eq!(section.value, "안녕");
+        assert_eq!(section.style.font_size, 21.0);
+        assert_eq!(section.style.color, Color::WHITE);
+    }
+
+    // ── 테스트용 맵 생성기 ─────────────────────────────────────────────────
+
+    /// Town 알고리즘 이름("organic_village")으로 등록해 generate_with 가 Some 을
+    /// 반환하게 만드는 가벼운 더미 생성기.
+    struct 더미생성기;
+    impl MapGenerator for 더미생성기 {
+        fn generate(&self, width: usize, height: usize, _seed: u64) -> Map {
+            Map::new(width, height)
+        }
+        fn name(&self) -> &str {
+            "organic_village"
+        }
+    }
+
+    // ── 실제 세이브 파일 보호 가드 ─────────────────────────────────────────
+
+    /// start_new_run 은 delete_save() 로 실제 SAVE_PATH 를 지우려 한다.
+    /// 테스트가 실제 save/progress.ron 을 파괴하지 않도록, 호출 전에 임시 백업으로
+    /// rename 해 두고 끝나면 되돌린다. (save 모듈 테스트와 동일한 패턴)
+    ///
+    /// rename 은 대상이 없으면 조용히 실패(`let _`)하므로 분기 없이 무조건 시도해도 안전하다.
+    struct 세이브_가드 {
+        backup: String,
+    }
+    impl 세이브_가드 {
+        fn new() -> Self {
+            let path = crate::modules::save::SAVE_PATH;
+            let backup = format!("{path}.game_over_test_backup");
+            let _ = std::fs::rename(path, &backup); // 실제 세이브가 있으면 잠시 치워 둔다
+            Self { backup }
+        }
+    }
+    impl Drop for 세이브_가드 {
+        fn drop(&mut self) {
+            // 백업이 없으면 no-op. 새로 만들어진 (없던) 세이브는 남기지 않도록 우선 삭제 후 복원.
+            let _ = std::fs::remove_file(crate::modules::save::SAVE_PATH);
+            let _ = std::fs::rename(&self.backup, crate::modules::save::SAVE_PATH);
+        }
+    }
+
+    // ── App 하네스 ─────────────────────────────────────────────────────────
+
+    /// AssetServer(폰트 로드)가 필요한 오버레이 렌더 시스템용 App 하네스.
+    fn 렌더_하네스() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<Font>();
+        app
+    }
+
+    /// 키 입력으로 종료/새 게임을 다루는 시스템용 App 하네스.
+    fn 입력_하네스() -> App {
+        let mut app = App::new();
+        app.insert_resource(ButtonInput::<KeyCode>::default());
+        app
+    }
+
+    /// handle_new_game_input / start_new_run 이 요구하는 모든 리소스를 기본값으로 채운다.
+    fn 새게임_리소스_삽입(app: &mut App, registry: MapGeneratorRegistry) {
+        app.add_event::<ApplyMapEvent>();
+        app.insert_resource(registry);
+        app.insert_resource(GlobalSeed(123));
+        app.insert_resource(GlobalTurn(7));
+        app.insert_resource(WorldState::default());
+        app.insert_resource(ZonePersistence::default());
+        app.insert_resource(NamedZoneConfig::default());
+        app.insert_resource(QuestState::default());
+        app.insert_resource(PlayerInventory::default());
+        app.insert_resource(PlayerEquipment::default());
+        app.insert_resource(PlayerProgress::default());
+        app.insert_resource(MessageLog::default());
+        app.insert_resource(EquipmentPanelOpen(false));
+        app.insert_resource(EquipmentUiState::default());
+        app.insert_resource(QuestPanelOpen(false));
+        app.insert_resource(ShopPanelOpen(false));
+        app.insert_resource(ShopUiState::default());
+        app.insert_resource(MoveHoldState::default());
+        app.insert_resource(PlayerPath::default());
+        app.insert_resource(crate::modules::item::build_test_registry());
+        app.insert_resource(crate::modules::item::StartLoadoutRegistry::default());
+        app.insert_resource(crate::modules::ranged::RangedTargeting::default());
+    }
+
+    // ── setup_game_over_overlay ────────────────────────────────────────────
+
+    #[test]
+    fn 시작시_숨김상태의_게임오버_오버레이와_텍스트가_생성된다() {
+        let mut app = 렌더_하네스();
+        app.add_systems(Startup, setup_game_over_overlay);
+        app.update();
+
+        let mut q = app.world.query_filtered::<&Visibility, With<GameOverOverlay>>();
+        assert_eq!(*q.single(&app.world), Visibility::Hidden);
+        assert_eq!(app.world.query::<&GameOverText>().iter(&app.world).count(), 1);
+    }
+
+    // ── update_game_over_overlay ───────────────────────────────────────────
+
+    #[test]
+    fn 플레이어가_쓰러지면_오버레이가_보이고_텍스트가_현재상태로_갱신된다() {
+        let mut app = 렌더_하네스();
+        app.insert_resource(WorldState::default());
+        app.insert_resource(GlobalTurn(99));
+        app.add_systems(Startup, setup_game_over_overlay);
+        app.add_systems(Update, update_game_over_overlay);
+        app.update(); // setup
+
+        app.world.spawn((Player, Defeated));
+        app.update();
+
+        let mut vq = app.world.query_filtered::<&Visibility, With<GameOverOverlay>>();
+        assert_eq!(*vq.single(&app.world), Visibility::Inherited);
+        let mut tq = app.world.query_filtered::<&Text, With<GameOverText>>();
+        let text: String = tq.single(&app.world).sections.iter().map(|s| s.value.as_str()).collect();
+        assert!(text.contains("GAME OVER"));
+        assert!(text.contains("마을")); // 기본 WorldState 의 현재 존
+        assert!(text.contains("99")); // 생존 턴
+    }
+
+    #[test]
+    fn 오버레이와_텍스트_엔티티가_없으면_갱신은_조용히_넘어간다() {
+        let mut app = 렌더_하네스();
+        app.insert_resource(WorldState::default());
+        app.insert_resource(GlobalTurn(0));
+        // setup 을 돌리지 않아 GameOverOverlay / GameOverText 엔티티가 없다.
+        app.world.spawn((Player, Defeated)); // defeated == true 로 두 get_single_mut 의 Err 분기를 모두 탄다.
+        app.add_systems(Update, update_game_over_overlay);
+        app.update(); // 패닉 없이 통과해야 한다.
+
+        assert_eq!(app.world.query::<&GameOverOverlay>().iter(&app.world).count(), 0);
+        assert_eq!(app.world.query::<&GameOverText>().iter(&app.world).count(), 0);
+    }
+
+    #[test]
+    fn 쓰러지지_않은_상태면_오버레이는_숨김으로_유지된다() {
+        let mut app = 렌더_하네스();
+        app.insert_resource(WorldState::default());
+        app.insert_resource(GlobalTurn(0));
+        app.add_systems(Startup, setup_game_over_overlay);
+        app.add_systems(Update, update_game_over_overlay);
+        app.update(); // setup + 갱신: defeated 없음 → Hidden
+
+        let mut vq = app.world.query_filtered::<&Visibility, With<GameOverOverlay>>();
+        assert_eq!(*vq.single(&app.world), Visibility::Hidden);
+    }
+
+    // ── handle_game_over_exit ──────────────────────────────────────────────
+
+    #[test]
+    fn 쓰러진_상태에서_Esc를_누르면_종료이벤트가_발행된다() {
+        let mut app = 입력_하네스();
+        app.add_event::<AppExit>();
+        app.world.spawn(Defeated);
+        app.add_systems(Update, handle_game_over_exit);
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        app.update();
+
+        let events = app.world.resource::<Events<AppExit>>();
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn 쓰러진_상태라도_Esc를_누르지_않으면_종료되지_않는다() {
+        let mut app = 입력_하네스();
+        app.add_event::<AppExit>();
+        app.world.spawn(Defeated);
+        app.add_systems(Update, handle_game_over_exit);
+        app.update();
+
+        let events = app.world.resource::<Events<AppExit>>();
+        assert_eq!(events.len(), 0);
+    }
+
+    #[test]
+    fn 쓰러지지_않은_상태에서는_Esc를_눌러도_종료되지_않는다() {
+        let mut app = 입력_하네스();
+        app.add_event::<AppExit>();
+        // Defeated 엔티티 없음 → early return.
+        app.add_systems(Update, handle_game_over_exit);
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        app.update();
+
+        let events = app.world.resource::<Events<AppExit>>();
+        assert_eq!(events.len(), 0);
+    }
+
+    // ── handle_new_game_input + start_new_run ──────────────────────────────
+
+    #[test]
+    fn 쓰러진_상태에서_R을_누르면_새_게임이_시작되어_상태가_초기화된다() {
+        let _가드 = 세이브_가드::new();
+        let mut app = 입력_하네스();
+        let mut registry = MapGeneratorRegistry::new();
+        registry.register(Box::new(더미생성기));
+        새게임_리소스_삽입(&mut app, registry);
+        // 초기화 대상 상태를 일부러 오염시킨다.
+        app.world.resource_mut::<GlobalTurn>().0 = 50;
+        app.world.resource_mut::<EquipmentPanelOpen>().0 = true;
+        app.world.resource_mut::<MessageLog>().0.push("죽었다".into());
+        let player = app
+            .world
+            .spawn((
+                Player,
+                Defeated,
+                CombatStats { hp: 0, max_hp: 30, mp: 0, max_mp: 10, attack: 1, defense: 0 },
+            ))
+            .id();
+
+        app.add_systems(Update, handle_new_game_input);
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyR);
+        app.update();
+
+        // 상태 초기화 확인
+        assert_eq!(app.world.resource::<GlobalTurn>().0, 0);
+        assert!(!app.world.resource::<EquipmentPanelOpen>().0);
+        assert!(app.world.resource::<MessageLog>().0.is_empty());
+        // 플레이어 스탯 복구 + Defeated 제거
+        let stats = app.world.get::<CombatStats>(player).unwrap();
+        assert_eq!(stats.hp, PLAYER_HP);
+        assert_eq!(stats.max_hp, PLAYER_HP);
+        assert!(!app.world.entity(player).contains::<Defeated>());
+        // 맵 적용 이벤트 발행 (생성기가 organic_village 를 알기 때문에 Some 경로)
+        let events = app.world.resource::<Events<ApplyMapEvent>>();
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn 쓰러진_상태에서_N을_눌러도_R과_동일하게_새_게임이_시작된다() {
+        let _가드 = 세이브_가드::new();
+        let mut app = 입력_하네스();
+        let mut registry = MapGeneratorRegistry::new();
+        registry.register(Box::new(더미생성기));
+        새게임_리소스_삽입(&mut app, registry);
+        app.world.spawn((
+            Player,
+            Defeated,
+            CombatStats { hp: 0, max_hp: 30, mp: 0, max_mp: 10, attack: 1, defense: 0 },
+        ));
+
+        app.add_systems(Update, handle_new_game_input);
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyN);
+        app.update();
+
+        let events = app.world.resource::<Events<ApplyMapEvent>>();
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn 새_게임은_몬스터_핏자국_원격커서_등_월드_엔티티를_제거한다() {
+        let _가드 = 세이브_가드::new();
+        let mut app = 입력_하네스();
+        let mut registry = MapGeneratorRegistry::new();
+        registry.register(Box::new(더미생성기));
+        새게임_리소스_삽입(&mut app, registry);
+        app.world.spawn((Player, Defeated, CombatStats { hp: 0, max_hp: 1, mp: 0, max_mp: 1, attack: 1, defense: 0 }));
+        // despawn 대상 마커가 붙은 엔티티들 (필드 의미는 무관, 마커 존재만 중요).
+        let monster = app
+            .world
+            .spawn(Monster {
+                name: "슬라임".into(),
+                tile_x: 0,
+                tile_y: 0,
+                vision_radius: 0,
+                alert_turns: 0,
+                slot_idx: 0,
+            })
+            .id();
+        let blood = app.world.spawn(BloodStain { alpha: 1.0, decay_per_turn: 0.1 }).id();
+        let cursor = app.world.spawn(crate::modules::ranged::RangedCursor).id();
+        // 원격 타게팅이 켜져 있던 상태를 끄는지 확인
+        app.world.resource_mut::<crate::modules::ranged::RangedTargeting>().active = true;
+
+        app.add_systems(Update, handle_new_game_input);
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyR);
+        app.update();
+
+        for e in [monster, blood, cursor] {
+            assert!(app.world.get_entity(e).is_none(), "엔티티 {e:?} 가 제거되지 않았다");
+        }
+        assert!(!app.world.resource::<crate::modules::ranged::RangedTargeting>().active);
+    }
+
+    #[test]
+    fn 생성기가_없으면_새_게임은_빈_맵으로_폴백한다() {
+        let _가드 = 세이브_가드::new();
+        let mut app = 입력_하네스();
+        // 빈 레지스트리 → generate_with 가 None → unwrap_or_else 의 폴백 분기.
+        새게임_리소스_삽입(&mut app, MapGeneratorRegistry::new());
+        app.world.spawn((Player, Defeated, CombatStats { hp: 0, max_hp: 1, mp: 0, max_mp: 1, attack: 1, defense: 0 }));
+
+        app.add_systems(Update, handle_new_game_input);
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyR);
+        app.update();
+
+        // 폴백이어도 맵 적용 이벤트는 발행된다.
+        let events = app.world.resource::<Events<ApplyMapEvent>>();
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn 플레이어_엔티티가_없어도_새_게임은_패닉없이_맵을_적용한다() {
+        let _가드 = 세이브_가드::new();
+        let mut app = 입력_하네스();
+        let mut registry = MapGeneratorRegistry::new();
+        registry.register(Box::new(더미생성기));
+        새게임_리소스_삽입(&mut app, registry);
+        // Player+CombatStats 엔티티 없이 Defeated 만 있는 엔티티로 진입 조건만 만족시킨다.
+        app.world.spawn(Defeated);
+
+        app.add_systems(Update, handle_new_game_input);
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyR);
+        app.update(); // get_single_mut 실패 분기 → 스탯 복구 건너뜀
+
+        let events = app.world.resource::<Events<ApplyMapEvent>>();
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn 쓰러진_상태라도_R이나_N이_아니면_새_게임은_시작되지_않는다() {
+        let _가드 = 세이브_가드::new();
+        let mut app = 입력_하네스();
+        let mut registry = MapGeneratorRegistry::new();
+        registry.register(Box::new(더미생성기));
+        새게임_리소스_삽입(&mut app, registry);
+        app.world.resource_mut::<GlobalTurn>().0 = 50;
+        app.world.spawn((Player, Defeated, CombatStats { hp: 0, max_hp: 1, mp: 0, max_mp: 1, attack: 1, defense: 0 }));
+
+        app.add_systems(Update, handle_new_game_input);
+        // R/N 이 아닌 다른 키.
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Space);
+        app.update();
+
+        assert_eq!(app.world.resource::<GlobalTurn>().0, 50); // 초기화되지 않음
+        let events = app.world.resource::<Events<ApplyMapEvent>>();
+        assert_eq!(events.len(), 0);
+    }
+
+    #[test]
+    fn 쓰러지지_않은_상태에서는_R을_눌러도_새_게임이_시작되지_않는다() {
+        let mut app = 입력_하네스();
+        let mut registry = MapGeneratorRegistry::new();
+        registry.register(Box::new(더미생성기));
+        새게임_리소스_삽입(&mut app, registry);
+        app.world.resource_mut::<GlobalTurn>().0 = 50;
+        // Defeated 엔티티 없음 → early return (delete_save 호출 전이라 가드 불필요).
+
+        app.add_systems(Update, handle_new_game_input);
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyR);
+        app.update();
+
+        assert_eq!(app.world.resource::<GlobalTurn>().0, 50);
+        let events = app.world.resource::<Events<ApplyMapEvent>>();
+        assert_eq!(events.len(), 0);
+    }
+
+    // ── 플러그인 build ─────────────────────────────────────────────────────
+
+    #[test]
+    fn 플러그인을_추가하면_게임오버_시스템들이_등록된다() {
+        let mut app = 렌더_하네스();
+        app.insert_resource(ButtonInput::<KeyCode>::default());
+        app.insert_resource(WorldState::default());
+        app.insert_resource(GlobalTurn(0));
+        app.add_event::<AppExit>();
+        새게임_리소스_삽입(&mut app, MapGeneratorRegistry::new());
+        app.add_plugins(GameOverPlugin);
+        app.update(); // build() + 시작 시스템 실행
+
+        assert_eq!(app.world.query::<&GameOverOverlay>().iter(&app.world).count(), 1);
     }
 }

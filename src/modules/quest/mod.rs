@@ -235,6 +235,7 @@ impl QuestState {
         self.flags.remove(flag);
     }
 
+    #[allow(dead_code)] // 테스트에서만 참조되는 공개 접근자 (프로덕션 미사용)
     pub fn get_flag(&self, flag: &str) -> Option<&str> {
         self.flags.get(flag).map(|s| s.as_str())
     }
@@ -280,11 +281,29 @@ fn validate_quest_item_refs(
     quest_registry: Res<QuestRegistry>,
     quest_items: Res<crate::modules::item::QuestItemRegistry>,
 ) {
+    let errors = collect_quest_item_ref_errors(&quest_registry, &quest_items);
+    if !errors.is_empty() {
+        // 도달 불가 방어코드 — 오류 수집 로직은 collect_quest_item_ref_errors 로 테스트.
+        // 실제 에셋이 유효하므로 이 process::exit 분기는 테스트에서 도달 불가.
+        for msg in &errors {
+            error!("[치명적] {}", msg);
+        }
+        std::process::exit(1);
+    }
+}
+
+/// 레지스트리의 모든 퀘스트 spawns/transition actions 가 참조하는 item ID 가
+/// quest_items registry 에 존재하는지 검사하고 오류 메시지를 모아 반환한다.
+/// `exit` 결정을 호출자에게 남기는 seam — 양쪽 분기를 테스트할 수 있다.
+fn collect_quest_item_ref_errors(
+    quest_registry: &QuestRegistry,
+    quest_items: &crate::modules::item::QuestItemRegistry,
+) -> Vec<String> {
     let mut errors: Vec<String> = Vec::new();
     for (qid, qdef) in &quest_registry.quests {
         // spawns
         for spawn in &qdef.spawns {
-            if item_id_to_kind(&spawn.item, &quest_items).is_none() {
+            if item_id_to_kind(&spawn.item, quest_items).is_none() {
                 errors.push(format!(
                     "퀘스트 '{}' 의 spawns item_id '{}' 가 인식되지 않습니다",
                     qid, spawn.item
@@ -294,16 +313,11 @@ fn validate_quest_item_refs(
         // 모든 transition 의 actions 탐색
         for transition in &qdef.transitions {
             for action in &transition.actions {
-                check_action_item_ids(action, qid, &transition.from, &quest_items, &mut errors);
+                check_action_item_ids(action, qid, &transition.from, quest_items, &mut errors);
             }
         }
     }
-    if !errors.is_empty() {
-        for msg in &errors {
-            error!("[치명적] {}", msg);
-        }
-        std::process::exit(1);
-    }
+    errors
 }
 
 fn check_action_item_ids(
@@ -332,12 +346,50 @@ fn check_action_item_ids(
 // ── Systems ──────────────────────────────────────────────────────────────────
 
 fn load_quests(mut registry: ResMut<QuestRegistry>, quest_items: Res<crate::modules::item::QuestItemRegistry>) {
-    let Ok(dir) = std::fs::read_dir("assets/quests") else {
-        error!("[치명적] assets/quests 디렉터리를 찾을 수 없습니다. 게임을 시작할 수 없습니다.");
-        std::process::exit(1);
+    let quests = match read_quest_dir("assets/quests", &quest_items) {
+        Ok(q) => q,
+        // 도달 불가 방어코드 — read_quest_dir 의 Err 분기는 read_quest_dir 테스트로
+        // 검증. 실제 에셋이 유효하므로 이 process::exit 분기는 테스트에서 도달 불가.
+        Err(errors) => {
+            for msg in &errors {
+                error!("{}", msg);
+            }
+            error!("[치명적] 퀘스트 파일에 오류가 있습니다. 위 오류를 수정한 후 다시 실행하세요.");
+            std::process::exit(1);
+        }
     };
 
-    let mut has_error = false;
+    for (_, def) in &quests {
+        info!("퀘스트 로드: {} ({})", def.title, def.id);
+    }
+
+    // spawn_chance 확률로 이번 런에 활성화할 퀘스트 결정
+    let mut rng = rand::thread_rng();
+    let active = select_active_quests(&quests, &mut rng);
+    for id in &active {
+        info!("퀘스트 활성화: {}", id);
+    }
+    registry.quests = quests;
+    registry.active = active;
+}
+
+/// `dir_path` 안의 모든 `.ron` 퀘스트를 읽어 파싱·시맨틱 검증한다.
+/// 디렉터리 열기/파일 읽기/파싱/검증 중 하나라도 실패하면 모든 오류 메시지를
+/// `Err` 로 모아 반환한다 (호출자가 `exit` 여부를 결정 — seam).
+/// 고정 경로 대신 인자로 받아 임시 디렉터리로 양쪽 분기를 테스트할 수 있다.
+fn read_quest_dir(
+    dir_path: &str,
+    quest_items: &crate::modules::item::QuestItemRegistry,
+) -> Result<HashMap<String, QuestDef>, Vec<String>> {
+    let Ok(dir) = std::fs::read_dir(dir_path) else {
+        return Err(vec![format!(
+            "[치명적] {} 디렉터리를 찾을 수 없습니다. 게임을 시작할 수 없습니다.",
+            dir_path
+        )]);
+    };
+
+    let mut quests: HashMap<String, QuestDef> = HashMap::new();
+    let mut errors: Vec<String> = Vec::new();
 
     for entry in dir.flatten() {
         let path = entry.path();
@@ -346,8 +398,7 @@ fn load_quests(mut registry: ResMut<QuestRegistry>, quest_items: Res<crate::modu
         let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,
             Err(e) => {
-                error!("[퀘스트 오류] {:?} 읽기 실패: {}", path, e);
-                has_error = true;
+                errors.push(format!("[퀘스트 오류] {:?} 읽기 실패: {}", path, e));
                 continue;
             }
         };
@@ -355,41 +406,36 @@ fn load_quests(mut registry: ResMut<QuestRegistry>, quest_items: Res<crate::modu
         let def = match ron::de::from_str::<QuestDef>(&text) {
             Ok(d) => d,
             Err(e) => {
-                error!("[퀘스트 오류] {:?} RON 파싱 실패:\n  {}", path, e);
-                has_error = true;
+                errors.push(format!("[퀘스트 오류] {:?} RON 파싱 실패:\n  {}", path, e));
                 continue;
             }
         };
 
         // 시맨틱 검증
-        let errors = validate_quest_def(&def, &quest_items);
-        if !errors.is_empty() {
-            for msg in &errors {
-                error!("[퀘스트 오류] {:?} — {}", path, msg);
+        let semantic_errors = validate_quest_def(&def, quest_items);
+        if !semantic_errors.is_empty() {
+            for msg in &semantic_errors {
+                errors.push(format!("[퀘스트 오류] {:?} — {}", path, msg));
             }
-            has_error = true;
             continue;
         }
 
-        info!("퀘스트 로드: {} ({})", def.title, def.id);
-        registry.quests.insert(def.id.clone(), def);
+        quests.insert(def.id.clone(), def);
     }
 
-    if has_error {
-        error!("[치명적] 퀘스트 파일에 오류가 있습니다. 위 오류를 수정한 후 다시 실행하세요.");
-        std::process::exit(1);
-    }
+    if errors.is_empty() { Ok(quests) } else { Err(errors) }
+}
 
-    // spawn_chance 확률로 이번 런에 활성화할 퀘스트 결정
-    let mut rng = rand::thread_rng();
-    let active: HashSet<String> = registry.quests.iter()
+/// 각 퀘스트를 `spawn_chance` 확률로 활성화해 ID 집합을 반환한다.
+/// rand 의존부를 분리해 결정적 rng 로 양쪽 경계를 테스트할 수 있게 한다.
+fn select_active_quests(
+    quests: &HashMap<String, QuestDef>,
+    rng: &mut impl Rng,
+) -> HashSet<String> {
+    quests.iter()
         .filter(|(_, def)| rng.gen::<f32>() < def.spawn_chance)
         .map(|(id, _)| id.clone())
-        .collect();
-    for id in &active {
-        info!("퀘스트 활성화: {}", id);
-    }
-    registry.active = active;
+        .collect()
 }
 
 /// QuestDef 의 내부 일관성을 검증하고 오류 메시지 목록을 반환한다
@@ -725,10 +771,11 @@ fn spawn_quest_items(
                     continue;
                 };
 
-                // 안전망: random_floor_tile_anywhere 가 Floor 만 반환해야 하지만
-                // race condition / map 캐시 불일치 등으로 wall 좌표가 나올 가능성을 가드한다.
-                if map.get_tile(tx, ty) != crate::modules::map::TileKind::Floor {
-                    error!("퀘스트 아이템 spawn 좌표 ({}, {}) 가 Floor 가 아님 — 스킵: {}", tx, ty, spawn.item);
+                // 안전망: random_floor_tile_anywhere 가 통과타일만 반환해야 하지만
+                // race condition / map 캐시 불일치 등으로 벽 좌표가 나올 가능성을 가드한다.
+                // 도달 불가 방어코드 — random_floor_tile_anywhere 는 항상 통과타일만 반환한다.
+                if !map.get_tile(tx, ty).is_walkable() {
+                    error!("퀘스트 아이템 spawn 좌표 ({}, {}) 가 통과타일이 아님 — 스킵: {}", tx, ty, spawn.item);
                     continue;
                 }
 
@@ -827,7 +874,7 @@ mod tests {
     }
 
     #[test]
-    fn quest_state_phase_tracking() {
+    fn 페이즈를_설정하면_현재페이즈로_조회된다() {
         let mut state = QuestState::default();
         assert!(state.current_phase("gem_quest").is_none());
         state.set_phase("gem_quest", "active");
@@ -835,7 +882,7 @@ mod tests {
     }
 
     #[test]
-    fn item_id_to_kind_maps_correctly() {
+    fn 내장_아이템ID와_퀘스트레지스트리_아이템ID가_올바른_kind로_매핑된다() {
         let _ = qi();
         assert_eq!(item_id_to_kind("eternal_gem", qi()),        Some(ItemKind::QuestItem(QuestItemKind("eternal_gem"))));
         assert_eq!(item_id_to_kind("philosophers_stone", qi()), Some(ItemKind::QuestItem(QuestItemKind("philosophers_stone"))));
@@ -843,7 +890,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_phase_lookup() {
+    fn 레지스트리는_존재하는_페이즈는_찾고_없는_페이즈는_None을_반환한다() {
         let reg = make_registry_with_gem_quest();
         assert!(reg.phase("gem_quest", "not_started").is_some());
         assert!(reg.phase("gem_quest", "missing").is_none());
@@ -851,7 +898,7 @@ mod tests {
     }
 
     #[test]
-    fn spawn_tracking() {
+    fn 스폰을_마크하면_해당_퀘스트아이템은_스폰완료로_기록된다() {
         let mut state = QuestState::default();
         assert!(!state.is_spawn_done("gem_quest", "eternal_gem"));
         state.mark_spawned("gem_quest", "eternal_gem");
@@ -859,7 +906,7 @@ mod tests {
     }
 
     #[test]
-    fn zone_spawn_tracking_dedups_across_quests() {
+    fn 존스폰을_마크하면_다른_퀘스트의_같은_존아이템도_중복스폰되지_않는다() {
         use crate::modules::zone::ZoneId;
         let mut state = QuestState::default();
         let dungeon2 = ZoneId::Dungeon(2);
@@ -871,7 +918,7 @@ mod tests {
     }
 
     #[test]
-    fn zone_spawn_separate_for_different_zones() {
+    fn 같은_아이템이라도_존이_다르면_존스폰은_별개로_추적된다() {
         use crate::modules::zone::ZoneId;
         let mut state = QuestState::default();
         state.mark_zone_spawned(&ZoneId::Dungeon(1), "ancient_scroll");
@@ -881,7 +928,7 @@ mod tests {
     }
 
     #[test]
-    fn zone_spawn_separate_for_different_items() {
+    fn 같은_존이라도_아이템이_다르면_존스폰은_별개로_추적된다() {
         use crate::modules::zone::ZoneId;
         let mut state = QuestState::default();
         state.mark_zone_spawned(&ZoneId::Dungeon(2), "eternal_gem");
@@ -904,7 +951,7 @@ mod tests {
     }
 
     #[test]
-    fn eval_and_requires_all() {
+    fn And조건은_모든_하위조건이_충족돼야_참이_된다() {
         let inv = make_inventory_with(&["dragon_scale"]);
         let state = QuestState::default();
         let world = make_world();
@@ -919,7 +966,7 @@ mod tests {
     }
 
     #[test]
-    fn eval_or_requires_any() {
+    fn Or조건은_하위조건_하나라도_충족되면_참이_된다() {
         let inv = make_inventory_with(&["dragon_scale"]);
         let state = QuestState::default();
         let world = make_world();
@@ -934,7 +981,7 @@ mod tests {
     }
 
     #[test]
-    fn eval_not_inverts() {
+    fn Not조건은_하위조건의_참거짓을_뒤집는다() {
         let inv = make_inventory_with(&["dragon_scale"]);
         let state = QuestState::default();
         let world = make_world();
@@ -945,7 +992,7 @@ mod tests {
     }
 
     #[test]
-    fn eval_phase_is_checks_quest_state() {
+    fn PhaseIs조건은_퀘스트상태의_현재페이즈와_일치할때만_참이_된다() {
         let inv = PlayerInventory::default();
         let mut state = QuestState::default();
         let world = make_world();
@@ -956,7 +1003,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_advance_priority_first_match_wins() {
+    fn Auto전이는_우선순위가_높은_첫_매칭_규칙이_선택된다() {
         // gathering 단계 재현: dragon_scale + ancient_scroll 있으면 1순위 both_ready
         let state = QuestState::default();
         let transitions = vec![
@@ -995,7 +1042,7 @@ mod tests {
     }
 
     #[test]
-    fn ordered_interact_transitions_first_match_wins() {
+    fn 순서있는_Interact전이는_첫_매칭이_없으면_무조건_fallback이_선택된다() {
         // both_ready 단계: 두 재료 있으면 1순위 normal_done, 없으면 fallback gathering
         let state = QuestState::default();
         let inv = make_inventory_with(&["dragon_scale", "ancient_scroll"]);
@@ -1038,14 +1085,14 @@ mod tests {
     }
 
     #[test]
-    fn new_item_ids_mapped_correctly() {
+    fn 추가된_퀘스트아이템ID들이_올바른_kind로_매핑된다() {
         let _ = qi();
         assert_eq!(item_id_to_kind("dragon_scale", qi()),   Some(ItemKind::QuestItem(QuestItemKind("dragon_scale"))));
         assert_eq!(item_id_to_kind("ancient_scroll", qi()), Some(ItemKind::QuestItem(QuestItemKind("ancient_scroll"))));
     }
 
     #[test]
-    fn flag_set_get_clear() {
+    fn 플래그는_설정_조회_해제가_일관되게_동작한다() {
         let mut state = QuestState::default();
         assert!(!state.has_flag("trust_elara"));
         assert_eq!(state.get_flag("trust_elara"), None);
@@ -1061,7 +1108,7 @@ mod tests {
     }
 
     #[test]
-    fn eval_flag_is_condition() {
+    fn FlagIs조건은_플래그값이_일치할때만_참이_된다() {
         let inv = PlayerInventory::default();
         let world = make_world();
         let mut state = QuestState::default();
@@ -1072,7 +1119,7 @@ mod tests {
     }
 
     #[test]
-    fn eval_has_flag_condition() {
+    fn HasFlag조건은_플래그_존재여부로_참거짓이_갈린다() {
         let inv = PlayerInventory::default();
         let world = make_world();
         let mut state = QuestState::default();
@@ -1085,7 +1132,7 @@ mod tests {
     }
 
     #[test]
-    fn transition_actions_field_defaults_to_empty() {
+    fn 전이의_actions를_생략하면_빈_목록으로_파싱된다() {
         let def: QuestDef = ron::de::from_str(r#"
             #![enable(implicit_some)]
             QuestDef(
@@ -1106,7 +1153,7 @@ mod tests {
     }
 
     #[test]
-    fn close_portal_action_parses_from_ron() {
+    fn ClosePortal액션이_RON에서_올바르게_파싱된다() {
         let def: QuestDef = ron::de::from_str(r#"
             QuestDef(
                 id: "test", title: "test", giver_npc: "npc", initial_phase: "p1",
@@ -1124,7 +1171,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_transition_actions_parsed_from_ron() {
+    fn Auto전이의_actions가_RON에서_순서대로_파싱된다() {
         let def: QuestDef = ron::de::from_str(r#"
             #![enable(implicit_some)]
             QuestDef(
@@ -1157,7 +1204,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_unsupported_auto_transition_action() {
+    fn 검증은_Auto전이에서_지원하지않는_액션을_거부한다() {
         let def: QuestDef = ron::de::from_str(r#"
             #![enable(implicit_some)]
             QuestDef(
@@ -1189,7 +1236,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_has_item_in_spawn_condition() {
+    fn 검증은_스폰조건에_HasItem을_사용하면_거부한다() {
         let def: QuestDef = ron::de::from_str(r#"
             QuestDef(
                 id: "test",
@@ -1237,14 +1284,14 @@ mod tests {
     }
 
     #[test]
-    fn all_quest_files_parse_without_error() {
+    fn 모든_퀘스트파일이_오류없이_파싱된다() {
         // 파일 존재 + RON 파싱 성공 여부만 검증
         let defs = load_all_quest_defs();
         assert!(defs.len() >= 4, "prologue + 3 route 퀘스트 최소 4개여야 한다");
     }
 
     #[test]
-    fn all_quest_files_pass_semantic_validation() {
+    fn 모든_퀘스트파일이_시맨틱검증을_통과한다() {
         let _ = qi();
         for (path, def) in load_all_quest_defs() {
             let errors = validate_quest_def(&def, qi());
@@ -1258,7 +1305,7 @@ mod tests {
     }
 
     #[test]
-    fn all_quest_item_ids_are_recognized() {
+    fn 모든_퀘스트파일의_스폰_아이템ID가_인식된다() {
         let _ = qi();
         for (path, def) in load_all_quest_defs() {
             for spawn in &def.spawns {
@@ -1272,7 +1319,7 @@ mod tests {
     }
 
     #[test]
-    fn quest_registry_is_quest_active() {
+    fn 레지스트리는_active집합에_있는_퀘스트만_활성으로_판정한다() {
         let mut reg = QuestRegistry::default();
         reg.active.insert("gem_quest".to_string());
         assert!(reg.is_quest_active("gem_quest"));
@@ -1280,7 +1327,7 @@ mod tests {
     }
 
     #[test]
-    fn spawn_chance_defaults_to_1_when_omitted_in_ron() {
+    fn RON에서_spawn_chance를_생략하면_기본값_1로_파싱된다() {
         let def: QuestDef = ron::de::from_str(r#"
             QuestDef(
                 id: "test",
@@ -1294,7 +1341,7 @@ mod tests {
     }
 
     #[test]
-    fn spawn_chance_parsed_from_ron() {
+    fn RON에_명시한_spawn_chance값이_그대로_파싱된다() {
         let def: QuestDef = ron::de::from_str(r#"
             QuestDef(
                 id: "test",
@@ -1309,7 +1356,7 @@ mod tests {
     }
 
     #[test]
-    fn all_quest_ron_files_have_spawn_chance_in_valid_range() {
+    fn 모든_퀘스트파일의_spawn_chance가_유효범위_안에_있다() {
         for (path, def) in load_all_quest_defs() {
             assert!(
                 (0.0..=1.0).contains(&def.spawn_chance),
@@ -1320,7 +1367,7 @@ mod tests {
     }
 
     #[test]
-    fn parry_quest_item_ids_mapped_correctly() {
+    fn 패리퀘스트_아이템ID들이_올바른_kind로_매핑된다() {
         let _ = qi();
         assert_eq!(item_id_to_kind("prototype_hammer", qi()), Some(ItemKind::QuestItem(QuestItemKind("prototype_hammer"))));
         assert_eq!(item_id_to_kind("steel_core", qi()),       Some(ItemKind::QuestItem(QuestItemKind("steel_core"))));
@@ -1328,7 +1375,7 @@ mod tests {
     }
 
     #[test]
-    fn demonsword_item_ids_mapped_correctly() {
+    fn 마검퀘스트_아이템ID들이_올바른_kind로_매핑된다() {
         let _ = qi();
         assert_eq!(item_id_to_kind("demon_sword", qi()),         Some(ItemKind::QuestItem(QuestItemKind("demon_sword"))));
         assert_eq!(item_id_to_kind("elenas_memo", qi()),         Some(ItemKind::QuestItem(QuestItemKind("elenas_memo"))));
@@ -1336,7 +1383,7 @@ mod tests {
     }
 
     #[test]
-    fn check_action_item_ids_detects_unknown_id() {
+    fn 액션아이템ID검사는_미등록ID를_오류로_감지한다() {
         let _ = qi();
         let bad_action = QuestAction::GiveItem("nonexistent_item".to_string());
         let mut errors = Vec::new();
@@ -1346,7 +1393,7 @@ mod tests {
     }
 
     #[test]
-    fn check_action_item_ids_passes_known_ids() {
+    fn 액션아이템ID검사는_등록된ID는_통과시킨다() {
         let _ = qi();
         let good_action = QuestAction::GiveItem("eternal_gem".to_string());
         let mut errors = Vec::new();
@@ -1355,7 +1402,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_unknown_item_in_transition_action() {
+    fn 검증은_전이액션에_미등록_아이템ID가_있으면_거부한다() {
         let def: QuestDef = ron::de::from_str(r#"
             QuestDef(
                 id: "test", title: "test", giver_npc: "npc", initial_phase: "start",
@@ -1370,5 +1417,913 @@ mod tests {
         "#).expect("RON 파싱 성공해야 한다");
         let errors = validate_quest_def(&def, qi());
         assert!(errors.iter().any(|e| e.contains("invalid_item_id")));
+    }
+
+    // ── eval_condition: InZone ──────────────────────────────────────────────
+
+    #[test]
+    fn InZone조건은_플레이어가_해당존에_있을때만_참이_된다() {
+        use crate::modules::zone::ZoneId;
+        let inv = PlayerInventory::default();
+        let state = QuestState::default();
+        let mut world = make_world(); // 기본 current = Town
+        let cond = QuestCondition::InZone(ZoneId::Dungeon(2));
+        assert!(!eval_condition(&cond, &inv, &world, &state, qi()), "다른 존이면 거짓");
+        world.current = ZoneId::Dungeon(2);
+        assert!(eval_condition(&cond, &inv, &world, &state, qi()), "같은 존이면 참");
+    }
+
+    #[test]
+    fn HasItem조건은_등록되지않은_아이템ID면_거짓을_반환한다() {
+        let inv = make_inventory_with(&["dragon_scale"]);
+        let state = QuestState::default();
+        let world = make_world();
+        // 미등록 ID → item_id_to_kind None → early return false
+        let cond = QuestCondition::HasItem("totally_unknown_item".into());
+        assert!(!eval_condition(&cond, &inv, &world, &state, qi()));
+    }
+
+    // ── condition_uses_inventory: And/Or/Not 재귀 분기 ────────────────────────
+
+    #[test]
+    fn condition_uses_inventory는_중첩된_HasItem을_모든_조합자에서_탐지한다() {
+        use crate::modules::zone::ZoneId;
+        // 단일 HasItem
+        assert!(condition_uses_inventory(&QuestCondition::HasItem("x".into())));
+        // And 안에 HasItem
+        assert!(condition_uses_inventory(&QuestCondition::And(vec![
+            QuestCondition::HasFlag("f".into()),
+            QuestCondition::HasItem("x".into()),
+        ])));
+        // Or 안에 HasItem
+        assert!(condition_uses_inventory(&QuestCondition::Or(vec![
+            QuestCondition::HasItem("x".into()),
+        ])));
+        // Not 안에 HasItem
+        assert!(condition_uses_inventory(&QuestCondition::Not(Box::new(
+            QuestCondition::HasItem("x".into())
+        ))));
+        // HasItem 이 전혀 없으면 false (And/Or/Not 의 false 분기)
+        assert!(!condition_uses_inventory(&QuestCondition::And(vec![
+            QuestCondition::HasFlag("f".into()),
+            QuestCondition::InZone(ZoneId::Town),
+        ])));
+        assert!(!condition_uses_inventory(&QuestCondition::Not(Box::new(
+            QuestCondition::HasFlag("f".into())
+        ))));
+        // 인벤토리와 무관한 단일 조건 (_=> false arm)
+        assert!(!condition_uses_inventory(&QuestCondition::HasFlag("f".into())));
+    }
+
+    // ── check_action_item_ids: 나머지 액션 변형 + _ arm ──────────────────────
+
+    #[test]
+    fn 액션아이템ID검사는_GiveItems_RemoveItem_DespawnWorldItem도_검사한다() {
+        let _ = qi();
+        for action in [
+            QuestAction::GiveItems { item: "bad_id".into(), count: 2 },
+            QuestAction::RemoveItem("bad_id".into()),
+            QuestAction::DespawnWorldItem("bad_id".into()),
+        ] {
+            let mut errors = Vec::new();
+            check_action_item_ids(&action, "q", "p", qi(), &mut errors);
+            assert_eq!(errors.len(), 1, "{:?} 미등록 ID 오류 1개", action);
+            assert!(errors[0].contains("bad_id"));
+        }
+    }
+
+    #[test]
+    fn 액션아이템ID검사는_아이템과_무관한_액션은_무시한다() {
+        let _ = qi();
+        // _ => {} arm: Log 는 아이템 ID 가 없어 검사 대상 아님
+        let mut errors = Vec::new();
+        check_action_item_ids(&QuestAction::Log("hi".into()), "q", "p", qi(), &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    // ── validate_quest_def: 미커버 오류 분기 ─────────────────────────────────
+
+    #[test]
+    fn 검증은_initial_phase가_phases에_없으면_거부한다() {
+        let def: QuestDef = ron::de::from_str(r#"
+            QuestDef(
+                id: "t", title: "t", giver_npc: "n", initial_phase: "missing",
+                phases: { "start": QuestPhaseDef(dialog: []) },
+            )
+        "#).expect("RON 파싱 성공");
+        let errors = validate_quest_def(&def, qi());
+        assert!(errors.iter().any(|e| e.contains("initial_phase")), "{:?}", errors);
+    }
+
+    #[test]
+    fn 검증은_전이의_from과_to가_phases에_없으면_각각_거부한다() {
+        let def: QuestDef = ron::de::from_str(r#"
+            QuestDef(
+                id: "t", title: "t", giver_npc: "n", initial_phase: "start",
+                phases: { "start": QuestPhaseDef(dialog: []) },
+                transitions: [
+                    Transition(from: "nowhere", trigger: Interact, to: "alsonowhere"),
+                ],
+            )
+        "#).expect("RON 파싱 성공");
+        let errors = validate_quest_def(&def, qi());
+        assert!(errors.iter().any(|e| e.contains("from 'nowhere'")), "{:?}", errors);
+        assert!(errors.iter().any(|e| e.contains("to 'alsonowhere'")), "{:?}", errors);
+    }
+
+    #[test]
+    fn 검증은_스폰의_아이템ID와_페이즈가_없으면_각각_거부한다() {
+        let def: QuestDef = ron::de::from_str(r#"
+            QuestDef(
+                id: "t", title: "t", giver_npc: "n", initial_phase: "start",
+                phases: { "start": QuestPhaseDef(dialog: []) },
+                spawns: [
+                    QuestSpawn(phase: "no_such_phase", item: "unknown_item_id", zone: Town),
+                ],
+            )
+        "#).expect("RON 파싱 성공");
+        let errors = validate_quest_def(&def, qi());
+        assert!(errors.iter().any(|e| e.contains("unknown_item_id")), "{:?}", errors);
+        assert!(errors.iter().any(|e| e.contains("no_such_phase")), "{:?}", errors);
+    }
+
+    #[test]
+    fn 검증은_정상적인_퀘스트정의는_오류없이_통과시킨다() {
+        // 모든 검증 분기의 "통과" 쪽을 한 번에 커버
+        let def: QuestDef = ron::de::from_str(r#"
+            #![enable(implicit_some)]
+            QuestDef(
+                id: "t", title: "t", giver_npc: "n", initial_phase: "start",
+                phases: {
+                    "start": QuestPhaseDef(dialog: []),
+                    "done": QuestPhaseDef(dialog: []),
+                },
+                transitions: [
+                    Transition(from: "start", trigger: Auto, when: HasFlag("ready"),
+                        actions: [SetFlag(flag: "x", value: "1")], to: "done"),
+                ],
+                spawns: [
+                    QuestSpawn(phase: "start", item: "eternal_gem", zone: Town,
+                        condition: InZone(Town)),
+                ],
+            )
+        "#).expect("RON 파싱 성공");
+        let errors = validate_quest_def(&def, qi());
+        assert!(errors.is_empty(), "{:?}", errors);
+    }
+
+    // ── read_quest_dir / select_active_quests (load_quests seam) ──────────────
+
+    /// 임시 디렉터리를 만들고 콜백 안에서만 사용한 뒤 정리한다.
+    /// 실제 assets/quests 는 절대 건드리지 않는다.
+    fn with_temp_quest_dir(files: &[(&str, &str)], f: impl FnOnce(&str)) {
+        let base = std::env::temp_dir().join(format!(
+            "bevyrogue_quest_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&base).expect("임시 디렉터리 생성");
+        for (name, content) in files {
+            std::fs::write(base.join(name), content).expect("임시 파일 쓰기");
+        }
+        let path = base.to_string_lossy().into_owned();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&path)));
+        let _ = std::fs::remove_dir_all(&base);
+        if let Err(e) = result { std::panic::resume_unwind(e); }
+    }
+
+    #[test]
+    fn 디렉터리에서_정상_퀘스트RON을_읽으면_레지스트리에_적재된다() {
+        let _ = qi();
+        with_temp_quest_dir(&[
+            ("a.ron", r#"
+                QuestDef(id: "a", title: "A", giver_npc: "n", initial_phase: "s",
+                    phases: { "s": QuestPhaseDef(dialog: []) })
+            "#),
+            // .ron 이 아닌 파일은 무시되는 분기도 커버
+            ("readme.txt", "ignore me"),
+        ], |dir| {
+            let quests = read_quest_dir(dir, qi()).expect("정상 로드 성공");
+            assert_eq!(quests.len(), 1);
+            assert!(quests.contains_key("a"));
+        });
+    }
+
+    #[test]
+    fn 존재하지않는_디렉터리를_읽으면_치명적_오류를_반환한다() {
+        let _ = qi();
+        let missing = std::env::temp_dir()
+            .join("bevyrogue_quest_does_not_exist_xyz_12345");
+        let _ = std::fs::remove_dir_all(&missing);
+        let result = read_quest_dir(&missing.to_string_lossy(), qi());
+        let errors = result.expect_err("없는 디렉터리는 Err");
+        assert!(errors[0].contains("디렉터리를 찾을 수 없습니다"));
+    }
+
+    #[test]
+    fn RON_파싱에_실패한_파일이_있으면_오류를_반환한다() {
+        let _ = qi();
+        with_temp_quest_dir(&[
+            ("broken.ron", "this is not valid ron )))("),
+        ], |dir| {
+            let errors = read_quest_dir(dir, qi()).expect_err("파싱 실패는 Err");
+            assert!(errors.iter().any(|e| e.contains("RON 파싱 실패")), "{:?}", errors);
+        });
+    }
+
+    #[test]
+    fn 시맨틱검증에_실패한_파일이_있으면_오류를_반환한다() {
+        let _ = qi();
+        with_temp_quest_dir(&[
+            // initial_phase 가 phases 에 없음 → 시맨틱 오류
+            ("bad.ron", r#"
+                QuestDef(id: "b", title: "B", giver_npc: "n", initial_phase: "ghost",
+                    phases: { "s": QuestPhaseDef(dialog: []) })
+            "#),
+        ], |dir| {
+            let errors = read_quest_dir(dir, qi()).expect_err("시맨틱 실패는 Err");
+            assert!(errors.iter().any(|e| e.contains("initial_phase")), "{:?}", errors);
+        });
+    }
+
+    #[test]
+    fn ron확장자_경로가_읽기에_실패하면_읽기실패_오류를_반환한다() {
+        let _ = qi();
+        // ".ron" 으로 끝나는 *디렉터리* 를 만들면 read_to_string 이 실패한다 (IsADirectory).
+        let base = std::env::temp_dir().join(format!(
+            "bevyrogue_readfail_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(base.join("trap.ron")).expect("디렉터리형 .ron 생성");
+        let result = read_quest_dir(&base.to_string_lossy(), qi());
+        let _ = std::fs::remove_dir_all(&base);
+        let errors = result.expect_err("읽기 실패는 Err");
+        assert!(errors.iter().any(|e| e.contains("읽기 실패")), "{:?}", errors);
+    }
+
+    #[test]
+    fn 아이템참조검사는_미등록ID는_오류로_수집하고_정상이면_빈목록을_반환한다() {
+        let _ = qi();
+        // 정상: 등록된 spawn item + 정상 action
+        let mut ok_reg = make_registry_with_gem_quest();
+        ok_reg.quests.get_mut("gem_quest").unwrap().spawns.push(QuestSpawn {
+            phase: "active".into(), item: "eternal_gem".into(),
+            zone: crate::modules::zone::ZoneId::Dungeon(2), count: 1, condition: None,
+        });
+        assert!(collect_quest_item_ref_errors(&ok_reg, qi()).is_empty(), "정상이면 빈 목록");
+
+        // 비정상: 미등록 spawn item + 미등록 transition action item
+        let mut bad_reg = make_registry_with_gem_quest();
+        {
+            let q = bad_reg.quests.get_mut("gem_quest").unwrap();
+            q.spawns.push(QuestSpawn {
+                phase: "active".into(), item: "no_such_spawn".into(),
+                zone: crate::modules::zone::ZoneId::Town, count: 1, condition: None,
+            });
+            q.transitions.push(QuestTransition {
+                from: "active".into(), trigger: TriggerKind::Interact, when: None,
+                actions: vec![QuestAction::GiveItem("no_such_action_item".into())],
+                to: "ready".into(),
+            });
+        }
+        let errors = collect_quest_item_ref_errors(&bad_reg, qi());
+        assert!(errors.iter().any(|e| e.contains("no_such_spawn")), "{:?}", errors);
+        assert!(errors.iter().any(|e| e.contains("no_such_action_item")), "{:?}", errors);
+    }
+
+    #[test]
+    fn load_quests시스템은_실제_에셋을_읽어_레지스트리를_채운다() {
+        // 실제 assets/quests 는 모두 유효하므로 exit 분기 없이 성공 경로만 실행된다.
+        let mut app = App::new();
+        app.insert_resource(crate::modules::item::build_test_registry())
+            .insert_resource(QuestRegistry::default())
+            .add_systems(Startup, load_quests);
+        app.update(); // Startup 1회 실행
+        let reg = app.world.resource::<QuestRegistry>();
+        assert!(reg.quests.len() >= 4, "최소 4개 퀘스트 로드");
+        assert!(reg.quests.contains_key("gem_quest"));
+    }
+
+    #[test]
+    fn validate_quest_item_refs시스템은_유효한_레지스트리에서_종료하지_않는다() {
+        // 실제 에셋을 load_quests 로 채운 뒤 검증 시스템을 돌려 정상 경로(에러 없음)를 탄다.
+        let mut app = App::new();
+        app.insert_resource(crate::modules::item::build_test_registry())
+            .insert_resource(QuestRegistry::default())
+            .add_systems(Startup, (load_quests, validate_quest_item_refs).chain());
+        app.update();
+        // exit 되지 않고 도달하면 통과
+        assert!(app.world.resource::<QuestRegistry>().quests.contains_key("gem_quest"));
+    }
+
+    #[test]
+    fn select_active_quests는_spawn_chance가_1이면_항상_0이면_절대_활성화한다() {
+        let mut quests: HashMap<String, QuestDef> = HashMap::new();
+        let mk = |id: &str, chance: f32| QuestDef {
+            id: id.into(), title: id.into(), giver_npc: "n".into(),
+            initial_phase: "s".into(),
+            phases: { let mut m = HashMap::new();
+                m.insert("s".into(), QuestPhaseDef { dialog: vec![], objective: None }); m },
+            transitions: vec![], spawns: vec![], spawn_chance: chance,
+        };
+        quests.insert("always".into(), mk("always", 1.0));  // gen() < 1.0 항상 참
+        quests.insert("never".into(), mk("never", 0.0));    // gen() < 0.0 항상 거짓
+        let mut rng = rand::thread_rng();
+        let active = select_active_quests(&quests, &mut rng);
+        assert!(active.contains("always"), "spawn_chance 1.0 은 항상 활성");
+        assert!(!active.contains("never"), "spawn_chance 0.0 은 절대 비활성");
+    }
+
+    // ── App 하네스 ──────────────────────────────────────────────────────────
+
+    fn asset_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<Font>();
+        app.init_asset::<Image>();
+        app
+    }
+
+    // ── QuestPlugin::build ───────────────────────────────────────────────────
+
+    #[test]
+    fn 플러그인을_등록하면_퀘스트_리소스와_이벤트가_초기화된다() {
+        let mut app = App::new();
+        app.add_plugins(QuestPlugin);
+        // build() 안의 init_resource 들이 실행됐는지 확인 (update 불필요)
+        assert!(app.world.get_resource::<QuestRegistry>().is_some());
+        assert!(app.world.get_resource::<QuestState>().is_some());
+        assert!(app.world.get_resource::<Events<KillNpcEvent>>().is_some());
+        assert!(app.world.get_resource::<Events<DespawnWorldItemEvent>>().is_some());
+    }
+
+    #[test]
+    fn 플러그인_Startup스케줄을_실행하면_퀘스트가_스케줄러를_통해_로드된다() {
+        // QuestSystemSet 디스패치를 스케줄러 경유로 실행한다.
+        // Update 스케줄(spawn_quest_items 등)은 추가 리소스가 필요하므로
+        // Startup 스케줄만 직접 돌린다.
+        let mut app = App::new();
+        app.insert_resource(crate::modules::item::build_test_registry());
+        app.add_plugins(QuestPlugin);
+        app.world.run_schedule(bevy::app::Startup);
+        assert!(
+            app.world.resource::<QuestRegistry>().quests.contains_key("gem_quest"),
+            "스케줄러 경유로 퀘스트가 로드돼야 한다"
+        );
+    }
+
+    // ── execute_actions: 모든 액션 변형 ───────────────────────────────────────
+
+    /// execute_actions 가 요구하는 6 개 EventWriter 를 모아 한 번에 실행하는
+    /// 하네스 시스템. 입력은 리소스로 주입한다.
+    #[derive(Resource, Clone)]
+    struct ActionInput {
+        actions: Vec<QuestAction>,
+        quest_id: String,
+    }
+
+    fn run_execute_actions_system(
+        input: Res<ActionInput>,
+        mut state: ResMut<QuestState>,
+        mut inventory: ResMut<PlayerInventory>,
+        mut log: EventWriter<crate::modules::ui::LogMessage>,
+        mut kill_npc: EventWriter<KillNpcEvent>,
+        mut open_portal: EventWriter<SpawnQuestPortalEvent>,
+        mut close_portal: EventWriter<CloseQuestPortalEvent>,
+        mut despawn_item: EventWriter<DespawnWorldItemEvent>,
+        quest_items: Res<crate::modules::item::QuestItemRegistry>,
+    ) {
+        execute_actions(
+            &input.actions, &input.quest_id, &mut state, &mut inventory,
+            &mut log, &mut kill_npc, &mut open_portal, &mut close_portal,
+            &mut despawn_item, &quest_items,
+        );
+    }
+
+    fn execute_actions_app(actions: Vec<QuestAction>) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(crate::modules::item::build_test_registry())
+            .insert_resource(QuestState::default())
+            .insert_resource(PlayerInventory::default())
+            .insert_resource(ActionInput { actions, quest_id: "q".into() })
+            .add_event::<crate::modules::ui::LogMessage>()
+            .add_event::<KillNpcEvent>()
+            .add_event::<SpawnQuestPortalEvent>()
+            .add_event::<CloseQuestPortalEvent>()
+            .add_event::<DespawnWorldItemEvent>()
+            .add_systems(Update, run_execute_actions_system);
+        app
+    }
+
+    fn count_log_messages(app: &mut App) -> usize {
+        app.world.resource::<Events<crate::modules::ui::LogMessage>>().len()
+    }
+
+    #[test]
+    fn GiveItem액션은_퀘스트아이템을_인벤토리에_추가하고_로그를_남긴다() {
+        let mut app = execute_actions_app(vec![QuestAction::GiveItem("eternal_gem".into())]);
+        app.update();
+        let inv = app.world.resource::<PlayerInventory>();
+        assert_eq!(inv.items.len(), 1);
+        assert_eq!(inv.items[0].kind, ItemKind::QuestItem(QuestItemKind("eternal_gem")));
+        assert_eq!(count_log_messages(&mut app), 1);
+    }
+
+    #[test]
+    fn GiveItem액션은_미등록_아이템ID면_아무것도_하지_않는다() {
+        let mut app = execute_actions_app(vec![QuestAction::GiveItem("unknown".into())]);
+        app.update();
+        assert!(app.world.resource::<PlayerInventory>().items.is_empty());
+        assert_eq!(count_log_messages(&mut app), 0);
+    }
+
+    #[test]
+    fn GiveItems액션은_소모품은_스택하고_일반아이템은_개수만큼_추가한다() {
+        // 소모품 분기: health_potion 3개 → consumables 에 (kind, 3)
+        let mut app = execute_actions_app(vec![
+            QuestAction::GiveItems { item: "health_potion".into(), count: 3 },
+        ]);
+        app.update();
+        let inv = app.world.resource::<PlayerInventory>();
+        assert_eq!(inv.consumables.len(), 1);
+        assert_eq!(inv.consumables[0].1, 3, "소모품은 스택");
+        assert!(inv.items.is_empty());
+        assert_eq!(count_log_messages(&mut app), 1);
+
+        // 일반 아이템 분기: 퀘스트아이템 2개 → items 에 2개 push
+        let mut app2 = execute_actions_app(vec![
+            QuestAction::GiveItems { item: "dragon_scale".into(), count: 2 },
+        ]);
+        app2.update();
+        assert_eq!(app2.world.resource::<PlayerInventory>().items.len(), 2);
+    }
+
+    #[test]
+    fn GiveItems액션은_미등록_아이템ID면_아무것도_하지_않는다() {
+        let mut app = execute_actions_app(vec![
+            QuestAction::GiveItems { item: "unknown".into(), count: 5 },
+        ]);
+        app.update();
+        let inv = app.world.resource::<PlayerInventory>();
+        assert!(inv.items.is_empty() && inv.consumables.is_empty());
+        assert_eq!(count_log_messages(&mut app), 0);
+    }
+
+    #[test]
+    fn RemoveItem액션은_인벤토리에서_해당아이템을_제거하고_로그를_남긴다() {
+        let mut app = execute_actions_app(vec![QuestAction::RemoveItem("eternal_gem".into())]);
+        // 사전에 보유 상태로 세팅
+        {
+            let kind = item_id_to_kind("eternal_gem", qi()).unwrap();
+            app.world.resource_mut::<PlayerInventory>().items.push(InventoryItem { kind });
+        }
+        app.update();
+        assert!(app.world.resource::<PlayerInventory>().items.is_empty());
+        assert_eq!(count_log_messages(&mut app), 1);
+    }
+
+    #[test]
+    fn RemoveItem액션은_미등록_아이템ID면_아무것도_하지_않는다() {
+        let mut app = execute_actions_app(vec![QuestAction::RemoveItem("unknown".into())]);
+        app.update();
+        assert_eq!(count_log_messages(&mut app), 0);
+    }
+
+    #[test]
+    fn Log액션은_로그메시지_이벤트를_발생시킨다() {
+        let mut app = execute_actions_app(vec![QuestAction::Log("안녕".into())]);
+        app.update();
+        assert_eq!(count_log_messages(&mut app), 1);
+    }
+
+    #[test]
+    fn SetFlag와_ClearFlag액션은_퀘스트상태의_플래그를_쓰고_지운다() {
+        let mut app = execute_actions_app(vec![
+            QuestAction::SetFlag { flag: "f".into(), value: "v".into() },
+        ]);
+        app.update();
+        assert_eq!(app.world.resource::<QuestState>().get_flag("f"), Some("v"));
+
+        let mut app2 = execute_actions_app(vec![QuestAction::ClearFlag("f".into())]);
+        app2.world.resource_mut::<QuestState>().set_flag("f", "v");
+        app2.update();
+        assert!(!app2.world.resource::<QuestState>().has_flag("f"));
+    }
+
+    #[test]
+    fn KillNpc액션은_NPC사망_이벤트를_발생시킨다() {
+        let mut app = execute_actions_app(vec![QuestAction::KillNpc("바스티안".into())]);
+        app.update();
+        let events = app.world.resource::<Events<KillNpcEvent>>();
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn OpenPortal액션은_포탈스폰_이벤트와_로그를_발생시킨다() {
+        let mut app = execute_actions_app(vec![QuestAction::OpenPortal {
+            zone: "demon_cave".into(),
+            generator: "cellular_automata".into(),
+            placement: PortalPlacement::Border,
+        }]);
+        app.update();
+        assert_eq!(app.world.resource::<Events<SpawnQuestPortalEvent>>().len(), 1);
+        assert_eq!(count_log_messages(&mut app), 1);
+    }
+
+    #[test]
+    fn ClosePortal액션은_포탈닫기_이벤트와_로그를_발생시킨다() {
+        let mut app = execute_actions_app(vec![QuestAction::ClosePortal("demon_cave".into())]);
+        app.update();
+        assert_eq!(app.world.resource::<Events<CloseQuestPortalEvent>>().len(), 1);
+        assert_eq!(count_log_messages(&mut app), 1);
+    }
+
+    #[test]
+    fn DespawnWorldItem액션은_월드아이템_제거_이벤트를_발생시킨다() {
+        let mut app = execute_actions_app(vec![
+            QuestAction::DespawnWorldItem("prologue_daggers".into()),
+        ]);
+        app.update();
+        assert_eq!(app.world.resource::<Events<DespawnWorldItemEvent>>().len(), 1);
+    }
+
+    // ── check_auto_advance (App 하네스) — 상태머신 주요 경로 ───────────────────
+
+    fn auto_advance_app(registry: QuestRegistry, state: QuestState) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(crate::modules::item::build_test_registry())
+            .insert_resource(registry)
+            .insert_resource(state)
+            .insert_resource(PlayerInventory::default())
+            .insert_resource(crate::modules::zone::WorldState::default())
+            .add_event::<DespawnWorldItemEvent>()
+            .add_systems(Update, check_auto_advance);
+        app
+    }
+
+    #[test]
+    fn 자동전이는_조건충족시_페이즈를_전진시킨다() {
+        // gem_quest: active 에서 eternal_gem 보유 시 Auto 로 ready 전진
+        let mut reg = make_registry_with_gem_quest();
+        reg.active.insert("gem_quest".into());
+        let mut state = QuestState::default();
+        state.set_phase("gem_quest", "active");
+
+        let mut app = auto_advance_app(reg, state);
+        // 보석 보유
+        let kind = item_id_to_kind("eternal_gem", qi()).unwrap();
+        app.world.resource_mut::<PlayerInventory>().items.push(InventoryItem { kind });
+        app.update();
+        assert_eq!(
+            app.world.resource::<QuestState>().current_phase("gem_quest"),
+            Some("ready"),
+            "보석 보유 시 active → ready 자동 전진"
+        );
+    }
+
+    #[test]
+    fn 자동전이는_조건미충족이면_페이즈를_유지한다() {
+        let mut reg = make_registry_with_gem_quest();
+        reg.active.insert("gem_quest".into());
+        let mut state = QuestState::default();
+        state.set_phase("gem_quest", "active");
+        let mut app = auto_advance_app(reg, state);
+        app.update(); // 보석 없음
+        assert_eq!(
+            app.world.resource::<QuestState>().current_phase("gem_quest"),
+            Some("active"),
+            "보석 없으면 전진 안 함"
+        );
+    }
+
+    #[test]
+    fn 자동전이는_비활성_퀘스트는_평가하지_않는다() {
+        // active 집합에 넣지 않음 → continue
+        let reg = make_registry_with_gem_quest();
+        let mut state = QuestState::default();
+        state.set_phase("gem_quest", "active");
+        let mut app = auto_advance_app(reg, state);
+        let kind = item_id_to_kind("eternal_gem", qi()).unwrap();
+        app.world.resource_mut::<PlayerInventory>().items.push(InventoryItem { kind });
+        app.update();
+        assert_eq!(
+            app.world.resource::<QuestState>().current_phase("gem_quest"),
+            Some("active"),
+            "비활성 퀘스트는 자동 전진하지 않음"
+        );
+    }
+
+    #[test]
+    fn 자동전이는_페이즈가_등록되지않은_퀘스트는_건너뛴다() {
+        // state.phases 에 gem_quest 없음 → None → continue
+        let mut reg = make_registry_with_gem_quest();
+        reg.active.insert("gem_quest".into());
+        let mut app = auto_advance_app(reg, QuestState::default());
+        app.update();
+        assert!(
+            app.world.resource::<QuestState>().current_phase("gem_quest").is_none(),
+            "등록 안 된 퀘스트는 전진 평가 대상이 아님"
+        );
+    }
+
+    /// Auto 전이 + 액션(DespawnWorldItem, RemoveItem, SetFlag) 동시 실행 검증용 레지스트리
+    fn make_registry_with_auto_actions() -> QuestRegistry {
+        let mut r = QuestRegistry::default();
+        let def = QuestDef {
+            id: "q".into(), title: "q".into(), giver_npc: "n".into(),
+            initial_phase: "p1".into(),
+            phases: {
+                let mut m = HashMap::new();
+                m.insert("p1".into(), QuestPhaseDef { dialog: vec![], objective: None });
+                m.insert("p2".into(), QuestPhaseDef { dialog: vec![], objective: None });
+                m
+            },
+            transitions: vec![QuestTransition {
+                from: "p1".into(),
+                trigger: TriggerKind::Auto,
+                when: Some(QuestCondition::HasFlag("go".into())),
+                actions: vec![
+                    QuestAction::DespawnWorldItem("prologue_daggers".into()),
+                    QuestAction::RemoveItem("eternal_gem".into()),
+                    QuestAction::SetFlag { flag: "done".into(), value: "1".into() },
+                    QuestAction::Log("이건 Auto 에서 무시됨".into()),
+                ],
+                to: "p2".into(),
+            }],
+            spawns: vec![], spawn_chance: 1.0,
+        };
+        r.quests.insert("q".into(), def);
+        r.active.insert("q".into());
+        r
+    }
+
+    #[test]
+    fn 자동전이의_허용액션은_실행되고_미허용액션은_무시된다() {
+        let reg = make_registry_with_auto_actions();
+        let mut state = QuestState::default();
+        state.set_phase("q", "p1");
+        state.set_flag("go", "yes"); // 조건 충족
+        let mut app = auto_advance_app(reg, state);
+        // 인벤토리에 eternal_gem 보유 → RemoveItem 대상
+        let kind = item_id_to_kind("eternal_gem", qi()).unwrap();
+        app.world.resource_mut::<PlayerInventory>().items.push(InventoryItem { kind });
+        app.update();
+
+        let st = app.world.resource::<QuestState>();
+        assert_eq!(st.current_phase("q"), Some("p2"), "전진");
+        assert_eq!(st.get_flag("done"), Some("1"), "SetFlag 실행됨");
+        assert!(
+            app.world.resource::<PlayerInventory>().items.is_empty(),
+            "RemoveItem 실행됨"
+        );
+        // DespawnWorldItem 이벤트 1개 (Log 는 Auto 에서 미지원 → 무시)
+        assert_eq!(app.world.resource::<Events<DespawnWorldItemEvent>>().len(), 1);
+    }
+
+    // ── spawn_quest_items (App 하네스) — 스폰 주요 경로 ────────────────────────
+
+    /// 모든 타일이 Floor 인 단순 맵 + 방 하나를 만든다.
+    fn make_floor_map() -> crate::modules::map::Map {
+        use crate::modules::map::{Map, TileKind, Rect};
+        let mut map = Map::new(20, 20);
+        for y in 0..20 { for x in 0..20 { map.set_tile(x, y, TileKind::Floor); } }
+        map.rooms = vec![Rect::new(1, 1, 8, 8), Rect::new(10, 10, 6, 6)];
+        map
+    }
+
+    fn spawn_app(registry: QuestRegistry, state: QuestState, world: crate::modules::zone::WorldState) -> App {
+        let mut app = asset_app();
+        app.insert_resource(crate::modules::item::build_test_registry())
+            .insert_resource(registry)
+            .insert_resource(state)
+            .insert_resource(world)
+            .insert_resource(MapResource(make_floor_map()))
+            .insert_resource(UsedSpawnTiles::default())
+            .insert_resource(DiscoveredMarkers::default())
+            .add_systems(Update, spawn_quest_items);
+        app
+    }
+
+    /// 단일 spawn 을 가진 퀘스트 레지스트리. 활성 + 지정 phase 등록까지 포함하지 않음.
+    fn make_registry_with_spawn(
+        item: &str, zone: crate::modules::zone::ZoneId, count: u32,
+        condition: Option<QuestCondition>,
+    ) -> QuestRegistry {
+        let mut r = QuestRegistry::default();
+        let def = QuestDef {
+            id: "sq".into(), title: "sq".into(), giver_npc: "n".into(),
+            initial_phase: "spawn_phase".into(),
+            phases: {
+                let mut m = HashMap::new();
+                m.insert("spawn_phase".into(), QuestPhaseDef { dialog: vec![], objective: None });
+                m
+            },
+            transitions: vec![],
+            spawns: vec![QuestSpawn {
+                phase: "spawn_phase".into(),
+                item: item.into(),
+                zone,
+                count,
+                condition,
+            }],
+            spawn_chance: 1.0,
+        };
+        r.quests.insert("sq".into(), def);
+        r.active.insert("sq".into());
+        r
+    }
+
+    fn count_items(app: &mut App) -> usize {
+        app.world.query::<&Item>().iter(&app.world).count()
+    }
+
+    #[test]
+    fn 맵이_바뀌지않으면_퀘스트아이템을_스폰하지_않는다() {
+        use crate::modules::zone::ZoneId;
+        let reg = make_registry_with_spawn("eternal_gem", ZoneId::Town, 1, None);
+        let mut state = QuestState::default();
+        state.set_phase("sq", "spawn_phase");
+        let mut app = spawn_app(reg, state, crate::modules::zone::WorldState::default());
+        // 첫 update 에서 MapResource 가 inserted 라 is_changed()==true 이므로
+        // change tick 을 소비시킨 뒤 다시 update 하면 미변경.
+        app.update(); // 1회차: 변경됨 → 스폰
+        let after_first = count_items(&mut app);
+        assert_eq!(after_first, 1);
+        app.update(); // 2회차: 미변경 → 스폰 안 함 (early return)
+        assert_eq!(count_items(&mut app), after_first, "맵 미변경 시 추가 스폰 없음");
+    }
+
+    #[test]
+    fn 활성_퀘스트의_현재페이즈_현재존_조건이_맞으면_아이템과_마커가_생성된다() {
+        use crate::modules::zone::ZoneId;
+        let reg = make_registry_with_spawn("eternal_gem", ZoneId::Dungeon(2), 1, None);
+        let mut state = QuestState::default();
+        state.set_phase("sq", "spawn_phase");
+        let mut world = crate::modules::zone::WorldState::default();
+        world.current = ZoneId::Dungeon(2);
+        let mut app = spawn_app(reg, state, world);
+        app.update();
+        assert_eq!(count_items(&mut app), 1, "조건 일치 시 1개 스폰");
+        assert_eq!(app.world.resource::<DiscoveredMarkers>().0.len(), 1, "QuestTarget 마커 등록");
+        // dedup 키 마킹 확인
+        let st = app.world.resource::<QuestState>();
+        assert!(st.is_spawn_done("sq", "eternal_gem"));
+        assert!(st.is_zone_spawn_done(&ZoneId::Dungeon(2), "eternal_gem"));
+    }
+
+    #[test]
+    fn 스폰은_count만큼_여러개를_생성한다() {
+        use crate::modules::zone::ZoneId;
+        let reg = make_registry_with_spawn("eternal_gem", ZoneId::Town, 3, None);
+        let mut state = QuestState::default();
+        state.set_phase("sq", "spawn_phase");
+        let mut app = spawn_app(reg, state, crate::modules::zone::WorldState::default());
+        app.update();
+        assert_eq!(count_items(&mut app), 3);
+    }
+
+    #[test]
+    fn 스폰은_페이즈가_다르거나_존이_다르면_건너뛴다() {
+        use crate::modules::zone::ZoneId;
+        // 존 불일치: spawn zone=Dungeon(2), world=Town
+        let reg = make_registry_with_spawn("eternal_gem", ZoneId::Dungeon(2), 1, None);
+        let mut state = QuestState::default();
+        state.set_phase("sq", "spawn_phase");
+        let mut app = spawn_app(reg, state, crate::modules::zone::WorldState::default());
+        app.update();
+        assert_eq!(count_items(&mut app), 0, "존 불일치 시 스폰 안 함");
+
+        // 페이즈 불일치: state 페이즈를 다른 값으로
+        let reg2 = make_registry_with_spawn("eternal_gem", ZoneId::Town, 1, None);
+        let mut state2 = QuestState::default();
+        state2.set_phase("sq", "other_phase");
+        let mut app2 = spawn_app(reg2, state2, crate::modules::zone::WorldState::default());
+        app2.update();
+        assert_eq!(count_items(&mut app2), 0, "페이즈 불일치 시 스폰 안 함");
+    }
+
+    #[test]
+    fn 스폰은_비활성_퀘스트나_미등록페이즈_퀘스트는_건너뛴다() {
+        use crate::modules::zone::ZoneId;
+        // 비활성: active 비움
+        let mut reg = make_registry_with_spawn("eternal_gem", ZoneId::Town, 1, None);
+        reg.active.clear();
+        let mut state = QuestState::default();
+        state.set_phase("sq", "spawn_phase");
+        let mut app = spawn_app(reg, state, crate::modules::zone::WorldState::default());
+        app.update();
+        assert_eq!(count_items(&mut app), 0, "비활성 퀘스트 스폰 안 함");
+
+        // 활성이지만 phases 미등록 (None → continue)
+        let reg2 = make_registry_with_spawn("eternal_gem", ZoneId::Town, 1, None);
+        let mut app2 = spawn_app(reg2, QuestState::default(), crate::modules::zone::WorldState::default());
+        app2.update();
+        assert_eq!(count_items(&mut app2), 0, "페이즈 미등록 퀘스트 스폰 안 함");
+    }
+
+    #[test]
+    fn 이미_스폰완료한_퀘스트아이템은_재스폰하지_않는다() {
+        use crate::modules::zone::ZoneId;
+        let reg = make_registry_with_spawn("eternal_gem", ZoneId::Town, 1, None);
+        let mut state = QuestState::default();
+        state.set_phase("sq", "spawn_phase");
+        state.mark_spawned("sq", "eternal_gem"); // 이미 스폰됨
+        let mut app = spawn_app(reg, state, crate::modules::zone::WorldState::default());
+        app.update();
+        assert_eq!(count_items(&mut app), 0, "이미 스폰 완료면 재스폰 안 함");
+    }
+
+    #[test]
+    fn 다른_퀘스트가_같은존아이템을_이미_스폰했으면_스킵하고_per_quest로만_마크한다() {
+        use crate::modules::zone::ZoneId;
+        let reg = make_registry_with_spawn("eternal_gem", ZoneId::Town, 1, None);
+        let mut state = QuestState::default();
+        state.set_phase("sq", "spawn_phase");
+        // zone-단위로는 이미 spawn 됨 (다른 퀘스트가 했다고 가정)
+        state.mark_zone_spawned(&ZoneId::Town, "eternal_gem");
+        let mut app = spawn_app(reg, state, crate::modules::zone::WorldState::default());
+        app.update();
+        assert_eq!(count_items(&mut app), 0, "zone dedup 으로 스킵");
+        // 그래도 per-quest 마크는 됨 (재평가 방지)
+        assert!(app.world.resource::<QuestState>().is_spawn_done("sq", "eternal_gem"));
+    }
+
+    #[test]
+    fn 스폰조건이_충족되지않으면_스폰하지_않고_충족되면_스폰한다() {
+        use crate::modules::zone::ZoneId;
+        // 조건: InZone(Dungeon(2)). world=Town → 미충족
+        let reg = make_registry_with_spawn(
+            "eternal_gem", ZoneId::Town, 1,
+            Some(QuestCondition::InZone(ZoneId::Dungeon(2))),
+        );
+        let mut state = QuestState::default();
+        state.set_phase("sq", "spawn_phase");
+        let mut app = spawn_app(reg, state, crate::modules::zone::WorldState::default());
+        app.update();
+        assert_eq!(count_items(&mut app), 0, "조건 미충족 시 스폰 안 함");
+
+        // 조건: InZone(Town). world=Town → 충족
+        let reg2 = make_registry_with_spawn(
+            "eternal_gem", ZoneId::Town, 1,
+            Some(QuestCondition::InZone(ZoneId::Town)),
+        );
+        let mut state2 = QuestState::default();
+        state2.set_phase("sq", "spawn_phase");
+        let mut app2 = spawn_app(reg2, state2, crate::modules::zone::WorldState::default());
+        app2.update();
+        assert_eq!(count_items(&mut app2), 1, "조건 충족 시 스폰");
+    }
+
+    #[test]
+    fn 스폰은_미등록_아이템ID면_건너뛴다() {
+        use crate::modules::zone::ZoneId;
+        // 검증을 통과한 정상 레지스트리를 만든 뒤, item_id 만 미등록으로 바꿔
+        // item_id_to_kind None → continue 분기를 커버한다.
+        let mut reg = make_registry_with_spawn("eternal_gem", ZoneId::Town, 1, None);
+        reg.quests.get_mut("sq").unwrap().spawns[0].item = "unknown_item".into();
+        let mut state = QuestState::default();
+        state.set_phase("sq", "spawn_phase");
+        let mut app = spawn_app(reg, state, crate::modules::zone::WorldState::default());
+        app.update();
+        assert_eq!(count_items(&mut app), 0);
+    }
+
+    #[test]
+    fn 스폰은_방이_하나뿐이면_그_방에서라도_스폰한다() {
+        use crate::modules::zone::ZoneId;
+        use crate::modules::map::{Map, TileKind, Rect};
+        let reg = make_registry_with_spawn("eternal_gem", ZoneId::Town, 1, None);
+        let mut state = QuestState::default();
+        state.set_phase("sq", "spawn_phase");
+        // 방 1개짜리 맵 (rooms.len() == 1 → rooms[..] 분기)
+        let mut map = Map::new(20, 20);
+        for y in 0..20 { for x in 0..20 { map.set_tile(x, y, TileKind::Floor); } }
+        map.rooms = vec![Rect::new(2, 2, 10, 10)];
+        let mut app = spawn_app(reg, state, crate::modules::zone::WorldState::default());
+        app.insert_resource(MapResource(map));
+        app.update();
+        assert_eq!(count_items(&mut app), 1, "방 하나뿐이어도 스폰");
+    }
+
+    #[test]
+    fn 스폰은_Floor타일이_없으면_스폰에_실패하고_건너뛴다() {
+        use crate::modules::zone::ZoneId;
+        use crate::modules::map::{Map, Rect};
+        let reg = make_registry_with_spawn("eternal_gem", ZoneId::Town, 1, None);
+        let mut state = QuestState::default();
+        state.set_phase("sq", "spawn_phase");
+        // 전부 Wall 인 맵 → random_floor_tile_anywhere None → 실패 분기
+        let mut map = Map::new(20, 20); // Map::new 는 전부 Wall
+        map.rooms = vec![Rect::new(2, 2, 10, 10)];
+        let mut app = spawn_app(reg, state, crate::modules::zone::WorldState::default());
+        app.insert_resource(MapResource(map));
+        app.update();
+        assert_eq!(count_items(&mut app), 0, "Floor 타일 없으면 스폰 실패");
     }
 }

@@ -27,10 +27,21 @@ const HELP_TEXT: &str = "\
 
 실행 중 F1 키로 생성기를 순환, G 키로 글리프 스타일을 순환할 수 있습니다.";
 
+/// 인수가 주어지지 않았을 때 사용할 기본 맵 생성기.
+const DEFAULT_ALGORITHM: &str = "organic_village";
+
 enum ParseResult {
     Run { algorithm: Option<String>, glyph_style: GlyphStyle },
     Help,
     Error(String),
+}
+
+/// `--algorithm` 옵션 파싱 결과를 실제 시작 생성기 이름으로 변환한다.
+///
+/// 인수가 없으면 기본 생성기(`organic_village`)를 적용한다.
+/// (순수 함수: `main()` 의 헤드리스 불가 분기에서 결정 로직만 떼어내 테스트한다.)
+fn resolve_initial_algorithm(algorithm: Option<String>) -> Option<String> {
+    Some(algorithm.unwrap_or_else(|| DEFAULT_ALGORITHM.to_string()))
 }
 
 fn parse_args(args: &[String]) -> ParseResult {
@@ -78,13 +89,16 @@ fn main() {
             std::process::exit(1);
         }
         ParseResult::Run { algorithm, glyph_style } => (
-            Some(algorithm.unwrap_or_else(|| "organic_village".to_string())),
+            resolve_initial_algorithm(algorithm),
             glyph_style,
         ),
     };
 
     let tile_size = modules::map::TILE_SIZE;
 
+    // 테스트 불가: 헤드리스에서 윈도우/GPU 필요 (DefaultPlugins + run()).
+    // 파싱 결과를 initial_algorithm/initial_glyph_style 로 변환하는 결정 로직은
+    // resolve_initial_algorithm / parse_args 로 추출해 단위 테스트로 커버한다.
     App::new()
         .add_systems(Startup, modules::core::systems::spawn_2d_camera)
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -127,68 +141,124 @@ mod tests {
     }
 
     #[test]
-    fn no_args_runs_with_defaults() {
+    fn 인수가_없으면_알고리즘은_미지정이고_글리프는_기본Ascii로_실행된다() {
         let result = parse_args(&args(&[]));
         assert!(matches!(result, ParseResult::Run { algorithm: None, glyph_style: GlyphStyle::Ascii }));
     }
 
     #[test]
-    fn algorithm_long_flag_parsed() {
+    fn 알고리즘_긴플래그는_지정한_생성기이름으로_파싱된다() {
         let result = parse_args(&args(&["--algorithm", "bsp"]));
         assert!(matches!(result, ParseResult::Run { algorithm: Some(ref s), .. } if s == "bsp"));
     }
 
     #[test]
-    fn algorithm_short_flag_parsed() {
+    fn 알고리즘_짧은플래그는_지정한_생성기이름으로_파싱된다() {
         let result = parse_args(&args(&["-a", "perlin"]));
         assert!(matches!(result, ParseResult::Run { algorithm: Some(ref s), .. } if s == "perlin"));
     }
 
     #[test]
-    fn glyph_style_long_flag_parsed() {
+    fn 글리프_긴플래그_icon은_GameIcon으로_파싱된다() {
         let result = parse_args(&args(&["--glyph-style", "icon"]));
         assert!(matches!(result, ParseResult::Run { glyph_style: GlyphStyle::GameIcon, .. }));
     }
 
     #[test]
-    fn glyph_style_short_flag_parsed() {
+    fn 글리프_짧은플래그_unicode는_Unicode로_파싱된다() {
         let result = parse_args(&args(&["-g", "unicode"]));
         assert!(matches!(result, ParseResult::Run { glyph_style: GlyphStyle::Unicode, .. }));
     }
 
     #[test]
-    fn glyph_style_invalid_returns_error() {
+    fn 알수없는_글리프스타일은_에러를_반환한다() {
         let result = parse_args(&args(&["--glyph-style", "nope"]));
         assert!(matches!(result, ParseResult::Error(_)));
     }
 
     #[test]
-    fn glyph_style_missing_value_returns_error() {
+    fn 글리프스타일에_값이_없으면_에러를_반환한다() {
         let result = parse_args(&args(&["--glyph-style"]));
         assert!(matches!(result, ParseResult::Error(_)));
     }
 
     #[test]
-    fn help_long_flag_returns_help() {
+    fn 도움말_긴플래그는_Help를_반환한다() {
         let result = parse_args(&args(&["--help"]));
         assert!(matches!(result, ParseResult::Help));
     }
 
     #[test]
-    fn help_short_flag_returns_help() {
+    fn 도움말_짧은플래그는_Help를_반환한다() {
         let result = parse_args(&args(&["-h"]));
         assert!(matches!(result, ParseResult::Help));
     }
 
     #[test]
-    fn algorithm_missing_value_returns_error() {
+    fn 알고리즘에_값이_없으면_에러를_반환한다() {
         let result = parse_args(&args(&["--algorithm"]));
         assert!(matches!(result, ParseResult::Error(_)));
     }
 
     #[test]
-    fn unknown_flag_returns_error() {
+    fn 알수없는_인수는_에러를_반환한다() {
         let result = parse_args(&args(&["--unknown"]));
         assert!(matches!(result, ParseResult::Error(_)));
+    }
+
+    // ── 결정 로직(순수 함수) : main() 의 파싱→설정 변환 분기 커버 ──────────────
+
+    #[test]
+    fn 알고리즘이_미지정이면_기본생성기_organic_village로_결정된다() {
+        assert_eq!(resolve_initial_algorithm(None), Some(DEFAULT_ALGORITHM.to_string()));
+        assert_eq!(resolve_initial_algorithm(None), Some("organic_village".to_string()));
+    }
+
+    #[test]
+    fn 알고리즘이_지정되면_그_생성기이름이_그대로_결정된다() {
+        assert_eq!(
+            resolve_initial_algorithm(Some("bsp".to_string())),
+            Some("bsp".to_string())
+        );
+    }
+
+    /// 테스트 편의: Run 분기의 (initial_algorithm, glyph_style) 결정 결과만 뽑아낸다.
+    /// Run 이 아니면 None — main() 의 Run 변환 분기와 동일한 결정 로직을 사용한다.
+    fn run_config(args: &[String]) -> Option<(Option<String>, GlyphStyle)> {
+        if let ParseResult::Run { algorithm, glyph_style } = parse_args(args) {
+            Some((resolve_initial_algorithm(algorithm), glyph_style))
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn 파싱부터_설정변환까지_Run분기는_기본알고리즘과_글리프를_적용한다() {
+        // main() 의 Run 분기와 동일한 결정 흐름(파싱 → 변환)을 단위로 검증한다.
+        assert_eq!(
+            run_config(&args(&["-g", "icon"])),
+            Some((Some("organic_village".to_string()), GlyphStyle::GameIcon)),
+        );
+    }
+
+    #[test]
+    fn Help입력은_Run설정으로_변환되지_않는다() {
+        // run_config 의 else 분기(비-Run)도 커버한다.
+        assert_eq!(run_config(&args(&["--help"])), None);
+    }
+
+    #[test]
+    fn 도움말_텍스트는_사용법과_모든_생성기_목록을_담는다() {
+        // Help 분기에서 출력되는 HELP_TEXT 의 핵심 항목들이 존재하는지 확인.
+        assert!(HELP_TEXT.contains("사용법: bevy-rogue"));
+        assert!(HELP_TEXT.contains("--algorithm"));
+        assert!(HELP_TEXT.contains("--glyph-style"));
+        assert!(HELP_TEXT.contains("--help"));
+        for gen in [
+            "bsp", "simple_rooms", "drunkard", "cellular_automata", "dla",
+            "bsp_indoor", "prefab", "organic_village", "grid_village", "forest", "perlin",
+        ] {
+            assert!(HELP_TEXT.contains(gen), "도움말에 생성기 {gen} 가 없다");
+        }
     }
 }

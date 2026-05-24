@@ -182,19 +182,19 @@ mod tests {
     }
 
     #[test]
-    fn blood_stain_starts_fully_visible() {
+    fn 핏자국은_처음엔_완전히_보인다() {
         assert_eq!(blood_stain_alpha_after_decay(1.0, 0.0), 1.0);
     }
 
     #[test]
-    fn blood_stain_alpha_clamps_to_zero() {
+    fn 핏자국_투명도는_0_미만으로_내려가지_않는다() {
         let decay = decay_per_turn_for(4);
         let a = blood_stain_alpha_after_decay(0.1, decay);
         assert_eq!(a, 0.0);
     }
 
     #[test]
-    fn blood_stain_gone_at_min_lifetime() {
+    fn 핏자국은_최소수명_후_거의_사라진다() {
         let decay = decay_per_turn_for(BLOOD_LIFETIME_MIN);
         let mut a = 1.0_f32;
         for _ in 0..BLOOD_LIFETIME_MIN { a = blood_stain_alpha_after_decay(a, decay); }
@@ -202,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn blood_stain_gone_at_max_lifetime() {
+    fn 핏자국은_최대수명_후_거의_사라진다() {
         let decay = decay_per_turn_for(BLOOD_LIFETIME_MAX);
         let mut a = 1.0_f32;
         for _ in 0..BLOOD_LIFETIME_MAX { a = blood_stain_alpha_after_decay(a, decay); }
@@ -210,7 +210,7 @@ mod tests {
     }
 
     #[test]
-    fn blood_stain_still_visible_before_lifetime_ends() {
+    fn 핏자국은_수명이_끝나기_전엔_아직_보인다() {
         let decay = decay_per_turn_for(BLOOD_LIFETIME_MAX);
         let mut a = 1.0_f32;
         for _ in 0..BLOOD_LIFETIME_MIN { a = blood_stain_alpha_after_decay(a, decay); }
@@ -218,33 +218,187 @@ mod tests {
     }
 
     #[test]
-    fn lifetime_range_is_valid() {
+    fn 핏자국_수명_범위가_유효하다() {
         assert!(BLOOD_LIFETIME_MIN >= 1);
         assert!(BLOOD_LIFETIME_MAX >= BLOOD_LIFETIME_MIN);
     }
 
     #[test]
-    fn hit_flash_starts_active() {
+    fn 피격섬광은_시작시_활성상태다() {
         assert!(hit_flash_remaining_after(HIT_FLASH_DURATION, 0.0) > 0.0);
     }
 
     #[test]
-    fn hit_flash_remaining_decreases() {
+    fn 피격섬광_잔여시간은_시간에_따라_감소한다() {
         let r = hit_flash_remaining_after(0.15, 0.08);
         assert!((r - 0.07).abs() < 1e-6);
     }
 
     #[test]
-    fn hit_flash_remaining_clamps_to_zero() {
+    fn 피격섬광_잔여시간은_0_미만으로_내려가지_않는다() {
         let r = hit_flash_remaining_after(0.05, 0.15);
         assert_eq!(r, 0.0);
     }
 
     #[test]
-    fn particle_constants_are_topdown_friendly() {
+    fn 핏방울_파티클_상수가_탑다운에_적합하다() {
         // 탑다운 시점 — 중력은 spawn 시 GravityScale(0.0) 으로 설정됨
         // (코드 검증 — 상수만 확인 가능)
         assert!(PARTICLE_LIFETIME <= 0.4, "lifetime 이 너무 길면 정지된 채 남는다");
         assert!(PARTICLE_DAMPING > 0.0, "damping 이 있어야 자연스럽게 정지");
+    }
+
+    // ── 시스템 App 하네스 테스트 ────────────────────────────────────────────
+    use std::time::Duration;
+
+    fn feedback_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<Font>();
+        app.add_event::<CombatFeedbackEvent>();
+        app.add_systems(Update, handle_combat_feedback);
+        app
+    }
+
+    #[test]
+    fn 피격피드백은_대상에_피격섬광을_부여한다() {
+        let mut app = feedback_app();
+        let target = app.world.spawn_empty().id();
+        app.world.send_event(CombatFeedbackEvent {
+            tile_x: 1, tile_y: 1, hit_entity: target, original_color: Color::WHITE,
+        });
+        app.update();
+        assert!(app.world.entity(target).contains::<HitFlash>());
+        assert_eq!(app.world.get::<HitFlash>(target).unwrap().original_color, Color::WHITE);
+    }
+
+    #[test]
+    fn 피격피드백은_이미_섬광중인_대상의_원래색을_보존한다() {
+        let mut app = feedback_app();
+        let original = Color::rgb(0.1, 0.2, 0.3);
+        let target = app.world.spawn(HitFlash { remaining: 0.1, original_color: original }).id();
+        app.world.send_event(CombatFeedbackEvent {
+            tile_x: 1, tile_y: 1, hit_entity: target, original_color: Color::WHITE,
+        });
+        app.update();
+        assert_eq!(app.world.get::<HitFlash>(target).unwrap().original_color, original,
+            "기존 섬광의 원래색을 유지해야 한다");
+    }
+
+    #[test]
+    fn 피격피드백은_대상이_사라져도_핏자국을_남기고_정상동작한다() {
+        let mut app = feedback_app();
+        let target = app.world.spawn_empty().id();
+        app.world.despawn(target);
+        app.world.send_event(CombatFeedbackEvent {
+            tile_x: 2, tile_y: 2, hit_entity: target, original_color: Color::WHITE,
+        });
+        app.update();
+        assert!(app.world.query::<&BloodStain>().iter(&app.world).count() > 0);
+    }
+
+    #[test]
+    fn 핏방울_파티클은_수명이_다하면_제거된다() {
+        let mut app = App::new();
+        app.init_resource::<Time>();
+        app.add_systems(Update, update_blood_particles);
+        let e = app.world.spawn((BloodParticle { lifetime: 0.1 }, Sprite::default())).id();
+        app.world.resource_mut::<Time>().advance_by(Duration::from_secs_f32(0.5));
+        app.update();
+        assert!(app.world.get_entity(e).is_none());
+    }
+
+    #[test]
+    fn 핏방울_파티클은_살아있으면_점점_옅어진다() {
+        let mut app = App::new();
+        app.init_resource::<Time>();
+        app.add_systems(Update, update_blood_particles);
+        let e = app.world.spawn((
+            BloodParticle { lifetime: 0.3 },
+            Sprite { color: Color::WHITE, ..default() },
+        )).id();
+        app.world.resource_mut::<Time>().advance_by(Duration::from_secs_f32(0.1));
+        app.update();
+        assert!(app.world.get_entity(e).is_some());
+        assert!(app.world.get::<Sprite>(e).unwrap().color.a() < 1.0, "투명도가 낮아져야 한다");
+    }
+
+    #[test]
+    fn 턴이벤트가_없으면_핏자국이_바래지_않는다() {
+        let mut app = App::new();
+        app.add_event::<PlayerActedEvent>();
+        app.add_systems(Update, fade_blood_stains);
+        let e = app.world.spawn((
+            BloodStain { alpha: 1.0, decay_per_turn: 0.5 },
+            Text::from_section("%", TextStyle::default()),
+        )).id();
+        app.update();
+        assert_eq!(app.world.get::<BloodStain>(e).unwrap().alpha, 1.0);
+    }
+
+    #[test]
+    fn 핏자국은_매턴_바래며_투명도가_0이되면_제거된다() {
+        let mut app = App::new();
+        app.add_event::<PlayerActedEvent>();
+        app.add_systems(Update, fade_blood_stains);
+        let e = app.world.spawn((
+            BloodStain { alpha: 0.05, decay_per_turn: 1.0 },
+            Text::from_section("%", TextStyle::default()),
+        )).id();
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert!(app.world.get_entity(e).is_none());
+    }
+
+    #[test]
+    fn 핏자국은_바래도_투명도가_남으면_유지된다() {
+        let mut app = App::new();
+        app.add_event::<PlayerActedEvent>();
+        app.add_systems(Update, fade_blood_stains);
+        let e = app.world.spawn((
+            BloodStain { alpha: 1.0, decay_per_turn: 0.1 },
+            Text::from_section("%", TextStyle::default()),
+        )).id();
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert!((app.world.get::<BloodStain>(e).unwrap().alpha - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn 피격섬광은_시간이_다하면_원래색을_복원하고_제거된다() {
+        let mut app = App::new();
+        app.init_resource::<Time>();
+        app.add_systems(Update, apply_hit_flash);
+        let green = Color::rgb(0.0, 1.0, 0.0);
+        let e = app.world.spawn((
+            HitFlash { remaining: 0.05, original_color: green },
+            Text::from_section("M", TextStyle { color: Color::rgb(1.0, 0.0, 0.0), ..default() }),
+        )).id();
+        app.world.resource_mut::<Time>().advance_by(Duration::from_secs_f32(0.2));
+        app.update();
+        assert!(!app.world.entity(e).contains::<HitFlash>());
+        assert_eq!(app.world.get::<Text>(e).unwrap().sections[0].style.color, green);
+    }
+
+    #[test]
+    fn 피격섬광은_지속중에는_빨간색으로_표시된다() {
+        let mut app = App::new();
+        app.init_resource::<Time>();
+        app.add_systems(Update, apply_hit_flash);
+        let e = app.world.spawn((
+            HitFlash { remaining: 0.15, original_color: Color::WHITE },
+            Text::from_section("M", TextStyle::default()),
+        )).id();
+        app.world.resource_mut::<Time>().advance_by(Duration::from_secs_f32(0.05));
+        app.update();
+        assert!(app.world.entity(e).contains::<HitFlash>());
+        assert_eq!(app.world.get::<Text>(e).unwrap().sections[0].style.color, Color::rgb(1.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn 전투피드백플러그인이_정상적으로_빌드된다() {
+        let mut app = App::new();
+        app.add_plugins(CombatFeedbackPlugin);
     }
 }

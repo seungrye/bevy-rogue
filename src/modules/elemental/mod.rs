@@ -303,59 +303,476 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reaction_fire_ice_is_melt() {
+    fn 불과_얼음이_만나면_융해반응이_일어난다() {
         assert_eq!(Reaction::from_pair(Element::Fire, Element::Ice), Some(Reaction::Melt));
         assert_eq!(Reaction::from_pair(Element::Ice, Element::Fire), Some(Reaction::Melt));
     }
 
     #[test]
-    fn reaction_shatter_both_orders() {
+    fn 얼음과_번개는_순서와_무관하게_파쇄반응이_일어난다() {
         assert_eq!(Reaction::from_pair(Element::Ice, Element::Lightning), Some(Reaction::Shatter));
         assert_eq!(Reaction::from_pair(Element::Lightning, Element::Ice), Some(Reaction::Shatter));
     }
 
     #[test]
-    fn reaction_same_element_is_none() {
+    fn 같은_원소끼리는_반응하지_않는다() {
         assert_eq!(Reaction::from_pair(Element::Fire, Element::Fire), None);
     }
 
     #[test]
-    fn weapon_sword_gives_fire() {
+    fn 검은_화염_속성을_가진다() {
         let r = crate::modules::item::build_test_registry();
         assert_eq!(weapon_element(WeaponKind::SWORD, &r), Some(Element::Fire));
     }
 
     #[test]
-    fn weapon_bow_gives_lightning() {
+    fn 활은_번개_속성을_가진다() {
         let r = crate::modules::item::build_test_registry();
         assert_eq!(weapon_element(WeaponKind::BOW, &r), Some(Element::Lightning));
     }
 
     #[test]
-    fn weapon_spear_gives_ice() {
+    fn 창은_얼음_속성을_가진다() {
         let r = crate::modules::item::build_test_registry();
         assert_eq!(weapon_element(WeaponKind::SPEAR, &r), Some(Element::Ice));
     }
 
     #[test]
-    fn monster_goblin_gives_poison() {
+    fn 고블린은_독_속성을_가진다() {
         assert_eq!(monster_element("고블린"), Some(Element::Poison));
     }
 
     #[test]
-    fn monster_orc_gives_fire() {
+    fn 오크는_화염_속성을_가진다() {
         assert_eq!(monster_element("오크"), Some(Element::Fire));
     }
 
     #[test]
-    fn monster_troll_gives_ice() {
+    fn 트롤은_얼음_속성을_가진다() {
         assert_eq!(monster_element("트롤"), Some(Element::Ice));
     }
 
     #[test]
-    fn element_duration_is_positive() {
+    fn 모든_원소의_기본_지속시간은_양수이다() {
         for el in [Element::Fire, Element::Ice, Element::Poison, Element::Lightning] {
             assert!(el.default_duration() > 0);
         }
+    }
+
+    // ── 추가: 순수 로직 분기 커버리지 ───────────────────────────────────────
+
+    #[test]
+    fn 모든_원소의_한글이름이_올바르게_반환된다() {
+        assert_eq!(Element::Fire.name_ko(),      "불");
+        assert_eq!(Element::Ice.name_ko(),       "얼음");
+        assert_eq!(Element::Poison.name_ko(),    "독");
+        assert_eq!(Element::Lightning.name_ko(), "번개");
+    }
+
+    #[test]
+    fn 각_원소의_기본_지속시간_값이_정확하다() {
+        assert_eq!(Element::Fire.default_duration(),      3);
+        assert_eq!(Element::Ice.default_duration(),       4);
+        assert_eq!(Element::Poison.default_duration(),    5);
+        assert_eq!(Element::Lightning.default_duration(), 1);
+    }
+
+    #[test]
+    fn 모든_반응의_한글이름이_올바르게_반환된다() {
+        assert_eq!(Reaction::Melt.name_ko(),         "융해");
+        assert_eq!(Reaction::ToxicFume.name_ko(),    "독기");
+        assert_eq!(Reaction::Shatter.name_ko(),      "파쇄");
+        assert_eq!(Reaction::Frostbite.name_ko(),    "동상");
+        assert_eq!(Reaction::Plasma.name_ko(),       "플라즈마");
+        assert_eq!(Reaction::Electrotoxin.name_ko(), "전기독");
+    }
+
+    #[test]
+    fn 모든_원소조합이_순서와_무관하게_올바른_반응을_만든다() {
+        use Element::*;
+        let cases = [
+            (Fire, Ice,        Reaction::Melt),
+            (Fire, Poison,     Reaction::ToxicFume),
+            (Ice, Lightning,   Reaction::Shatter),
+            (Ice, Poison,      Reaction::Frostbite),
+            (Fire, Lightning,  Reaction::Plasma),
+            (Poison, Lightning,Reaction::Electrotoxin),
+        ];
+        for (a, b, expected) in cases {
+            assert_eq!(Reaction::from_pair(a, b), Some(expected), "{a:?}+{b:?}");
+            assert_eq!(Reaction::from_pair(b, a), Some(expected), "{b:?}+{a:?} (역순)");
+        }
+    }
+
+    #[test]
+    fn 동일한_원소_조합은_어떤_반응도_만들지_않는다() {
+        use Element::*;
+        for el in [Fire, Ice, Poison, Lightning] {
+            assert_eq!(Reaction::from_pair(el, el), None, "{el:?} 동일 원소");
+        }
+    }
+
+    fn registry_with_one_weapon(id: &'static str, element: Option<&'static str>) -> crate::modules::item::ItemRegistry {
+        use crate::modules::item::{ItemRegistry, WeaponMeta};
+        let mut r = ItemRegistry::default();
+        r.weapons.insert(id, WeaponMeta {
+            display_name: "테스트무기",
+            glyph_ascii: "T", glyph_unicode: "T", glyph_game_icon: "T",
+            pickup_message: "획득", attack_power: 5, element,
+        });
+        r
+    }
+
+    #[test]
+    fn 속성이_없는_무기는_원소를_반환하지_않는다() {
+        let r = registry_with_one_weapon("plain", None);
+        assert_eq!(weapon_element(WeaponKind("plain"), &r), None);
+    }
+
+    #[test]
+    fn 인식되지_않는_속성문자열은_원소를_반환하지_않는다() {
+        let r = registry_with_one_weapon("weird", Some("plasma_unknown"));
+        assert_eq!(weapon_element(WeaponKind("weird"), &r), None);
+    }
+
+    #[test]
+    fn 등록되지_않은_무기는_원소를_반환하지_않는다() {
+        let r = crate::modules::item::ItemRegistry::default();
+        assert_eq!(weapon_element(WeaponKind("missing"), &r), None);
+    }
+
+    #[test]
+    fn 속성문자열이_화염_얼음_번개_원소로_매핑된다() {
+        assert_eq!(weapon_element(WeaponKind("f"), &registry_with_one_weapon("f", Some("fire"))),      Some(Element::Fire));
+        assert_eq!(weapon_element(WeaponKind("i"), &registry_with_one_weapon("i", Some("ice"))),       Some(Element::Ice));
+        assert_eq!(weapon_element(WeaponKind("l"), &registry_with_one_weapon("l", Some("lightning"))), Some(Element::Lightning));
+    }
+
+    #[test]
+    fn 알수없는_몬스터는_원소를_가지지_않는다() {
+        assert_eq!(monster_element("슬라임"), None);
+    }
+
+    // ── 추가: Bevy 시스템 App 하네스 테스트 (모든 분기) ──────────────────────
+
+    fn stats(hp: i32) -> CombatStats {
+        CombatStats { hp, max_hp: 100, mp: 10, max_mp: 10, attack: 5, defense: 0 }
+    }
+
+    fn status_with(elements: &[(Element, u32)]) -> ElementalStatus {
+        let mut s = ElementalStatus::default();
+        for &(e, t) in elements { s.active.insert(e, t); }
+        s
+    }
+
+    fn apply_app() -> App {
+        let mut app = App::new();
+        app.add_event::<ElementalApplyEvent>()
+            .add_event::<LogMessage>()
+            .add_systems(Update, apply_elements);
+        app
+    }
+
+    #[test]
+    fn 대상_컴포넌트가_없는_엔티티의_원소이벤트는_무시된다() {
+        // ElementalStatus/CombatStats 없는 엔티티 → query.get_mut Err → continue
+        let mut app = apply_app();
+        let e = app.world.spawn(()).id();
+        app.world.send_event(ElementalApplyEvent { target: e, element: Element::Fire });
+        app.update(); // panic 없이 통과
+    }
+
+    #[test]
+    fn 새로운_원소는_비플레이어의_상태에_추가된다() {
+        let mut app = apply_app();
+        let e = app.world.spawn((ElementalStatus::default(), stats(50))).id();
+        app.world.send_event(ElementalApplyEvent { target: e, element: Element::Fire });
+        app.update();
+        let st = app.world.get::<ElementalStatus>(e).unwrap();
+        assert_eq!(st.active.get(&Element::Fire), Some(&Element::Fire.default_duration()));
+    }
+
+    #[test]
+    fn 새로운_원소가_플레이어에게_적용되어도_정상_처리된다() {
+        // is_player == true 인 else(비반응) 경로 (line 222 "당신")
+        let mut app = apply_app();
+        let e = app.world.spawn((ElementalStatus::default(), stats(50), Player)).id();
+        app.world.send_event(ElementalApplyEvent { target: e, element: Element::Fire });
+        app.update();
+        assert!(app.world.get::<ElementalStatus>(e).unwrap().active.contains_key(&Element::Fire));
+    }
+
+    #[test]
+    fn 융해반응은_15피해를_주고_두_원소를_모두_제거한다() {
+        let mut app = apply_app();
+        let e = app.world.spawn((status_with(&[(Element::Fire, 3)]), stats(50))).id();
+        app.world.send_event(ElementalApplyEvent { target: e, element: Element::Ice });
+        app.update();
+        assert!(app.world.get::<ElementalStatus>(e).unwrap().active.is_empty());
+        assert_eq!(app.world.get::<CombatStats>(e).unwrap().hp, 35);
+    }
+
+    #[test]
+    fn 독기반응은_10피해를_준다() {
+        let mut app = apply_app();
+        let e = app.world.spawn((status_with(&[(Element::Fire, 3)]), stats(50))).id();
+        app.world.send_event(ElementalApplyEvent { target: e, element: Element::Poison });
+        app.update();
+        assert_eq!(app.world.get::<CombatStats>(e).unwrap().hp, 40);
+    }
+
+    #[test]
+    fn 파쇄반응은_20피해를_준다() {
+        let mut app = apply_app();
+        let e = app.world.spawn((status_with(&[(Element::Ice, 4)]), stats(50))).id();
+        app.world.send_event(ElementalApplyEvent { target: e, element: Element::Lightning });
+        app.update();
+        assert_eq!(app.world.get::<CombatStats>(e).unwrap().hp, 30);
+    }
+
+    #[test]
+    fn 동상반응은_비플레이어를_기절시킨다() {
+        let mut app = apply_app();
+        let e = app.world.spawn((status_with(&[(Element::Ice, 4)]), stats(50))).id();
+        app.world.send_event(ElementalApplyEvent { target: e, element: Element::Poison });
+        app.update();
+        assert_eq!(app.world.get::<CombatStats>(e).unwrap().hp, 45);
+        assert!(app.world.entity(e).contains::<Stunned>());
+    }
+
+    #[test]
+    fn 동상반응은_플레이어를_기절시키지_않는다() {
+        // is_player == true → if !is_player 거짓 경로
+        let mut app = apply_app();
+        let e = app.world.spawn((status_with(&[(Element::Ice, 4)]), stats(50), Player)).id();
+        app.world.send_event(ElementalApplyEvent { target: e, element: Element::Poison });
+        app.update();
+        assert!(!app.world.entity(e).contains::<Stunned>());
+    }
+
+    #[test]
+    fn 플라즈마반응은_비플레이어를_기절시킨다() {
+        let mut app = apply_app();
+        let e = app.world.spawn((status_with(&[(Element::Fire, 3)]), stats(50))).id();
+        app.world.send_event(ElementalApplyEvent { target: e, element: Element::Lightning });
+        app.update();
+        assert_eq!(app.world.get::<CombatStats>(e).unwrap().hp, 42);
+        assert!(app.world.entity(e).contains::<Stunned>());
+    }
+
+    #[test]
+    fn 전기독반응은_강화된_독을_추가한다() {
+        let mut app = apply_app();
+        let e = app.world.spawn((status_with(&[(Element::Poison, 5)]), stats(50))).id();
+        app.world.send_event(ElementalApplyEvent { target: e, element: Element::Lightning });
+        app.update();
+        assert_eq!(app.world.get::<CombatStats>(e).unwrap().hp, 42);
+        assert_eq!(app.world.get::<ElementalStatus>(e).unwrap().active.get(&Element::Poison), Some(&6));
+    }
+
+    #[test]
+    fn 원소반응으로_체력이_0이되면_플레이어가_사망한다() {
+        // is_player && hp <= 0 → Defeated
+        let mut app = apply_app();
+        let e = app.world.spawn((status_with(&[(Element::Fire, 3)]), stats(10), Player)).id();
+        app.world.send_event(ElementalApplyEvent { target: e, element: Element::Ice });
+        app.update();
+        assert!(app.world.entity(e).contains::<Defeated>());
+    }
+
+    #[test]
+    fn 얼음은_속도를_가진_대상을_둔화시킨다() {
+        let mut app = apply_app();
+        let e = app.world.spawn((ElementalStatus::default(), stats(50), Speed::new(1.0))).id();
+        app.world.send_event(ElementalApplyEvent { target: e, element: Element::Ice });
+        app.update();
+        assert_eq!(app.world.get::<Speed>(e).unwrap().value, 0.5);
+        assert!(app.world.entity(e).contains::<Slowed>());
+    }
+
+    #[test]
+    fn 얼음_둔화속도는_최소값_이하로_내려가지_않는다() {
+        // (0.4 * 0.5).max(0.25) == 0.25
+        let mut app = apply_app();
+        let e = app.world.spawn((ElementalStatus::default(), stats(50), Speed::new(0.4))).id();
+        app.world.send_event(ElementalApplyEvent { target: e, element: Element::Ice });
+        app.update();
+        assert_eq!(app.world.get::<Speed>(e).unwrap().value, 0.25);
+    }
+
+    #[test]
+    fn 속도가_없는_대상에_얼음을_걸어도_정상_동작한다() {
+        // speed_opt == None 경로
+        let mut app = apply_app();
+        let e = app.world.spawn((ElementalStatus::default(), stats(50))).id();
+        app.world.send_event(ElementalApplyEvent { target: e, element: Element::Ice });
+        app.update();
+        assert!(!app.world.entity(e).contains::<Slowed>());
+    }
+
+    #[test]
+    fn 이미_둔화된_대상은_얼음으로_다시_둔화되지_않는다() {
+        // slowed_opt.is_none() == false 경로
+        let mut app = apply_app();
+        let e = app.world.spawn((
+            ElementalStatus::default(), stats(50), Speed::new(0.5),
+            Slowed { original_speed: 1.0 },
+        )).id();
+        app.world.send_event(ElementalApplyEvent { target: e, element: Element::Ice });
+        app.update();
+        assert_eq!(app.world.get::<Speed>(e).unwrap().value, 0.5, "이미 둔화 상태면 추가 둔화 없음");
+    }
+
+    #[test]
+    fn 이미_가진_얼음을_재적용하면_둔화가_트리거되지_않는다() {
+        // was_new == false 경로 (이미 Ice 보유, Speed 있으나 둔화 미적용)
+        let mut app = apply_app();
+        let e = app.world.spawn((status_with(&[(Element::Ice, 2)]), stats(50), Speed::new(1.0))).id();
+        app.world.send_event(ElementalApplyEvent { target: e, element: Element::Ice });
+        app.update();
+        assert_eq!(app.world.get::<Speed>(e).unwrap().value, 1.0, "재적용은 둔화 트리거 안 함");
+        assert!(!app.world.entity(e).contains::<Slowed>());
+    }
+
+    // ── process_elemental_turns ──
+
+    fn turn_app() -> App {
+        let mut app = App::new();
+        app.add_event::<PlayerActedEvent>()
+            .add_event::<LogMessage>()
+            .add_systems(Update, process_elemental_turns);
+        app
+    }
+
+    #[test]
+    fn 턴_이벤트가_없으면_원소_지속처리가_일어나지_않는다() {
+        let mut app = turn_app();
+        let e = app.world.spawn((status_with(&[(Element::Fire, 3)]), stats(50))).id();
+        app.update();
+        assert_eq!(app.world.get::<CombatStats>(e).unwrap().hp, 50);
+        assert_eq!(app.world.get::<ElementalStatus>(e).unwrap().active.get(&Element::Fire), Some(&3));
+    }
+
+    #[test]
+    fn 화염은_매턴_플레이어에게_지속피해를_준다() {
+        let mut app = turn_app();
+        let e = app.world.spawn((status_with(&[(Element::Fire, 3)]), stats(50), Player)).id();
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert_eq!(app.world.get::<CombatStats>(e).unwrap().hp, 48);
+        assert_eq!(app.world.get::<ElementalStatus>(e).unwrap().active.get(&Element::Fire), Some(&2));
+    }
+
+    #[test]
+    fn 독은_매턴_플레이어에게_지속피해를_준다() {
+        let mut app = turn_app();
+        let e = app.world.spawn((status_with(&[(Element::Poison, 5)]), stats(50), Player)).id();
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert_eq!(app.world.get::<CombatStats>(e).unwrap().hp, 49);
+    }
+
+    #[test]
+    fn 화염과_독이_함께_있으면_지속피해가_합산된다() {
+        let mut app = turn_app();
+        let e = app.world.spawn((status_with(&[(Element::Fire, 3), (Element::Poison, 5)]), stats(50), Player)).id();
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert_eq!(app.world.get::<CombatStats>(e).unwrap().hp, 47);
+    }
+
+    #[test]
+    fn 비플레이어도_지속피해는_받지만_사망처리는_되지_않는다() {
+        // is_player == false 경로 (로그/사망처리 스킵하지만 피해는 적용)
+        let mut app = turn_app();
+        let e = app.world.spawn((status_with(&[(Element::Fire, 3)]), stats(1))).id();
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert_eq!(app.world.get::<CombatStats>(e).unwrap().hp, -1);
+        assert!(!app.world.entity(e).contains::<Defeated>(), "비-플레이어는 원소피해 사망마커 미부여");
+    }
+
+    #[test]
+    fn 지속피해로_체력이_0이되면_플레이어가_사망한다() {
+        let mut app = turn_app();
+        let e = app.world.spawn((status_with(&[(Element::Fire, 3)]), stats(2), Player)).id();
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert!(app.world.entity(e).contains::<Defeated>());
+    }
+
+    #[test]
+    fn 번개는_피해없이_지속시간만_소모하고_만료된다() {
+        // total_dot == 0 경로 + retain `_ => {}` arm (Lightning)
+        let mut app = turn_app();
+        let e = app.world.spawn((status_with(&[(Element::Lightning, 1)]), stats(50), Player)).id();
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert_eq!(app.world.get::<CombatStats>(e).unwrap().hp, 50);
+        assert!(app.world.get::<ElementalStatus>(e).unwrap().active.is_empty());
+    }
+
+    #[test]
+    fn 얼음이_만료되면_둔화된_속도가_원래대로_복원된다() {
+        let mut app = turn_app();
+        let e = app.world.spawn((
+            status_with(&[(Element::Ice, 1)]), stats(50),
+            Speed::new(0.5), Slowed { original_speed: 1.0 },
+        )).id();
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert_eq!(app.world.get::<Speed>(e).unwrap().value, 1.0);
+        assert!(!app.world.entity(e).contains::<Slowed>());
+    }
+
+    #[test]
+    fn 둔화상태가_아닌데_얼음이_만료되어도_아무일도_없다() {
+        // ice_expired == true 이지만 slowed_opt == None 경로
+        let mut app = turn_app();
+        let e = app.world.spawn((status_with(&[(Element::Ice, 1)]), stats(50))).id();
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert!(app.world.get::<ElementalStatus>(e).unwrap().active.is_empty());
+    }
+
+    // ── tick_stunned ──
+
+    fn stun_app() -> App {
+        let mut app = App::new();
+        app.add_event::<PlayerActedEvent>()
+            .add_systems(Update, tick_stunned);
+        app
+    }
+
+    #[test]
+    fn 턴_이벤트가_없으면_기절_시간이_감소하지_않는다() {
+        let mut app = stun_app();
+        let e = app.world.spawn(Stunned { turns: 2 }).id();
+        app.update();
+        assert_eq!(app.world.get::<Stunned>(e).unwrap().turns, 2);
+    }
+
+    #[test]
+    fn 기절은_매턴_감소하며_남아있으면_유지된다() {
+        let mut app = stun_app();
+        let e = app.world.spawn(Stunned { turns: 2 }).id();
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert_eq!(app.world.get::<Stunned>(e).unwrap().turns, 1);
+    }
+
+    #[test]
+    fn 기절이_0이되면_기절_컴포넌트가_제거된다() {
+        let mut app = stun_app();
+        let e = app.world.spawn(Stunned { turns: 1 }).id();
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        assert!(!app.world.entity(e).contains::<Stunned>());
+    }
+
+    #[test]
+    fn 원소플러그인이_정상적으로_빌드된다() {
+        let mut app = App::new();
+        app.add_plugins(ElementalPlugin);
     }
 }

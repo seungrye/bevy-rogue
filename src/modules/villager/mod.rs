@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use crate::modules::{
     map::{
-        draw_map, Map, TileKind, MapType, OccupiedTiles, Rect,
+        draw_map, Map, MapType, OccupiedTiles, Rect,
         tile_to_world_coords, world_to_tile_coords,
         MAP_HEIGHT, MAP_WIDTH, TILE_SIZE,
         MapSystemSet, VillagerRespawnEvent, PlayerActedEvent, BumpTileEvent,
@@ -104,24 +104,26 @@ impl Plugin for VillagerPlugin {
 /// villager RON 파일을 읽어 registry 에 적재한다
 fn load_villagers(mut registry: ResMut<VillagerRegistry>) {
     let path = "assets/villagers/villagers.ron";
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(e) => {
-            error!("[치명적] villager 파일 {} 을 읽을 수 없습니다: {}", path, e);
-            std::process::exit(1);
-        }
-    };
-
-    let villagers: Vec<VillagerDef> = match ron::de::from_str(&text) {
+    let villagers = match read_villager_defs(path) {
         Ok(v) => v,
+        // 도달 불가 방어코드: 파일 누락·파싱 실패 시 process::exit 로 테스트 러너를 죽이므로
+        // 단위 테스트에서 양방향 실행 불가. read_villager_defs 의 Err 분기는 별도 테스트로 커버.
         Err(e) => {
-            error!("[치명적] villager RON 파싱 실패: {}", e);
+            error!("[치명적] {}", e);
             std::process::exit(1);
         }
     };
-
     info!("villager 로드: {} 명", villagers.len());
     registry.villagers = villagers;
+}
+
+/// 주어진 경로의 villager RON 을 읽어 파싱한다 (테스트 가능한 seam).
+/// 읽기 실패·파싱 실패를 에러 메시지로 반환한다 (process::exit 없음).
+fn read_villager_defs(path: &str) -> Result<Vec<VillagerDef>, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("villager 파일 {} 을 읽을 수 없습니다: {}", path, e))?;
+    ron::de::from_str::<Vec<VillagerDef>>(&text)
+        .map_err(|e| format!("villager RON 파싱 실패: {}", e))
 }
 
 /// 모든 퀘스트의 giver_npc 가 villager registry 에 존재하는지 검증한다
@@ -129,6 +131,22 @@ fn validate_quest_villager_refs(
     quest_registry: Res<QuestRegistry>,
     villager_registry: Res<VillagerRegistry>,
 ) {
+    let errors = collect_missing_giver_refs(&quest_registry, &villager_registry);
+    // 도달 불가 방어코드: 매칭 실패 시 process::exit 로 테스트 러너를 죽이므로 단위
+    // 테스트에서 양방향 실행 불가. 매칭 판정 로직은 collect_missing_giver_refs 로 커버.
+    if !errors.is_empty() {
+        for msg in &errors {
+            error!("[치명적] {}", msg);
+        }
+        std::process::exit(1);
+    }
+}
+
+/// villager registry 와 매칭되지 않는 퀘스트 giver_npc 목록을 반환한다 (테스트 가능한 seam).
+fn collect_missing_giver_refs(
+    quest_registry: &QuestRegistry,
+    villager_registry: &VillagerRegistry,
+) -> Vec<String> {
     let mut errors: Vec<String> = Vec::new();
     for (qid, qdef) in &quest_registry.quests {
         let exists = villager_registry.villagers.iter().any(|v| v.id == qdef.giver_npc);
@@ -139,12 +157,7 @@ fn validate_quest_villager_refs(
             ));
         }
     }
-    if !errors.is_empty() {
-        for msg in &errors {
-            error!("[치명적] {}", msg);
-        }
-        std::process::exit(1);
-    }
+    errors
 }
 
 fn handle_kill_npc(
@@ -523,7 +536,7 @@ pub fn pick_next_tile(
     let valid: Vec<(usize, usize)> = neighbors.iter()
         .filter(|&&(nx, ny)| {
             nx < MAP_WIDTH && ny < MAP_HEIGHT
-                && map.get_tile(nx, ny) == TileKind::Floor
+                && map.get_tile(nx, ny).is_walkable()
                 && !occupied.contains(&(nx, ny))
                 && home_rect.map_or(true, |r| nx >= r.x1 && nx <= r.x2 && ny >= r.y1 && ny <= r.y2)
         })
@@ -602,6 +615,7 @@ pub fn quest_npc_glyph(
         return ("?", yellow);
     }
 
+    // 도달 불가 방어코드: phase_id 가 None 이면 위 is_initial 분기에서 이미 반환됨.
     let Some(pid) = phase_id else {
         return ("?", yellow);
     };
@@ -642,6 +656,7 @@ fn is_quest_terminal_def(def: &QuestDef, state: &QuestState, quest_id: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modules::map::{TileKind, MapResource};
     use rand::SeedableRng;
     use rand::rngs::StdRng;
     use std::sync::OnceLock;
@@ -652,28 +667,28 @@ mod tests {
     }
 
     #[test]
-    fn next_dialogue_advances() {
+    fn 대사인덱스는_다음_대사로_전진한다() {
         assert_eq!(next_dialogue_idx(0, 3), 1);
         assert_eq!(next_dialogue_idx(1, 3), 2);
     }
 
     #[test]
-    fn next_dialogue_wraps_at_end() {
+    fn 마지막_대사에서는_처음으로_되돌아간다() {
         assert_eq!(next_dialogue_idx(2, 3), 0);
     }
 
     #[test]
-    fn next_dialogue_single_stays_zero() {
+    fn 대사가_하나뿐이면_인덱스는_0에_머무른다() {
         assert_eq!(next_dialogue_idx(0, 1), 0);
     }
 
     #[test]
-    fn next_dialogue_zero_total_returns_zero() {
+    fn 대사가_없으면_인덱스는_0을_반환한다() {
         assert_eq!(next_dialogue_idx(0, 0), 0);
     }
 
     #[test]
-    fn pick_next_tile_surrounded_by_walls_stays_put() {
+    fn 사방이_벽이면_주민은_제자리에_머무른다() {
         let mut map = Map::new(10, 10);
         map.set_tile(5, 5, TileKind::Floor);
         let occupied = HashSet::new();
@@ -685,7 +700,7 @@ mod tests {
     }
 
     #[test]
-    fn pick_next_tile_returns_floor_neighbor() {
+    fn 인접한_바닥_타일로_이동할_수_있다() {
         let mut map = Map::new(10, 10);
         map.set_tile(5, 5, TileKind::Floor);
         map.set_tile(6, 5, TileKind::Floor);
@@ -702,7 +717,7 @@ mod tests {
     }
 
     #[test]
-    fn pick_next_tile_never_moves_to_wall() {
+    fn 주민은_벽_타일로는_이동하지_않는다() {
         let mut map = Map::new(10, 10);
         map.set_tile(5, 5, TileKind::Floor);
         map.set_tile(6, 5, TileKind::Floor);
@@ -716,7 +731,7 @@ mod tests {
     }
 
     #[test]
-    fn pick_next_tile_skips_occupied_neighbor() {
+    fn 주민은_점유된_이웃_타일로는_이동하지_않는다() {
         let mut map = Map::new(10, 10);
         map.set_tile(5, 5, TileKind::Floor);
         map.set_tile(6, 5, TileKind::Floor);
@@ -727,6 +742,70 @@ mod tests {
             let result = pick_next_tile(5, 5, &map, &occupied, None, &mut rng);
             assert_eq!(result, (5, 5), "점유된 타일로 이동하면 안 된다");
         }
+    }
+
+    #[test]
+    fn 주민은_물타일로는_이동하지_않는다() {
+        // 유일한 이웃이 물이면 항상 제자리.
+        let mut map = Map::new(10, 10);
+        map.set_tile(5, 5, TileKind::Floor);
+        map.set_tile(6, 5, TileKind::Water);
+        let occupied = HashSet::new();
+        for seed in 0..200u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let result = pick_next_tile(5, 5, &map, &occupied, None, &mut rng);
+            assert_eq!(result, (5, 5), "물 타일로 이동하면 안 된다");
+        }
+    }
+
+    #[test]
+    fn 맵_왼쪽_위_모서리에서는_범위밖_이웃을_거른다() {
+        // x=0,y=0 → wrapping_sub 로 거대한 좌표가 생겨 `nx < MAP_WIDTH`/`ny < MAP_HEIGHT`
+        // 가 false 가 되는 분기를 탄다. 유효 이웃은 (1,0),(0,1) 뿐.
+        let mut map = Map::new(MAP_WIDTH, MAP_HEIGHT);
+        map.set_tile(0, 0, TileKind::Floor);
+        map.set_tile(1, 0, TileKind::Floor);
+        map.set_tile(0, 1, TileKind::Floor);
+        let occupied = HashSet::new();
+        for seed in 0..200u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let (nx, ny) = pick_next_tile(0, 0, &map, &occupied, None, &mut rng);
+            assert!((nx, ny) == (0, 0) || (nx, ny) == (1, 0) || (nx, ny) == (0, 1),
+                "범위 밖 이웃은 선택되면 안 된다: ({nx},{ny})");
+        }
+    }
+
+    #[test]
+    fn 맵_오른쪽_아래_모서리에서는_범위밖_이웃을_거른다() {
+        // x=MAP_WIDTH-1, y=MAP_HEIGHT-1 → x+1, y+1 이 범위를 벗어나 `< MAP_*` false.
+        let (ex, ey) = (MAP_WIDTH - 1, MAP_HEIGHT - 1);
+        let mut map = Map::new(MAP_WIDTH, MAP_HEIGHT);
+        map.set_tile(ex, ey, TileKind::Floor);
+        map.set_tile(ex - 1, ey, TileKind::Floor);
+        map.set_tile(ex, ey - 1, TileKind::Floor);
+        let occupied = HashSet::new();
+        for seed in 0..200u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let (nx, ny) = pick_next_tile(ex, ey, &map, &occupied, None, &mut rng);
+            assert!(nx < MAP_WIDTH && ny < MAP_HEIGHT, "범위 밖으로 가면 안 된다");
+        }
+    }
+
+    #[test]
+    fn 주민은_모래타일로는_이동할_수_있다() {
+        let mut map = Map::new(10, 10);
+        map.set_tile(5, 5, TileKind::Floor);
+        map.set_tile(6, 5, TileKind::Sand);
+        let occupied = HashSet::new();
+        let mut moved = false;
+        for seed in 0..200u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            if pick_next_tile(5, 5, &map, &occupied, None, &mut rng) == (6, 5) {
+                moved = true;
+                break;
+            }
+        }
+        assert!(moved, "인접 모래 타일로 이동할 수 있어야 한다");
     }
 
     fn make_villager(just_bumped: bool) -> Villager {
@@ -745,20 +824,20 @@ mod tests {
     }
 
     #[test]
-    fn take_turn_returns_false_and_resets_flag_when_bumped() {
+    fn 충돌_직후_턴에는_이동하지_않고_플래그를_소모한다() {
         let mut v = make_villager(true);
         assert!(!take_turn(&mut v), "충돌 직후에는 이동하지 않아야 한다");
         assert!(!v.just_bumped, "플래그는 한 번만 소모된다");
     }
 
     #[test]
-    fn take_turn_returns_true_when_not_bumped() {
+    fn 충돌이_없으면_주민은_정상적으로_이동한다() {
         let mut v = make_villager(false);
         assert!(take_turn(&mut v), "충돌 없는 주민은 정상 이동해야 한다");
     }
 
     #[test]
-    fn quest_villager_fields_default_correctly() {
+    fn 퀘스트_주민_필드는_기본값으로_초기화된다() {
         let v = Villager {
             id: "elder".to_string(),
             name: "장로".to_string(),
@@ -778,7 +857,7 @@ mod tests {
     // villager_turn 에서 플레이어 타일(Transform 또는 MovingTo 목적지)을
     // occupied 에 추가해 overlap 을 방지하는 메커니즘 검증
     #[test]
-    fn pick_next_tile_blocked_by_player_tile() {
+    fn 주민은_플레이어가_점유한_타일로는_이동하지_않는다() {
         let mut map = Map::new(10, 10);
         map.set_tile(5, 5, TileKind::Floor);
         map.set_tile(6, 5, TileKind::Floor);
@@ -792,7 +871,7 @@ mod tests {
     }
 
     #[test]
-    fn pick_next_tile_respects_home_rect() {
+    fn 퀘스트_주민은_지정된_홈구역_밖으로는_이동하지_않는다() {
         // 5,5 중심에 3x3 Floor 배치. home_rect 를 (4..=6, 4..=6) 으로 제한
         let mut map = Map::new(10, 10);
         for x in 4..=6usize {
@@ -808,6 +887,48 @@ mod tests {
             let mut rng = StdRng::seed_from_u64(seed);
             let (nx, ny) = pick_next_tile(5, 5, &map, &occupied, Some(&home), &mut rng);
             assert!(nx >= 4 && nx <= 6 && ny >= 4 && ny <= 6, "home_rect 밖으로 이동하면 안 된다: ({nx},{ny})");
+        }
+    }
+
+    #[test]
+    fn 홈구역_하한_경계에서는_하한_미만_이웃을_거른다() {
+        // 주민을 home_rect 의 왼쪽-아래 모서리(x1,y1)에 두면 왼쪽/아래 이웃이
+        // x1/y1 미만이 되어 `nx >= r.x1`/`ny >= r.y1` 의 false 측 분기를 탄다.
+        let mut map = Map::new(10, 10);
+        for x in 3..=6usize {
+            for y in 3..=6usize {
+                map.set_tile(x, y, TileKind::Floor); // home 밖 (3,*),(*,3) 도 Floor
+            }
+        }
+        let home = Rect::new(4, 4, 2, 2); // x1=4,y1=4,x2=6,y2=6
+        let occupied = HashSet::new();
+        for seed in 0..200u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            // 주민 위치 = (4,4) = home 의 좌하단 모서리.
+            let (nx, ny) = pick_next_tile(4, 4, &map, &occupied, Some(&home), &mut rng);
+            assert!(nx >= 4 && nx <= 6 && ny >= 4 && ny <= 6,
+                "home_rect 하한 밖(3,*)/(*,3)으로 이동하면 안 된다: ({nx},{ny})");
+        }
+    }
+
+    #[test]
+    fn 홈구역_상한_경계에서는_상한_초과_이웃을_거른다() {
+        // 주민을 home_rect 의 오른쪽-위 모서리(x2,y2)에 두면 오른쪽/위 이웃이
+        // x2/y2 초과가 되어 `nx <= r.x2`/`ny <= r.y2` 의 false 측 분기를 탄다.
+        let mut map = Map::new(10, 10);
+        for x in 4..=7usize {
+            for y in 4..=7usize {
+                map.set_tile(x, y, TileKind::Floor); // home 밖 (7,*),(*,7) 도 Floor
+            }
+        }
+        let home = Rect::new(4, 4, 2, 2); // x1=4,y1=4,x2=6,y2=6
+        let occupied = HashSet::new();
+        for seed in 0..200u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            // 주민 위치 = (6,6) = home 의 우상단 모서리.
+            let (nx, ny) = pick_next_tile(6, 6, &map, &occupied, Some(&home), &mut rng);
+            assert!(nx >= 4 && nx <= 6 && ny >= 4 && ny <= 6,
+                "home_rect 상한 밖(7,*)/(*,7)으로 이동하면 안 된다: ({nx},{ny})");
         }
     }
 
@@ -836,22 +957,22 @@ mod tests {
     }
 
     #[test]
-    fn world_fracture_giver_resolves_to_villager() {
+    fn 세계균열_퀘스트의_giver는_villager로_매칭된다() {
         assert_giver_resolves("world_fracture", "old_man");
     }
 
     #[test]
-    fn parry_quest_giver_resolves_to_villager() {
+    fn 패링_퀘스트의_giver는_villager로_매칭된다() {
         assert_giver_resolves("parry_quest", "grace");
     }
 
     #[test]
-    fn demonsword_quest_giver_resolves_to_villager() {
+    fn 마검_퀘스트의_giver는_villager로_매칭된다() {
         assert_giver_resolves("demonsword_quest", "bastian");
     }
 
     #[test]
-    fn discover_quest_npcs_marker_uses_quest_for_giver_lookup() {
+    fn 퀘스트_NPC_마커는_giver_매칭으로만_표시된다() {
         // 퀘스트 NPC만 마커. 새 모델: quest_registry 에서 giver_npc 매칭.
         // (test 환경에선 quest_registry 가 없으므로 villager id 기반으로 시뮬.)
         let regular_id = "farmer";  // villagers.ron 에서 어느 quest 의 giver 도 아님
@@ -872,13 +993,13 @@ mod tests {
     }
 
     #[test]
-    fn villagers_ron_parses() {
+    fn villager_RON은_정상적으로_파싱된다() {
         let defs = load_villager_defs();
         assert!(defs.len() >= 11, "11명 이상의 NPC 가 정의되어야 한다");
     }
 
     #[test]
-    fn all_quest_giver_npcs_exist_in_villager_registry() {
+    fn 모든_퀘스트_giver는_villager_registry에_존재한다() {
         let villager_defs = load_villager_defs();
         let villager_ids: HashSet<String> = villager_defs.iter().map(|d| d.id.clone()).collect();
 
@@ -960,7 +1081,7 @@ mod tests {
     fn default_world() -> WorldState { WorldState::default() }
 
     #[test]
-    fn glyph_yellow_when_quest_not_in_state() {
+    fn 퀘스트가_상태에_없으면_글리프는_노란_물음표다() {
         let def = make_test_quest_def();
         let state = QuestState::default();
         let inv = empty_inventory();
@@ -971,7 +1092,7 @@ mod tests {
     }
 
     #[test]
-    fn glyph_yellow_when_at_initial_phase() {
+    fn 초기_페이즈에서는_글리프가_노란_물음표다() {
         let def = make_test_quest_def();
         let state = make_state_at("not_started");
         let inv = empty_inventory();
@@ -982,7 +1103,7 @@ mod tests {
     }
 
     #[test]
-    fn glyph_green_question_when_in_progress_no_item() {
+    fn 진행중이고_조건_미충족이면_글리프는_초록_물음표다() {
         let def = make_test_quest_def();
         let state = make_state_at("active");
         let inv = empty_inventory(); // 아이템 없음 → auto_advance 조건 미충족
@@ -993,7 +1114,7 @@ mod tests {
     }
 
     #[test]
-    fn glyph_green_exclamation_when_auto_advance_condition_met() {
+    fn 자동전진_조건이_충족되면_글리프는_초록_느낌표다() {
         let def = make_test_quest_def();
         let state = make_state_at("active");
         // eternal_gem 보유 → auto_advance 조건 충족 → 다음 페이즈로 넘어갈 수 있다
@@ -1008,7 +1129,7 @@ mod tests {
     }
 
     #[test]
-    fn glyph_green_exclamation_when_has_interact_transition() {
+    fn 상호작용_전진이_가능하면_글리프는_초록_느낌표다() {
         let def = make_test_quest_def();
         let state = make_state_at("ready");
         let inv = empty_inventory();
@@ -1019,7 +1140,7 @@ mod tests {
     }
 
     #[test]
-    fn glyph_v_when_terminal() {
+    fn 터미널_페이즈에서는_글리프가_기본색_v다() {
         let def = make_test_quest_def();
         let state = make_state_at("done");
         let inv = empty_inventory();
@@ -1032,21 +1153,21 @@ mod tests {
 
     // interact_can_advance 단위 테스트
     #[test]
-    fn interact_can_advance_true_for_interact_transition() {
+    fn 상호작용_전환이_있는_페이즈는_전진_가능으로_판정된다() {
         let def = make_test_quest_def();
         // ready phase 에는 Interact transition (ready → done) 이 있다
         assert!(interact_can_advance(&def, "ready"));
     }
 
     #[test]
-    fn interact_can_advance_false_for_auto_only_phase() {
+    fn 자동전환만_있는_페이즈는_전진_불가로_판정된다() {
         let def = make_test_quest_def();
         // active phase 에는 Auto transition 만 있고 Interact transition 은 없다
         assert!(!interact_can_advance(&def, "active"));
     }
 
     #[test]
-    fn interact_can_advance_false_for_self_loop_only() {
+    fn 자기참조_전환만_있으면_전진_불가로_판정된다() {
         // gathering phase 에 Log 전용 self-loop Interact transition (to == from) 만 있는 경우
         let mut phases = HM::new();
         phases.insert("not_started".to_string(), phase(&[]));
@@ -1081,7 +1202,7 @@ mod tests {
     }
 
     #[test]
-    fn glyph_green_question_when_interact_is_self_loop_hint_only() {
+    fn 자기참조_힌트_전환만_있으면_글리프는_초록_물음표다() {
         // gathering 페이즈에 Log 전용 self-loop transition 만 있으면 초록 '?'
         // initial_phase 는 "not_started", 현재 페이즈는 "gathering" — initial 분기에 걸리지 않음
         let mut phases = HM::new();
@@ -1118,6 +1239,1096 @@ mod tests {
         let world = default_world();
         let (glyph, color) = quest_npc_glyph("alchemist_quest", &def, &state, &inv, &world, Color::WHITE, qi());
         assert_eq!(glyph, "?", "self-loop 힌트만 있는 phase 는 '?' 여야 한다");
+        assert_eq!(color, Color::rgb(0.3, 1.0, 0.6));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // seam(read_villager_defs / collect_missing_giver_refs) 단위 테스트
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn 존재하는_villager_파일을_읽으면_정의들을_반환한다() {
+        let defs = read_villager_defs("assets/villagers/villagers.ron")
+            .expect("정상 경로는 Ok 여야 한다");
+        assert!(defs.len() >= 11, "11명 이상이 적재되어야 한다");
+    }
+
+    #[test]
+    fn 없는_경로의_villager_파일을_읽으면_읽기_에러를_반환한다() {
+        let err = read_villager_defs("assets/villagers/__none__.ron")
+            .expect_err("없는 파일은 Err 여야 한다");
+        assert!(err.contains("읽을 수 없습니다"), "읽기 실패 메시지: {err}");
+    }
+
+    #[test]
+    fn 잘못된_RON_형식의_villager_파일은_파싱_에러를_반환한다() {
+        // Cargo.toml 은 villager RON 형식이 아니므로 파싱이 실패한다 (읽기는 성공).
+        let err = read_villager_defs("Cargo.toml")
+            .expect_err("잘못된 형식은 Err 여야 한다");
+        assert!(err.contains("파싱 실패"), "파싱 실패 메시지: {err}");
+    }
+
+    fn registry_with_giver(quest_id: &str, giver: &str) -> QuestRegistry {
+        let mut reg = QuestRegistry::default();
+        let mut qdef = make_test_quest_def();
+        qdef.giver_npc = giver.to_string();
+        reg.quests.insert(quest_id.to_string(), qdef);
+        reg
+    }
+
+    #[test]
+    fn 모든_giver가_매칭되면_누락_목록은_비어있다() {
+        let qreg = registry_with_giver("test_quest", "elder");
+        let mut vreg = VillagerRegistry::default();
+        vreg.villagers.push(VillagerDef {
+            id: "elder".to_string(), name: "장로".to_string(),
+            color: [1.0, 1.0, 1.0], dialogs: vec![], speed: 1.0,
+        });
+        assert!(collect_missing_giver_refs(&qreg, &vreg).is_empty());
+    }
+
+    #[test]
+    fn giver가_villager에_없으면_누락_목록에_포함된다() {
+        let qreg = registry_with_giver("test_quest", "ghost");
+        let vreg = VillagerRegistry::default(); // villager 없음
+        let errors = collect_missing_giver_refs(&qreg, &vreg);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("ghost"), "누락 메시지: {}", errors[0]);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // quest_npc_glyph / is_quest_terminal_def 의 미커버 분기
+    // (현재 phase 가 def.phases 에 없는 경우)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn 알_수_없는_페이즈이면_글리프는_기본색_v다() {
+        // state 의 phase 가 def.phases 에 없으면 → terminal 로 간주, base_color 'v'.
+        let def = make_test_quest_def();
+        let mut state = QuestState::default();
+        state.phases.insert("test_quest".to_string(), "ghost_phase".to_string());
+        let inv = empty_inventory();
+        let world = default_world();
+        let base = Color::rgb(0.1, 0.2, 0.3);
+        let (glyph, color) = quest_npc_glyph("test_quest", &def, &state, &inv, &world, base, qi());
+        assert_eq!(glyph, "v", "정의에 없는 phase 는 터미널 취급");
+        assert_eq!(color, base);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // App 하네스 공통 셋업
+    // ─────────────────────────────────────────────────────────────────────────
+
+    use crate::modules::zone::{ZoneId, CloseQuestPortalEvent};
+    use crate::modules::ui::shop::ShopOpenEvent;
+    use std::time::Duration;
+
+    /// 전체 Floor 맵 (MAP_WIDTH x MAP_HEIGHT) — 이동 분기 테스트용.
+    fn full_floor_map() -> Map {
+        let mut m = Map::new(MAP_WIDTH, MAP_HEIGHT);
+        for y in 0..MAP_HEIGHT {
+            for x in 0..MAP_WIDTH {
+                m.set_tile(x, y, TileKind::Floor);
+            }
+        }
+        m
+    }
+
+    /// AssetServer(폰트/이미지) 를 제공하는 기본 App.
+    fn asset_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<Font>();
+        app.init_asset::<Image>();
+        app
+    }
+
+    /// rooms[0] 은 do_spawn 에서 skip(1) 되므로 더미 1개 + 실제 방들을 둔다.
+    fn rooms_with(n: usize) -> Vec<Rect> {
+        let mut rooms = vec![Rect::new(1, 1, 2, 2)]; // skip 대상 더미
+        for i in 0..n {
+            let x = 5 + i * 6;
+            rooms.push(Rect::new(x, 5, 3, 3));
+        }
+        rooms
+    }
+
+    fn vdef(id: &str, name: &str) -> VillagerDef {
+        VillagerDef {
+            id: id.to_string(), name: name.to_string(),
+            color: [0.5, 0.6, 0.7],
+            dialogs: vec!["안녕".to_string(), "또 봐".to_string()],
+            speed: 1.0,
+        }
+    }
+
+    fn spawn_villager(app: &mut App, id: &str, name: &str, tile: (usize, usize)) -> Entity {
+        app.world.spawn((
+            Text::from_section("v", TextStyle::default()),
+            Transform::from_translation(tile_to_world_coords(tile.0, tile.1).extend(Z_VILLAGER)),
+            Villager {
+                id: id.to_string(), name: name.to_string(),
+                dialogues: vec!["안녕".to_string(), "또 봐".to_string()],
+                dialogue_idx: 0, tile_x: tile.0, tile_y: tile.1,
+                just_bumped: false, quest_dialogue_idx: 0,
+                base_color: Color::WHITE, home_room: None,
+            },
+            Speed::new(1.0),
+            MoveQueue::default(),
+        )).id()
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // VillagerPlugin::build
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn 빌리저플러그인을_등록하면_빌드가_패닉없이_완료된다() {
+        let mut app = App::new();
+        app.add_plugins(VillagerPlugin);
+        // build() 가 시스템 등록만 해도 커버됨 (update 불필요).
+        assert!(app.world.contains_resource::<VillagerRegistry>());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // load_villagers / validate_quest_villager_refs (실제 파일/registry 사용 Ok 경로)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn 로드시스템은_실제_RON을_registry에_적재한다() {
+        let mut app = App::new();
+        app.init_resource::<VillagerRegistry>()
+            .add_systems(Update, load_villagers);
+        app.update();
+        let reg = app.world.resource::<VillagerRegistry>();
+        assert!(reg.villagers.len() >= 11, "실제 RON 의 NPC 들이 적재되어야 한다");
+    }
+
+    #[test]
+    fn 검증시스템은_giver가_모두_매칭되면_패닉없이_통과한다() {
+        let mut app = App::new();
+        // giver(elder) 가 villager 에 존재 → errors 비어 있음 → exit 안 함.
+        app.insert_resource(registry_with_giver("test_quest", "elder"));
+        let mut vreg = VillagerRegistry::default();
+        vreg.villagers.push(vdef("elder", "장로"));
+        app.insert_resource(vreg);
+        app.add_systems(Update, validate_quest_villager_refs);
+        app.update(); // 패닉/exit 없이 통과하면 성공.
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // sync_occupied_tiles
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn 동기화시스템은_점유타일을_주민_위치로_갱신한다() {
+        let mut app = App::new();
+        app.init_resource::<OccupiedTiles>()
+            .add_systems(Update, sync_occupied_tiles);
+        spawn_villager(&mut app, "a", "갑", (3, 4));
+        spawn_villager(&mut app, "b", "을", (7, 8));
+        app.update();
+        let occ = &app.world.resource::<OccupiedTiles>().0;
+        assert!(occ.contains(&(3, 4)) && occ.contains(&(7, 8)));
+        assert_eq!(occ.len(), 2);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // handle_kill_npc
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fn kill_npc_app() -> App {
+        let mut app = App::new();
+        app.add_event::<KillNpcEvent>()
+            .add_event::<LogMessage>()
+            .add_systems(Update, handle_kill_npc);
+        app
+    }
+
+    #[test]
+    fn 킬NPC_이벤트는_일치하는_주민을_제거하고_로그를_남긴다() {
+        let mut app = kill_npc_app();
+        let e = spawn_villager(&mut app, "goblin_king", "고블린왕", (1, 1));
+        app.world.send_event(KillNpcEvent("goblin_king".to_string()));
+        app.update();
+        assert!(app.world.get_entity(e).is_none(), "일치 주민은 despawn 되어야 한다");
+        let logs = app.world.resource::<Events<LogMessage>>();
+        assert_eq!(logs.len(), 1, "쓰러짐 로그 한 줄");
+    }
+
+    #[test]
+    fn 킬NPC_이벤트는_일치하지_않는_주민은_제거하지_않는다() {
+        let mut app = kill_npc_app();
+        let e = spawn_villager(&mut app, "farmer", "농부", (1, 1));
+        app.world.send_event(KillNpcEvent("other_id".to_string()));
+        app.update();
+        assert!(app.world.get_entity(e).is_some(), "불일치 주민은 유지되어야 한다");
+        assert_eq!(app.world.resource::<Events<LogMessage>>().len(), 0);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // smooth_villager_move
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fn smooth_app() -> App {
+        let mut app = App::new();
+        app.init_resource::<Time>()
+            .add_systems(Update, smooth_villager_move);
+        app
+    }
+
+    #[test]
+    fn 부드러운이동은_먼_목표에_한_걸음씩_다가간다() {
+        let mut app = smooth_app();
+        let start = tile_to_world_coords(0, 0).extend(Z_VILLAGER);
+        let target = tile_to_world_coords(40, 0).extend(Z_VILLAGER); // 매우 먼 목표
+        let e = app.world.spawn((
+            Transform::from_translation(start),
+            { let mut q = MoveQueue::default(); q.0.push_back(target); q },
+            Speed::new(1.0),
+            Villager {
+                id: "m".into(), name: "이동".into(), dialogues: vec![],
+                dialogue_idx: 0, tile_x: 0, tile_y: 0, just_bumped: false,
+                quest_dialogue_idx: 0, base_color: Color::WHITE, home_room: None,
+            },
+        )).id();
+        app.world.resource_mut::<Time>().advance_by(Duration::from_secs_f32(0.016));
+        app.update();
+        let t = app.world.get::<Transform>(e).unwrap();
+        assert!(t.translation.x > start.x, "목표 방향으로 전진해야 한다");
+        assert!(t.translation.x < target.x, "한 프레임에 도달하면 안 된다 (else 분기)");
+        let q = app.world.get::<MoveQueue>(e).unwrap();
+        assert_eq!(q.0.len(), 1, "아직 목표 미도달 — 큐 유지");
+    }
+
+    #[test]
+    fn 부드러운이동은_가까운_목표에_도달하면_큐에서_제거한다() {
+        let mut app = smooth_app();
+        let start = tile_to_world_coords(0, 0).extend(Z_VILLAGER);
+        // step 안에 들어오는 매우 가까운 목표
+        let target = start + Vec3::new(0.01, 0.0, 0.0);
+        let e = app.world.spawn((
+            Transform::from_translation(start),
+            { let mut q = MoveQueue::default(); q.0.push_back(target); q },
+            Speed::new(1.0),
+            Villager {
+                id: "m".into(), name: "이동".into(), dialogues: vec![],
+                dialogue_idx: 0, tile_x: 0, tile_y: 0, just_bumped: false,
+                quest_dialogue_idx: 0, base_color: Color::WHITE, home_room: None,
+            },
+        )).id();
+        app.world.resource_mut::<Time>().advance_by(Duration::from_secs_f32(0.5));
+        app.update();
+        let t = app.world.get::<Transform>(e).unwrap();
+        assert_eq!(t.translation, target, "목표에 스냅되어야 한다");
+        assert!(app.world.get::<MoveQueue>(e).unwrap().0.is_empty(), "도달하면 큐 비움");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // villager_turn
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fn turn_app() -> App {
+        let mut app = App::new();
+        app.insert_resource(MapResource(full_floor_map()))
+            .add_event::<PlayerActedEvent>()
+            .add_systems(Update, villager_turn);
+        app
+    }
+
+    #[test]
+    fn 플레이어_행동_이벤트가_없으면_주민은_이동하지_않는다() {
+        let mut app = turn_app();
+        let e = spawn_villager(&mut app, "a", "갑", (10, 10));
+        app.update(); // PlayerActedEvent 미발행 → early return
+        let q = app.world.get::<MoveQueue>(e).unwrap();
+        assert!(q.0.is_empty(), "이벤트 없으면 이동 큐가 비어 있어야 한다");
+    }
+
+    #[test]
+    fn 플레이어_행동시_주민은_에너지가_차면_한칸_이동을_큐에_쌓는다() {
+        let mut app = turn_app();
+        let e = spawn_villager(&mut app, "a", "갑", (10, 10));
+        // speed.value 를 1.0 으로 → energy 가 매 턴 1.0 누적되어 한 번 이동.
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        let q = app.world.get::<MoveQueue>(e).unwrap();
+        // STAY_CHANCE 로 제자리일 수도 있으므로 큐 길이 <= 1.
+        assert!(q.0.len() <= 1);
+        // energy 는 1.0 누적 후 한 칸 소비 → 0.0
+        let sp = app.world.get::<Speed>(e).unwrap();
+        assert!(sp.energy < 1.0, "에너지는 이동에 소비되어 1 미만이어야 한다");
+    }
+
+    #[test]
+    fn 플레이어_행동시_충돌직후_주민은_이번턴에_이동하지_않는다() {
+        let mut app = turn_app();
+        let e = app.world.spawn((
+            Text::from_section("v", TextStyle::default()),
+            Transform::from_translation(tile_to_world_coords(10, 10).extend(Z_VILLAGER)),
+            Villager {
+                id: "a".into(), name: "갑".into(), dialogues: vec![],
+                dialogue_idx: 0, tile_x: 10, tile_y: 10, just_bumped: true, // 충돌 플래그 on
+                quest_dialogue_idx: 0, base_color: Color::WHITE, home_room: None,
+            },
+            Speed::new(1.0),
+            MoveQueue::default(),
+        )).id();
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        let q = app.world.get::<MoveQueue>(e).unwrap();
+        assert!(q.0.is_empty(), "충돌 직후 턴에는 이동하지 않아야 한다 (take_turn=false 분기)");
+        assert!(!app.world.get::<Villager>(e).unwrap().just_bumped, "플래그 소모");
+    }
+
+    #[test]
+    fn 플레이어_위치는_주민_이동에서_점유되어_막힌다() {
+        // 플레이어를 주민 옆 유일 통로에 두면 주민은 그 칸으로 못 간다.
+        let mut app = App::new();
+        let mut map = Map::new(MAP_WIDTH, MAP_HEIGHT);
+        map.set_tile(10, 10, TileKind::Floor);
+        map.set_tile(11, 10, TileKind::Floor); // 유일한 이웃
+        app.insert_resource(MapResource(map))
+            .add_event::<PlayerActedEvent>()
+            .add_systems(Update, villager_turn);
+        let v = spawn_villager(&mut app, "a", "갑", (10, 10));
+        // 플레이어를 (11,10) 에 둔다 (Transform 기반).
+        app.world.spawn((
+            Player,
+            Transform::from_translation(tile_to_world_coords(11, 10).extend(0.0)),
+        ));
+        for _ in 0..30 {
+            app.world.send_event(PlayerActedEvent);
+            app.update();
+            let v_comp = app.world.get::<Villager>(v).unwrap();
+            assert_eq!((v_comp.tile_x, v_comp.tile_y), (10, 10),
+                "플레이어가 막은 유일 통로로 이동하면 안 된다");
+        }
+    }
+
+    #[test]
+    fn 플레이어가_이동중이면_목적지_타일이_점유로_막힌다() {
+        // MovingTo 의 target 타일이 occupied 에 들어가는 분기.
+        let mut app = App::new();
+        let mut map = Map::new(MAP_WIDTH, MAP_HEIGHT);
+        map.set_tile(10, 10, TileKind::Floor);
+        map.set_tile(11, 10, TileKind::Floor);
+        app.insert_resource(MapResource(map))
+            .add_event::<PlayerActedEvent>()
+            .add_systems(Update, villager_turn);
+        let v = spawn_villager(&mut app, "a", "갑", (10, 10));
+        // 플레이어는 멀리 있지만 MovingTo 목적지가 (11,10).
+        app.world.spawn((
+            Player,
+            Transform::from_translation(tile_to_world_coords(40, 40).extend(0.0)),
+            MovingTo { target: tile_to_world_coords(11, 10).extend(0.0) },
+        ));
+        for _ in 0..30 {
+            app.world.send_event(PlayerActedEvent);
+            app.update();
+            let v_comp = app.world.get::<Villager>(v).unwrap();
+            assert_eq!((v_comp.tile_x, v_comp.tile_y), (10, 10),
+                "플레이어 이동 목적지로는 이동하면 안 된다");
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // spawn_on_startup / do_spawn / respawn_on_regen
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fn quest_registry_with(quest_id: &str, giver: &str, active: bool) -> QuestRegistry {
+        let mut reg = registry_with_giver(quest_id, giver);
+        if active { reg.active.insert(quest_id.to_string()); }
+        reg
+    }
+
+    #[test]
+    fn 마을맵이면_시작시_방마다_주민이_스폰된다() {
+        let mut app = asset_app();
+        let mut map = full_floor_map();
+        map.map_type = MapType::Village;
+        map.rooms = rooms_with(2); // 더미1 + 방2 → 주민 2명
+        app.insert_resource(MapResource(map));
+        app.insert_resource(QuestRegistry::default()); // 퀘스트 없음 → 모두 일반 NPC
+        let mut vreg = VillagerRegistry::default();
+        vreg.villagers.push(vdef("farmer", "농부"));
+        app.insert_resource(vreg);
+        app.add_systems(Update, spawn_on_startup);
+        app.update();
+        let n = app.world.query::<&Villager>().iter(&app.world).count();
+        assert_eq!(n, 2, "방 2개에 주민 2명 스폰");
+    }
+
+    #[test]
+    fn 던전맵이면_시작시_주민이_스폰되지_않는다() {
+        let mut app = asset_app();
+        let mut map = full_floor_map();
+        map.map_type = MapType::Dungeon; // 마을 아님
+        map.rooms = rooms_with(2);
+        app.insert_resource(MapResource(map));
+        app.insert_resource(QuestRegistry::default());
+        let mut vreg = VillagerRegistry::default();
+        vreg.villagers.push(vdef("farmer", "농부"));
+        app.insert_resource(vreg);
+        app.add_systems(Update, spawn_on_startup);
+        app.update();
+        let n = app.world.query::<&Villager>().iter(&app.world).count();
+        assert_eq!(n, 0, "던전에는 주민 미스폰");
+    }
+
+    #[test]
+    fn 활성_퀘스트_NPC는_퀘스트방에_먼저_스폰된다() {
+        let mut app = asset_app();
+        let mut map = full_floor_map();
+        map.map_type = MapType::Village;
+        map.rooms = rooms_with(2);
+        app.insert_resource(MapResource(map));
+        // elder 가 active quest 의 giver, farmer 는 일반.
+        app.insert_resource(quest_registry_with("eq", "elder", true));
+        let mut vreg = VillagerRegistry::default();
+        vreg.villagers.push(vdef("elder", "장로"));
+        vreg.villagers.push(vdef("farmer", "농부"));
+        app.insert_resource(vreg);
+        app.add_systems(Update, spawn_on_startup);
+        app.update();
+        let ids: HashSet<String> = app.world.query::<&Villager>()
+            .iter(&app.world).map(|v| v.id.clone()).collect();
+        assert!(ids.contains("elder"), "퀘스트 NPC 가 스폰되어야 한다");
+        // 퀘스트 NPC 는 home_room 이 Some, 일반은 None.
+        let elder_home = app.world.query::<&Villager>().iter(&app.world)
+            .find(|v| v.id == "elder").unwrap().home_room;
+        assert!(elder_home.is_some(), "퀘스트 NPC 는 home_room 이 지정된다");
+    }
+
+    #[test]
+    fn 일반_NPC가_없으면_빈_방은_건너뛴다() {
+        // 퀘스트 NPC 1명만 있고 일반 NPC 0명 → 방이 더 많으면 빈 방은 continue.
+        let mut app = asset_app();
+        let mut map = full_floor_map();
+        map.map_type = MapType::Village;
+        map.rooms = rooms_with(3); // 더미1 + 방3
+        app.insert_resource(MapResource(map));
+        app.insert_resource(quest_registry_with("eq", "elder", true));
+        let mut vreg = VillagerRegistry::default();
+        vreg.villagers.push(vdef("elder", "장로")); // 퀘스트 NPC 1명, 일반 0명
+        app.insert_resource(vreg);
+        app.add_systems(Update, spawn_on_startup);
+        app.update();
+        let n = app.world.query::<&Villager>().iter(&app.world).count();
+        assert_eq!(n, 1, "퀘스트 NPC 1명만 스폰, 나머지 방은 건너뜀");
+    }
+
+    #[test]
+    fn 방이_없으면_주민_스폰을_건너뛴다() {
+        let mut app = asset_app();
+        let mut map = full_floor_map();
+        map.map_type = MapType::Village;
+        map.rooms = vec![]; // 방 없음 → do_spawn early return
+        app.insert_resource(MapResource(map));
+        app.insert_resource(QuestRegistry::default());
+        let mut vreg = VillagerRegistry::default();
+        vreg.villagers.push(vdef("farmer", "농부"));
+        app.insert_resource(vreg);
+        app.add_systems(Update, spawn_on_startup);
+        app.update();
+        assert_eq!(app.world.query::<&Villager>().iter(&app.world).count(), 0);
+    }
+
+    fn regen_app() -> App {
+        let mut app = asset_app();
+        app.add_event::<VillagerRespawnEvent>();
+        app.insert_resource(QuestRegistry::default());
+        let mut vreg = VillagerRegistry::default();
+        vreg.villagers.push(vdef("farmer", "농부"));
+        app.insert_resource(vreg);
+        app.add_systems(Update, respawn_on_regen);
+        app
+    }
+
+    #[test]
+    fn 마을_재생성_이벤트는_기존_주민을_제거하고_새로_스폰한다() {
+        let mut app = regen_app();
+        let old = spawn_villager(&mut app, "old", "옛주민", (1, 1));
+        app.world.send_event(VillagerRespawnEvent {
+            map_type: MapType::Village,
+            rooms: rooms_with(2),
+        });
+        app.update();
+        assert!(app.world.get_entity(old).is_none(), "기존 주민 제거");
+        let n = app.world.query::<&Villager>().iter(&app.world).count();
+        assert_eq!(n, 2, "새 주민 2명 스폰");
+    }
+
+    #[test]
+    fn 던전_재생성_이벤트는_주민을_제거만_하고_재스폰하지_않는다() {
+        let mut app = regen_app();
+        let old = spawn_villager(&mut app, "old", "옛주민", (1, 1));
+        app.world.send_event(VillagerRespawnEvent {
+            map_type: MapType::Dungeon, // 마을 아님 → 재스폰 안 함
+            rooms: rooms_with(2),
+        });
+        app.update();
+        assert!(app.world.get_entity(old).is_none(), "기존 주민은 제거");
+        assert_eq!(app.world.query::<&Villager>().iter(&app.world).count(), 0,
+            "던전 재생성은 재스폰하지 않음");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // handle_bump / show_quest_dialog
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fn bump_app(qreg: QuestRegistry) -> App {
+        let mut app = App::new();
+        app.add_event::<BumpTileEvent>()
+            .add_event::<LogMessage>()
+            .add_event::<KillNpcEvent>()
+            .add_event::<SpawnQuestPortalEvent>()
+            .add_event::<CloseQuestPortalEvent>()
+            .add_event::<DespawnWorldItemEvent>()
+            .add_event::<ShopOpenEvent>()
+            .insert_resource(qreg)
+            .insert_resource(QuestState::default())
+            .insert_resource(PlayerInventory::default())
+            .insert_resource(WorldState::default())
+            .insert_resource(crate::modules::item::build_test_registry())
+            .add_systems(Update, handle_bump);
+        app
+    }
+
+    #[test]
+    fn 상인을_밀면_상점_열기_이벤트가_발생한다() {
+        let mut app = bump_app(QuestRegistry::default());
+        spawn_villager(&mut app, "merchant", "상인", (5, 5));
+        app.world.send_event(BumpTileEvent(5, 5));
+        app.update();
+        assert_eq!(app.world.resource::<Events<ShopOpenEvent>>().len(), 1);
+    }
+
+    #[test]
+    fn 일반_주민을_밀면_대사가_로그에_출력되고_인덱스가_전진한다() {
+        let mut app = bump_app(QuestRegistry::default());
+        let e = spawn_villager(&mut app, "farmer", "농부", (5, 5));
+        app.world.send_event(BumpTileEvent(5, 5));
+        app.update();
+        assert_eq!(app.world.resource::<Events<LogMessage>>().len(), 1, "대사 한 줄");
+        let v = app.world.get::<Villager>(e).unwrap();
+        assert_eq!(v.dialogue_idx, 1, "대사 인덱스 전진");
+        assert!(v.just_bumped, "충돌 플래그 설정");
+    }
+
+    #[test]
+    fn 행이_다른_주민은_밀어도_반응하지_않는다() {
+        // x 는 같지만 y 가 다른 경우 → `||` 의 두 번째 항(tile_y != by) 분기.
+        let mut app = bump_app(QuestRegistry::default());
+        let e = spawn_villager(&mut app, "farmer", "농부", (5, 5));
+        app.world.send_event(BumpTileEvent(5, 9)); // x 같고 y 다름
+        app.update();
+        assert_eq!(app.world.resource::<Events<LogMessage>>().len(), 0);
+        assert!(!app.world.get::<Villager>(e).unwrap().just_bumped);
+    }
+
+    #[test]
+    fn 열이_다른_주민은_밀어도_반응하지_않는다() {
+        // x 가 다른 경우 → `||` 의 첫 항(tile_x != bx) 분기.
+        let mut app = bump_app(QuestRegistry::default());
+        let e = spawn_villager(&mut app, "farmer", "농부", (5, 5));
+        app.world.send_event(BumpTileEvent(9, 5)); // x 다름
+        app.update();
+        assert_eq!(app.world.resource::<Events<LogMessage>>().len(), 0);
+        assert!(!app.world.get::<Villager>(e).unwrap().just_bumped);
+    }
+
+    #[test]
+    fn 대사가_없는_주민을_밀면_로그없이_플래그만_설정된다() {
+        let mut app = bump_app(QuestRegistry::default());
+        let e = app.world.spawn((
+            Text::from_section("v", TextStyle::default()),
+            Transform::default(),
+            Villager {
+                id: "mute".into(), name: "벙어리".into(), dialogues: vec![], // 대사 없음
+                dialogue_idx: 0, tile_x: 5, tile_y: 5, just_bumped: false,
+                quest_dialogue_idx: 0, base_color: Color::WHITE, home_room: None,
+            },
+            Speed::new(1.0), MoveQueue::default(),
+        )).id();
+        app.world.send_event(BumpTileEvent(5, 5));
+        app.update();
+        assert_eq!(app.world.resource::<Events<LogMessage>>().len(), 0, "대사 없으면 로그 없음");
+        assert!(app.world.get::<Villager>(e).unwrap().just_bumped);
+    }
+
+    #[test]
+    fn 퀘스트_주민을_처음_밀면_초기_페이즈_대사가_출력된다() {
+        let qreg = registry_with_giver("test_quest", "elder");
+        let mut app = bump_app(qreg);
+        // make_test_quest_def 의 not_started phase 는 dialog 가 비어 있으므로,
+        // dialog 가 있는 phase 로 교체한다.
+        {
+            let mut reg = app.world.resource_mut::<QuestRegistry>();
+            let q = reg.quests.get_mut("test_quest").unwrap();
+            q.phases.insert("not_started".to_string(), phase(&["첫 만남이다", "도와주게"]));
+        }
+        let e = spawn_villager(&mut app, "elder", "장로", (5, 5));
+        app.world.send_event(BumpTileEvent(5, 5));
+        app.update();
+        assert!(app.world.resource::<Events<LogMessage>>().len() >= 1, "퀘스트 대사 출력");
+        let v = app.world.get::<Villager>(e).unwrap();
+        assert_eq!(v.quest_dialogue_idx, 1, "마지막 줄 전이면 idx 전진");
+        assert!(v.just_bumped);
+    }
+
+    #[test]
+    fn 퀘스트_주민의_마지막_대사에서_상호작용하면_페이즈가_전진한다() {
+        let qreg = registry_with_giver("test_quest", "elder");
+        let mut app = bump_app(qreg);
+        {
+            let mut reg = app.world.resource_mut::<QuestRegistry>();
+            let q = reg.quests.get_mut("test_quest").unwrap();
+            // 단일 대사 phase → 첫 밀기에 마지막 줄 → transition 평가.
+            q.phases.insert("not_started".to_string(), phase(&["수락하겠나?"]));
+        }
+        spawn_villager(&mut app, "elder", "장로", (5, 5));
+        app.world.send_event(BumpTileEvent(5, 5));
+        app.update();
+        let st = app.world.resource::<QuestState>();
+        assert_eq!(st.phases.get("test_quest").map(|s| s.as_str()), Some("active"),
+            "not_started → active 로 전진해야 한다");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // show_quest_dialog 의 방어/early-return 분기 (직접 호출)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fn dialog_event_apps() -> (App, Entity) {
+        // EventWriter 들이 필요하므로 시스템으로 감싸기보다, 이벤트를 가진 App 에서
+        // SystemState 로 EventWriter 를 얻어 show_quest_dialog 를 호출한다.
+        let mut app = App::new();
+        app.add_event::<LogMessage>()
+            .add_event::<KillNpcEvent>()
+            .add_event::<SpawnQuestPortalEvent>()
+            .add_event::<CloseQuestPortalEvent>()
+            .add_event::<DespawnWorldItemEvent>();
+        let e = Entity::PLACEHOLDER;
+        (app, e)
+    }
+
+    fn run_show_quest_dialog(
+        app: &mut App,
+        villager: &mut Villager,
+        quest_id: &str,
+        registry: &QuestRegistry,
+        state: &mut QuestState,
+        inventory: &mut PlayerInventory,
+        world: &WorldState,
+        quest_items: &crate::modules::item::QuestItemRegistry,
+    ) {
+        use bevy::ecs::system::SystemState;
+        let mut ss: SystemState<(
+            EventWriter<LogMessage>,
+            EventWriter<KillNpcEvent>,
+            EventWriter<SpawnQuestPortalEvent>,
+            EventWriter<CloseQuestPortalEvent>,
+            EventWriter<DespawnWorldItemEvent>,
+        )> = SystemState::new(&mut app.world);
+        let (mut log, mut kill, mut open, mut close, mut despawn) = ss.get_mut(&mut app.world);
+        show_quest_dialog(
+            villager, quest_id, registry, state, inventory, &mut log, world,
+            &mut kill, &mut open, &mut close, &mut despawn, quest_items,
+        );
+        ss.apply(&mut app.world);
+    }
+
+    fn make_test_villager() -> Villager {
+        Villager {
+            id: "elder".into(), name: "장로".into(), dialogues: vec![],
+            dialogue_idx: 0, tile_x: 0, tile_y: 0, just_bumped: false,
+            quest_dialogue_idx: 0, base_color: Color::WHITE, home_room: None,
+        }
+    }
+
+    #[test]
+    fn 알_수_없는_퀘스트면_대화는_조용히_종료된다() {
+        let (mut app, _) = dialog_event_apps();
+        let reg = QuestRegistry::default(); // 빈 registry → get() None
+        let mut v = make_test_villager();
+        let mut state = QuestState::default();
+        let mut inv = empty_inventory();
+        let world = default_world();
+        run_show_quest_dialog(&mut app, &mut v, "없는퀘스트", &reg, &mut state, &mut inv, &world, qi());
+        assert_eq!(app.world.resource::<Events<LogMessage>>().len(), 0, "정의 없으면 아무 일 없음");
+    }
+
+    #[test]
+    fn 정의에_없는_현재_페이즈면_대화는_조용히_종료된다() {
+        let (mut app, _) = dialog_event_apps();
+        let reg = registry_with_giver("test_quest", "elder");
+        let mut v = make_test_villager();
+        let mut state = QuestState::default();
+        state.phases.insert("test_quest".to_string(), "유령페이즈".to_string()); // phases 에 없음
+        let mut inv = empty_inventory();
+        let world = default_world();
+        run_show_quest_dialog(&mut app, &mut v, "test_quest", &reg, &mut state, &mut inv, &world, qi());
+        assert_eq!(app.world.resource::<Events<LogMessage>>().len(), 0,
+            "phase 정의 없으면 대화 종료");
+    }
+
+    #[test]
+    fn 대사가_여러줄이면_상호작용마다_인덱스가_전진한다() {
+        let (mut app, _) = dialog_event_apps();
+        let mut reg = registry_with_giver("test_quest", "elder");
+        reg.quests.get_mut("test_quest").unwrap()
+            .phases.insert("not_started".to_string(), phase(&["첫줄", "둘째줄", "셋째줄"]));
+        let mut v = make_test_villager();
+        let mut state = QuestState::default();
+        let mut inv = empty_inventory();
+        let world = default_world();
+        run_show_quest_dialog(&mut app, &mut v, "test_quest", &reg, &mut state, &mut inv, &world, qi());
+        assert_eq!(v.quest_dialogue_idx, 1, "여러 줄 중 첫 줄 후 idx=1 (else 분기)");
+        assert_eq!(app.world.resource::<Events<LogMessage>>().len(), 1);
+    }
+
+    #[test]
+    fn 빈_대사_페이즈는_로그도_전이도_없이_인덱스만_전진한다() {
+        // dialog 가 비어 있으면 `!dialog.is_empty()` 가 false → else 분기로 idx 만 전진.
+        // (transition 평가 안 함, 로그 출력 안 함)
+        let (mut app, _) = dialog_event_apps();
+        let reg = registry_with_giver("test_quest", "elder"); // not_started dialog=[]
+        let mut v = make_test_villager();
+        let mut state = QuestState::default();
+        let mut inv = empty_inventory();
+        let world = default_world();
+        run_show_quest_dialog(&mut app, &mut v, "test_quest", &reg, &mut state, &mut inv, &world, qi());
+        assert!(state.phases.get("test_quest").is_none(), "빈 대사 → 전이 없음");
+        assert_eq!(v.quest_dialogue_idx, 1, "빈 대사도 else 분기로 idx 전진");
+        assert_eq!(app.world.resource::<Events<LogMessage>>().len(), 0, "빈 대사 → 로그 없음");
+    }
+
+    #[test]
+    fn 단일_대사_페이즈에서_상호작용하면_전이를_평가하고_idx를_0으로_되돌린다() {
+        // dialog 한 줄 → 첫 상호작용에 마지막 줄 → transition 평가 + idx=0.
+        let (mut app, _) = dialog_event_apps();
+        let mut reg = registry_with_giver("test_quest", "elder");
+        reg.quests.get_mut("test_quest").unwrap()
+            .phases.insert("not_started".to_string(), phase(&["수락하겠나?"]));
+        let mut v = make_test_villager();
+        let mut state = QuestState::default();
+        let mut inv = empty_inventory();
+        let world = default_world();
+        run_show_quest_dialog(&mut app, &mut v, "test_quest", &reg, &mut state, &mut inv, &world, qi());
+        assert_eq!(state.phases.get("test_quest").map(|s| s.as_str()), Some("active"),
+            "마지막 줄 후 not_started → active 전이");
+        assert_eq!(v.quest_dialogue_idx, 0, "마지막 줄 후 idx 는 0 으로 리셋");
+        assert_eq!(app.world.resource::<Events<LogMessage>>().len(), 1, "대사 한 줄 출력");
+    }
+
+    #[test]
+    fn 자기참조_전이는_페이즈를_바꾸지_않고_액션만_실행한다() {
+        // gathering phase 에 self-loop Interact transition (to==from) 만 있는 경우:
+        // execute_actions 는 실행되지만 set_phase 는 호출되지 않는다 (t.to == phase_id 분기).
+        let (mut app, _) = dialog_event_apps();
+        let mut phases = HM::new();
+        phases.insert("not_started".to_string(), phase(&[]));
+        phases.insert("gathering".to_string(), phase(&["아직이네"]));
+        let def = QuestDef {
+            id: "alc".into(), title: "연금".into(), giver_npc: "elder".into(),
+            initial_phase: "not_started".into(), phases,
+            transitions: vec![QuestTransition {
+                from: "gathering".into(), trigger: TriggerKind::Interact,
+                when: None,
+                actions: vec![crate::modules::quest::QuestAction::Log("힌트".into())],
+                to: "gathering".into(),
+            }],
+            spawns: vec![], spawn_chance: 1.0,
+        };
+        let mut reg = QuestRegistry::default();
+        reg.quests.insert("alc".into(), def);
+        let mut v = make_test_villager();
+        let mut state = QuestState::default();
+        state.phases.insert("alc".into(), "gathering".into());
+        let mut inv = empty_inventory();
+        let world = default_world();
+        // 단일 대사 → 마지막 줄에서 transition 평가.
+        run_show_quest_dialog(&mut app, &mut v, "alc", &reg, &mut state, &mut inv, &world, qi());
+        assert_eq!(state.phases.get("alc").map(|s| s.as_str()), Some("gathering"),
+            "self-loop 은 phase 를 바꾸지 않는다 (t.to == phase_id)");
+    }
+
+    #[test]
+    fn 조건이_충족되지_않으면_상호작용_전이가_실행되지_않는다() {
+        // active phase 의 Auto 만 있고 Interact 없음 → 마지막 줄 후 matched=None.
+        let (mut app, _) = dialog_event_apps();
+        let mut reg = registry_with_giver("test_quest", "elder");
+        // active phase 에 단일 대사 부여, 현재 phase = active.
+        reg.quests.get_mut("test_quest").unwrap()
+            .phases.insert("active".to_string(), phase(&["진행 중"]));
+        let mut v = make_test_villager();
+        let mut state = QuestState::default();
+        state.phases.insert("test_quest".to_string(), "active".to_string());
+        let mut inv = empty_inventory(); // eternal_gem 없음
+        let world = default_world();
+        run_show_quest_dialog(&mut app, &mut v, "test_quest", &reg, &mut state, &mut inv, &world, qi());
+        // Interact transition 이 active 에 없으므로 phase 변화 없음.
+        assert_eq!(state.phases.get("test_quest").map(|s| s.as_str()), Some("active"),
+            "Interact 매칭 없음 → 전이 안 됨");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // update_villager_glyph
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fn glyph_app(qreg: QuestRegistry) -> App {
+        let mut app = App::new();
+        app.insert_resource(qreg)
+            .insert_resource(QuestState::default())
+            .insert_resource(PlayerInventory::default())
+            .insert_resource(WorldState::default())
+            .insert_resource(crate::modules::item::build_test_registry())
+            .add_systems(Update, update_villager_glyph);
+        app
+    }
+
+    fn spawn_quest_villager(app: &mut App, id: &str) -> Entity {
+        app.world.spawn((
+            Text::from_section("?", TextStyle { color: Color::rgb(1.0, 0.9, 0.1), ..default() }),
+            Transform::default(),
+            Villager {
+                id: id.to_string(), name: id.to_string(), dialogues: vec![],
+                dialogue_idx: 0, tile_x: 0, tile_y: 0, just_bumped: false,
+                quest_dialogue_idx: 0, base_color: Color::rgb(0.2, 0.3, 0.4), home_room: None,
+            },
+            Speed::new(1.0), MoveQueue::default(),
+        )).id()
+    }
+
+    #[test]
+    fn 새로_스폰된_퀘스트_주민의_글리프가_갱신된다() {
+        let mut app = glyph_app(registry_with_giver("test_quest", "elder"));
+        let e = spawn_quest_villager(&mut app, "elder");
+        app.update(); // Added<Villager> → is_empty()=false → 갱신
+        let text = app.world.get::<Text>(e).unwrap();
+        // 초기 phase (state 없음) → 노란 '?'
+        assert_eq!(text.sections[0].value, "?");
+        assert_eq!(text.sections[0].style.color, Color::rgb(1.0, 0.9, 0.1));
+    }
+
+    #[test]
+    fn 퀘스트_상태가_바뀌면_주민_글리프가_갱신된다() {
+        let mut app = glyph_app(registry_with_giver("test_quest", "elder"));
+        let e = spawn_quest_villager(&mut app, "elder");
+        app.update(); // 첫 갱신 (Added)
+        // 이제 변경 트리거: state 를 ready 로 (Interact 전진 가능 → 초록 '!')
+        app.world.resource_mut::<QuestState>().set_phase("test_quest", "ready");
+        app.update();
+        let text = app.world.get::<Text>(e).unwrap();
+        assert_eq!(text.sections[0].value, "!", "ready → 초록 느낌표");
+        assert_eq!(text.sections[0].style.color, Color::rgb(0.3, 1.0, 0.6));
+    }
+
+    #[test]
+    fn 변경이_없으면_글리프_갱신을_건너뛴다() {
+        let mut app = glyph_app(registry_with_giver("test_quest", "elder"));
+        let e = spawn_quest_villager(&mut app, "elder");
+        app.update(); // Added 처리
+        // 글리프를 임의 값으로 바꿔두고, 변경 없는 update 가 덮어쓰지 않음을 확인.
+        app.world.get_mut::<Text>(e).unwrap().sections[0].value = "X".to_string();
+        app.update(); // is_changed 모두 false + added empty → early return
+        assert_eq!(app.world.get::<Text>(e).unwrap().sections[0].value, "X",
+            "변경 없으면 글리프를 건드리지 않는다");
+    }
+
+    #[test]
+    fn 인벤토리만_바뀌어도_글리프가_갱신된다() {
+        // 첫 update 로 변경/Added 플래그를 소진한 뒤 인벤토리만 변경 →
+        // `!quest_state.is_changed()`=true && `!inventory.is_changed()`=false 분기.
+        let mut app = glyph_app(registry_with_giver("test_quest", "elder"));
+        let e = spawn_quest_villager(&mut app, "elder");
+        app.update(); // 변경 플래그/Added 소진
+        app.world.get_mut::<Text>(e).unwrap().sections[0].value = "X".to_string();
+        app.world.resource_mut::<PlayerInventory>().earn_gold(1); // 인벤토리만 변경
+        app.update();
+        // 갱신이 일어나 'X' 가 다시 글리프로 덮어써져야 한다.
+        assert_ne!(app.world.get::<Text>(e).unwrap().sections[0].value, "X",
+            "인벤토리 변경 시 글리프가 갱신되어야 한다");
+    }
+
+    #[test]
+    fn 변경이_없어도_새_주민이_추가되면_글리프가_갱신된다() {
+        // 첫 update 로 플래그 소진 후, 변경 없이 새 주민만 추가 →
+        // `added.is_empty()`=false 분기.
+        let mut app = glyph_app(registry_with_giver("test_quest", "elder"));
+        spawn_quest_villager(&mut app, "elder");
+        app.update(); // 첫 주민 Added/변경 소진
+        let e2 = spawn_quest_villager(&mut app, "elder"); // 새 주민 추가
+        app.world.get_mut::<Text>(e2).unwrap().sections[0].value = "Y".to_string();
+        app.update(); // quest/inv 변경 없음, added 있음 → 갱신
+        assert_ne!(app.world.get::<Text>(e2).unwrap().sections[0].value, "Y",
+            "새 주민 추가 시 글리프가 갱신되어야 한다");
+    }
+
+    #[test]
+    fn 퀘스트_giver가_아닌_주민은_글리프_갱신에서_제외된다() {
+        let mut app = glyph_app(QuestRegistry::default()); // 어떤 quest 의 giver 도 아님
+        let e = spawn_quest_villager(&mut app, "farmer");
+        app.world.get_mut::<Text>(e).unwrap().sections[0].value = "Z".to_string();
+        // inventory 변경으로 시스템은 돌지만, quest_for_giver 가 None → continue.
+        app.world.resource_mut::<PlayerInventory>().earn_gold(1);
+        app.update();
+        assert_eq!(app.world.get::<Text>(e).unwrap().sections[0].value, "Z",
+            "giver 아닌 주민은 글리프 변경 없음");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // discover_quest_npcs_in_fov
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fn fov_app(qreg: QuestRegistry) -> App {
+        let mut app = App::new();
+        app.insert_resource(qreg)
+            .insert_resource(QuestState::default())
+            .insert_resource(WorldState::default())
+            .insert_resource(DiscoveredMarkers::default())
+            .add_systems(Update, discover_quest_npcs_in_fov);
+        app
+    }
+
+    fn map_with_visible(tile: (usize, usize), visible: bool) -> Map {
+        let mut m = full_floor_map();
+        let idx = m.index(tile.0, tile.1);
+        m.tiles[idx].visible = visible;
+        m
+    }
+
+    #[test]
+    fn 퀘스트_giver가_아닌_주민은_FOV마커가_생기지_않는다() {
+        let mut app = fov_app(QuestRegistry::default());
+        app.insert_resource(MapResource(map_with_visible((5, 5), true)));
+        spawn_villager(&mut app, "farmer", "농부", (5, 5));
+        app.update();
+        assert!(app.world.resource::<DiscoveredMarkers>().0.is_empty(),
+            "giver 아닌 주민은 마커 없음");
+    }
+
+    #[test]
+    fn 시작_전_퀘스트_giver의_마커는_제거된다() {
+        let mut app = fov_app(registry_with_giver("test_quest", "elder"));
+        app.insert_resource(MapResource(map_with_visible((5, 5), true)));
+        // 미리 마커를 심어둔다.
+        app.world.resource_mut::<DiscoveredMarkers>()
+            .update_actor_position("장로", MarkerKind::QuestGiver, ZoneId::Town, 5, 5);
+        spawn_villager(&mut app, "elder", "장로", (5, 5));
+        // state 에 phase 없음 → started=false → remove_actor.
+        app.update();
+        assert!(app.world.resource::<DiscoveredMarkers>().0.is_empty(),
+            "퀘스트 시작 전이면 마커 제거");
+    }
+
+    #[test]
+    fn 초기_페이즈_상태의_giver_마커도_제거된다() {
+        let mut app = fov_app(registry_with_giver("test_quest", "elder"));
+        app.insert_resource(MapResource(map_with_visible((5, 5), true)));
+        // phase 가 initial_phase(not_started) 와 같으면 started=false.
+        app.world.resource_mut::<QuestState>().set_phase("test_quest", "not_started");
+        app.world.resource_mut::<DiscoveredMarkers>()
+            .update_actor_position("장로", MarkerKind::QuestGiver, ZoneId::Town, 5, 5);
+        spawn_villager(&mut app, "elder", "장로", (5, 5));
+        app.update();
+        assert!(app.world.resource::<DiscoveredMarkers>().0.is_empty());
+    }
+
+    #[test]
+    fn 종료된_퀘스트_giver의_마커는_제거된다() {
+        let mut app = fov_app(registry_with_giver("test_quest", "elder"));
+        app.insert_resource(MapResource(map_with_visible((5, 5), true)));
+        // done phase 는 terminal → 마커 제거.
+        app.world.resource_mut::<QuestState>().set_phase("test_quest", "done");
+        app.world.resource_mut::<DiscoveredMarkers>()
+            .update_actor_position("장로", MarkerKind::QuestGiver, ZoneId::Town, 5, 5);
+        spawn_villager(&mut app, "elder", "장로", (5, 5));
+        app.update();
+        assert!(app.world.resource::<DiscoveredMarkers>().0.is_empty(),
+            "터미널 퀘스트 마커 제거");
+    }
+
+    #[test]
+    fn 진행중_giver가_시야안에_있으면_마커_위치가_갱신된다() {
+        let mut app = fov_app(registry_with_giver("test_quest", "elder"));
+        app.insert_resource(MapResource(map_with_visible((6, 7), true)));
+        app.world.resource_mut::<QuestState>().set_phase("test_quest", "active"); // 진행중
+        spawn_villager(&mut app, "elder", "장로", (6, 7));
+        app.update();
+        let markers = &app.world.resource::<DiscoveredMarkers>().0;
+        assert_eq!(markers.len(), 1, "진행중 + 시야 안 → 마커 생성");
+        assert_eq!((markers[0].tile_x, markers[0].tile_y), (6, 7));
+    }
+
+    #[test]
+    fn 진행중이라도_시야밖이면_마커가_갱신되지_않는다() {
+        let mut app = fov_app(registry_with_giver("test_quest", "elder"));
+        app.insert_resource(MapResource(map_with_visible((6, 7), false))); // 시야 밖
+        app.world.resource_mut::<QuestState>().set_phase("test_quest", "active");
+        spawn_villager(&mut app, "elder", "장로", (6, 7));
+        app.update();
+        assert!(app.world.resource::<DiscoveredMarkers>().0.is_empty(),
+            "시야 밖이면 마커 갱신 없음 (제거도 안 함)");
+    }
+
+    #[test]
+    fn 진행중_giver의_x좌표가_맵폭_밖이면_마커가_갱신되지_않는다() {
+        // 좁은 맵에서 주민 x 좌표가 map.width 이상이면 범위검사 분기 (x 쪽).
+        let mut app = fov_app(registry_with_giver("test_quest", "elder"));
+        let mut m = Map::new(8, 8); // 좁은 맵
+        for y in 0..8 { for x in 0..8 { m.set_tile(x, y, TileKind::Floor); } }
+        app.insert_resource(MapResource(m));
+        app.world.resource_mut::<QuestState>().set_phase("test_quest", "active");
+        // 주민 타일 x=20 → map.width(8) 보다 큼 → continue.
+        spawn_villager(&mut app, "elder", "장로", (20, 3));
+        app.update();
+        assert!(app.world.resource::<DiscoveredMarkers>().0.is_empty(),
+            "맵 폭 밖 좌표는 마커 생성 안 함");
+    }
+
+    #[test]
+    fn 진행중_giver의_y좌표가_맵높이_밖이면_마커가_갱신되지_않는다() {
+        // x 는 범위 안, y 만 범위 밖 → `||` 의 두 번째 항(tile_y >= height) 분기.
+        let mut app = fov_app(registry_with_giver("test_quest", "elder"));
+        let mut m = Map::new(8, 8);
+        for y in 0..8 { for x in 0..8 { m.set_tile(x, y, TileKind::Floor); } }
+        app.insert_resource(MapResource(m));
+        app.world.resource_mut::<QuestState>().set_phase("test_quest", "active");
+        spawn_villager(&mut app, "elder", "장로", (3, 20)); // x 범위 안, y 범위 밖
+        app.update();
+        assert!(app.world.resource::<DiscoveredMarkers>().0.is_empty(),
+            "맵 높이 밖 좌표는 마커 생성 안 함");
+    }
+
+    #[test]
+    fn 자동전이가_자기참조면_글리프는_초록_물음표다() {
+        // 현재 phase 에 Auto self-loop transition(to==from) 만 있으면:
+        // - is_quest_terminal_def: false (transition 존재)
+        // - is_initial: false
+        // - interact_can_advance: false (Interact 없음)
+        // - auto_ready: t.to != pid 가 false → false
+        // → 최종 ("?", green) 분기. (t.to != *pid 의 false 측 커버)
+        let mut phases = HM::new();
+        phases.insert("not_started".to_string(), phase(&[]));
+        phases.insert("waiting".to_string(), phase(&[]));
+        let def = QuestDef {
+            id: "wq".into(), title: "대기".into(), giver_npc: "elder".into(),
+            initial_phase: "not_started".into(), phases,
+            transitions: vec![QuestTransition {
+                from: "waiting".into(), trigger: TriggerKind::Auto,
+                when: None, actions: vec![],
+                to: "waiting".into(), // 자기참조 Auto
+            }],
+            spawns: vec![], spawn_chance: 1.0,
+        };
+        let mut state = QuestState::default();
+        state.phases.insert("wq".into(), "waiting".into());
+        let inv = empty_inventory();
+        let world = default_world();
+        let (glyph, color) = quest_npc_glyph("wq", &def, &state, &inv, &world, Color::WHITE, qi());
+        assert_eq!(glyph, "?", "Auto self-loop 만 있으면 진행 중 '?'");
         assert_eq!(color, Color::rgb(0.3, 1.0, 0.6));
     }
 }
