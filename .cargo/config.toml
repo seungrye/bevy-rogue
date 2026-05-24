@@ -3,9 +3,12 @@
 [build]
 jobs = 7
 
-# (적용 예정 — 함정 빌드 종료 후 검증) 빠른 링커 lld:
-# [target.x86_64-unknown-linux-gnu]
-# rustflags = ["-C", "link-arg=-fuse-ld=/usr/bin/ld.lld-19"]
-#
+# 빠른 링커: mold (clang-19 드라이버 경유). 거대한 Bevy 바이너리 링크 시간을 크게 단축.
+#   - 거의 모든 빌드의 병목인 링크 단계를 mold 로 대체.
+#   - rustflags 변경은 전 크레이트 fingerprint 를 바꾸므로 최초 1회 풀 재컴파일 발생(이후 빌드부터 가속).
+[target.x86_64-unknown-linux-gnu]
+linker = "clang-19"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
 # (nightly 한정) 단일 크레이트 프런트엔드 병렬: RUSTFLAGS="-Z threads=7" cargo +nightly ...
 #   stable rustflags 에 넣으면 빌드가 깨지므로 전역 설정 금지(nightly 명령에서만).
