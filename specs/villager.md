@@ -54,7 +54,7 @@
 |--------|------|------|
 | `?` | 노란색 `rgb(1.0, 0.9, 0.1)` | 퀘스트 있음 — initial_phase 이거나 아직 수락 전 |
 | `?` | 초록색 `rgb(0.3, 1.0, 0.6)` | 퀘스트 수락, 다음 페이즈로 넘어갈 수 없음 — 아이템 수집·이동 중 |
-| `!` | 초록색 `rgb(0.3, 1.0, 0.6)` | 다음 페이즈로 넘어갈 수 있음 — `on_interact` 에 `AdvancePhase` 가 포함(Branch 내부 포함)되거나 `auto_advance` 조건 충족. Log·Branch(Log) 등 순수 힌트 액션만 있는 경우는 `?` 로 표시 |
+| `!` | 초록색 `rgb(0.3, 1.0, 0.6)` | 다음 페이즈로 넘어갈 수 있음 — 현재 phase 에서 시작하는 `Interact` transition 중 `to != from` 인 것이 있거나(`interact_can_advance`), `Auto` transition 의 `when` 조건 충족. Log 전용 self-loop(`to == from`) transition 만 있는 경우는 `?` 로 표시 |
 | `v` | 기본 색상 | 터미널 (퀘스트 완료 또는 퀘스트 없는 NPC) |
 
 - [x] 퀘스트가 없는 주민은 항상 `v`로 표시한다
