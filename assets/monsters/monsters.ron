@@ -1,0 +1,62 @@
+// 몬스터 정의 — 게임 코드와 분리된 데이터 (specs/monster-registry.md)
+// 형식: Vec<MonsterDef>
+//   id: 영문 안정 식별자 (snake_case)
+//   display_name: UI/log 표시용 한글 이름
+//   glyph: 단일 글리프
+//   color: (r, g, b) 0.0~1.0
+//   hp / attack / defense / vision_radius / speed: 전투·시야·행동 수치
+//   element: "fire" / "ice" / "poison" / "lightning" 또는 None
+//   spawn_weight: 자연 스폰 가중치 (기본 1.0)
+//   zones: 나오는 존 목록. 비어있으면 모든 일반 존 (제한 없음)
+//   spawn_condition: Option<QuestCondition> — 참일 때만 자연 스폰 (없으면 항상)
+//   quest_only: true 면 자연 스폰 안 됨 (QuestAction::SpawnMonster 로만 등장)
+[
+    MonsterDef(
+        id: "goblin",
+        display_name: "고블린",
+        glyph: "g",
+        color: (0.2, 0.8, 0.2),
+        hp: 6,
+        attack: 3,
+        defense: 0,
+        vision_radius: 6,
+        speed: 1.5,
+        element: Some("poison"),
+        spawn_weight: 1.0,
+        zones: [],
+        spawn_condition: None,
+        quest_only: false,
+    ),
+    MonsterDef(
+        id: "orc",
+        display_name: "오크",
+        glyph: "O",
+        color: (0.9, 0.5, 0.1),
+        hp: 10,
+        attack: 5,
+        defense: 2,
+        vision_radius: 8,
+        speed: 1.0,
+        element: Some("fire"),
+        spawn_weight: 1.0,
+        zones: [],
+        spawn_condition: None,
+        quest_only: false,
+    ),
+    MonsterDef(
+        id: "troll",
+        display_name: "트롤",
+        glyph: "T",
+        color: (0.3, 0.7, 0.5),
+        hp: 16,
+        attack: 8,
+        defense: 3,
+        vision_radius: 5,
+        speed: 0.5,
+        element: Some("ice"),
+        spawn_weight: 1.0,
+        zones: [],
+        spawn_condition: None,
+        quest_only: false,
+    ),
+]

@@ -7,7 +7,7 @@ use crate::modules::{
     map::{MapResource, TILE_SIZE, tile_to_world_coords, UsedSpawnTiles, random_floor_tile_anywhere, ExplosionEvent},
     ui::minimap::{DiscoveredMarkers, MarkerKind},
     zone::{ZoneId, SpawnQuestPortalEvent, CloseQuestPortalEvent},
-    monster::{PlayerDetectedEvent, SpawnGuardEvent},
+    monster::{PlayerDetectedEvent, SpawnGuardEvent, SpawnMonsterEvent},
 };
 
 // ── RON 데이터 구조 (assets/quests/*.ron) ────────────────────────────────────
@@ -115,6 +115,9 @@ pub enum QuestAction {
     /// 현재 맵에 가드를 `count` 마리 스폰한다 (잠입 구역 경비).
     /// monster 모듈의 `SpawnGuardEvent` 를 발행해 실제 스폰을 위임한다.
     SpawnGuards { count: u32 },
+    /// 현재 맵에 특정 MonsterDef(`id`) 를 `count` 마리 스폰한다 (보스/퀘스트 전용).
+    /// monster 모듈의 `SpawnMonsterEvent` 를 발행해 실제 스폰을 위임한다.
+    SpawnMonster { id: String, count: u32 },
     /// 트리거 위치(플레이어/NPC 좌표) 기준으로 폭발을 일으킨다.
     /// map 모듈의 `ExplosionEvent` 를 발행해 지형 파괴·엔티티 피해를 위임한다.
     Explode { radius: i32, terrain: bool, entity_damage: i32 },
@@ -270,6 +273,7 @@ impl Plugin for QuestPlugin {
             // QuestPlugin 단독(테스트 등)에서도 동작하도록 여기서도 보장한다.
             .add_event::<PlayerDetectedEvent>()
             .add_event::<SpawnGuardEvent>()
+            .add_event::<SpawnMonsterEvent>()
             .add_systems(Startup, (
                 load_quests.in_set(QuestSystemSet::Load).after(ItemSystemSet::Load),
                 validate_quest_item_refs
@@ -618,6 +622,7 @@ pub fn execute_actions(
     close_portal: &mut EventWriter<CloseQuestPortalEvent>,
     despawn_item: &mut EventWriter<DespawnWorldItemEvent>,
     spawn_guards: &mut EventWriter<SpawnGuardEvent>,
+    spawn_monster: &mut EventWriter<SpawnMonsterEvent>,
     explode: &mut EventWriter<ExplosionEvent>,
     quest_items: &crate::modules::item::QuestItemRegistry,
 ) {
@@ -693,6 +698,10 @@ pub fn execute_actions(
             QuestAction::SpawnGuards { count } => {
                 spawn_guards.send(SpawnGuardEvent { count: *count });
                 info!("가드 스폰 요청: {}마리", count);
+            }
+            QuestAction::SpawnMonster { id, count } => {
+                spawn_monster.send(SpawnMonsterEvent { id: id.clone(), count: *count });
+                info!("몬스터 스폰 요청: {} {}마리", id, count);
             }
             QuestAction::Explode { radius, terrain, entity_damage } => {
                 explode.send(ExplosionEvent {
@@ -1841,13 +1850,14 @@ mod tests {
         mut close_portal: EventWriter<CloseQuestPortalEvent>,
         mut despawn_item: EventWriter<DespawnWorldItemEvent>,
         mut spawn_guards: EventWriter<SpawnGuardEvent>,
+        mut spawn_monster: EventWriter<SpawnMonsterEvent>,
         mut explode: EventWriter<ExplosionEvent>,
         quest_items: Res<crate::modules::item::QuestItemRegistry>,
     ) {
         execute_actions(
             &input.actions, &input.quest_id, input.trigger_pos, &mut state, &mut inventory,
             &mut log, &mut kill_npc, &mut open_portal, &mut close_portal,
-            &mut despawn_item, &mut spawn_guards, &mut explode, &quest_items,
+            &mut despawn_item, &mut spawn_guards, &mut spawn_monster, &mut explode, &quest_items,
         );
     }
 
@@ -1864,6 +1874,7 @@ mod tests {
             .add_event::<CloseQuestPortalEvent>()
             .add_event::<DespawnWorldItemEvent>()
             .add_event::<SpawnGuardEvent>()
+            .add_event::<SpawnMonsterEvent>()
             .add_event::<ExplosionEvent>()
             .add_systems(Update, run_execute_actions_system);
         app
@@ -2009,6 +2020,19 @@ mod tests {
         let mut cursor = events.get_reader();
         let counts: Vec<u32> = cursor.read(events).map(|e| e.count).collect();
         assert_eq!(counts, vec![3], "한 번의 SpawnGuardEvent 에 count=3");
+    }
+
+    #[test]
+    fn SpawnMonster액션은_지정id와_마릿수로_몬스터스폰_이벤트를_발행한다() {
+        let mut app = execute_actions_app(vec![QuestAction::SpawnMonster {
+            id: "dragon".into(), count: 2,
+        }]);
+        app.update();
+        let events = app.world.resource::<Events<SpawnMonsterEvent>>();
+        let mut cursor = events.get_reader();
+        let payloads: Vec<(String, u32)> = cursor.read(events)
+            .map(|e| (e.id.clone(), e.count)).collect();
+        assert_eq!(payloads, vec![("dragon".to_string(), 2)], "id·count 그대로 전달");
     }
 
     #[test]

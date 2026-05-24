@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use std::collections::HashSet;
 use rand::{Rng, rngs::ThreadRng};
+use serde::Deserialize;
 use crate::modules::{
     map::{
         draw_map, Map, MapResource, MapType, MonsterTiles,
@@ -13,10 +14,11 @@ use crate::modules::{
     combat::{CombatStats, Defeated, Speed, calc_damage},
     ui::LogMessage,
     combat_feedback::CombatFeedbackEvent,
-    item::{ItemDropEvent, PlayerEquipment, ItemRegistry, effective_attack, effective_defense},
-    zone::{WorldState, ZonePersistence, MonsterSlot},
+    item::{ItemDropEvent, PlayerEquipment, ItemRegistry, PlayerInventory, effective_attack, effective_defense},
+    zone::{WorldState, ZoneId, ZonePersistence, MonsterSlot},
     map::GlobalTurn,
-    elemental::{ElementalApplyEvent, ElementalStatus, Stunned, monster_element, weapon_element},
+    elemental::{Element, ElementalApplyEvent, ElementalStatus, Stunned, weapon_element},
+    quest::{QuestCondition, QuestState, eval_condition},
 };
 
 const Z_MONSTER: f32 = 0.8;
@@ -27,6 +29,119 @@ const MAX_ALERT_TURNS: u32 = 5;
 const GUARD_POWER_MULT: f32 = 1.2;
 /// 가드의 시야 반경 — 일반 몬스터보다 넉넉하게 잡아 잠입 난이도를 만든다.
 const GUARD_VISION_RADIUS: i32 = 8;
+
+/// RON(`assets/monsters/monsters.ron`) 에서 불러오는 몬스터 정의.
+/// 한 몬스터의 정체성(스탯/원소/글리프/스폰 규칙)을 한 곳에 모은 데이터 정본.
+/// 이름 문자열 매칭 대신 이 정의가 const 테이블·`monster_element` 를 대체한다.
+#[derive(Debug, Deserialize, Clone)]
+pub struct MonsterDef {
+    /// 영문 안정 식별자 (snake_case). QuestAction::SpawnMonster 가 참조하는 키.
+    pub id: String,
+    /// UI/log 표시용 한글 이름. CombatStats·XP·드롭 등에서 사용.
+    pub display_name: String,
+    pub glyph: String,
+    pub color: (f32, f32, f32),
+    pub hp: i32,
+    pub attack: i32,
+    pub defense: i32,
+    pub vision_radius: i32,
+    pub speed: f32,
+    /// "fire"/"ice"/"poison"/"lightning" 또는 None.
+    #[serde(default)]
+    pub element: Option<String>,
+    /// 자연 스폰 가중치 (기본 1.0).
+    #[serde(default = "default_spawn_weight")]
+    pub spawn_weight: f32,
+    /// 나오는 존 목록. 비어있으면 모든 일반 존 (제한 없음).
+    #[serde(default)]
+    pub zones: Vec<ZoneId>,
+    /// 참일 때만 자연 스폰 (없으면 항상).
+    #[serde(default)]
+    pub spawn_condition: Option<QuestCondition>,
+    /// true 면 자연 스폰 안 됨 — QuestAction::SpawnMonster 로만 등장 (보스/퀘스트 전용).
+    #[serde(default)]
+    pub quest_only: bool,
+}
+
+fn default_spawn_weight() -> f32 { 1.0 }
+
+impl MonsterDef {
+    /// `element` 문자열을 `Element` 로 매핑한다 (elemental 의 weapon_element 와 동형).
+    /// "poison" 은 무기엔 없지만 몬스터에는 존재하므로 여기서 함께 처리한다.
+    pub fn element_enum(&self) -> Option<Element> {
+        match self.element.as_deref()? {
+            "fire"      => Some(Element::Fire),
+            "ice"       => Some(Element::Ice),
+            "poison"    => Some(Element::Poison),
+            "lightning" => Some(Element::Lightning),
+            _           => None,
+        }
+    }
+
+    pub fn color(&self) -> Color {
+        Color::rgb(self.color.0, self.color.1, self.color.2)
+    }
+}
+
+/// 모든 몬스터 정의를 보유하는 Bevy Resource (VillagerRegistry 와 동일 패턴).
+/// 자연 스폰·SpawnMonster·원소 조회·색 fallback 이 모두 이 레지스트리를 읽는다.
+#[derive(Resource, Default)]
+pub struct MonsterRegistry {
+    pub monsters: Vec<MonsterDef>,
+}
+
+impl MonsterRegistry {
+    /// id 로 정의를 조회한다.
+    pub fn by_id(&self, id: &str) -> Option<&MonsterDef> {
+        self.monsters.iter().find(|m| m.id == id)
+    }
+
+    /// 표시 이름(한글)으로 정의를 조회한다. 색 fallback·원소 조회 등 런타임에
+    /// Monster 컴포넌트가 display_name 만 보유한 경우 사용.
+    pub fn by_display_name(&self, name: &str) -> Option<&MonsterDef> {
+        self.monsters.iter().find(|m| m.display_name == name)
+    }
+}
+
+/// monster 시스템의 Startup 단계 실행 순서.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum MonsterSystemSet {
+    Load,
+}
+
+/// monster RON 파일을 읽어 registry 에 적재한다.
+fn load_monsters(mut registry: ResMut<MonsterRegistry>) {
+    let path = "assets/monsters/monsters.ron";
+    let monsters = match read_monster_defs(path) {
+        Ok(m) => m,
+        // 도달 불가 방어코드: 파일 누락·파싱 실패 시 process::exit 로 테스트 러너를
+        // 죽이므로 단위 테스트에서 양방향 실행 불가. read_monster_defs 의 Err 분기는
+        // 별도 테스트로 커버.
+        Err(e) => {
+            error!("[치명적] {}", e);
+            std::process::exit(1);
+        }
+    };
+    info!("monster 로드: {} 종", monsters.len());
+    registry.monsters = monsters;
+}
+
+/// 주어진 경로의 monster RON 을 읽어 파싱한다 (테스트 가능한 seam).
+/// 읽기 실패·파싱 실패를 에러 메시지로 반환한다 (process::exit 없음).
+fn read_monster_defs(path: &str) -> Result<Vec<MonsterDef>, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("monster 파일 {} 을 읽을 수 없습니다: {}", path, e))?;
+    ron::de::from_str::<Vec<MonsterDef>>(&text)
+        .map_err(|e| format!("monster RON 파싱 실패: {}", e))
+}
+
+/// 테스트용 — 실제 RON 을 읽어 registry 를 구성한다 (build_test_registry 와 동형).
+#[cfg(test)]
+pub fn build_test_registry() -> MonsterRegistry {
+    let monsters = read_monster_defs("assets/monsters/monsters.ron")
+        .expect("monsters.ron 로드");
+    MonsterRegistry { monsters }
+}
 
 /// 가드 한 마리가 방향 시야로 플레이어를 탐지했음을 알리는 이벤트.
 /// 기존 alert/추적/전투 흐름은 그대로 두고(B안), 퀘스트 플래그(`stealth_blown`)
@@ -40,13 +155,6 @@ pub struct PlayerDetectedEvent;
 pub struct SpawnGuardEvent {
     pub count: u32,
 }
-
-static MONSTER_DATA: &[(&str, &str, [f32; 3], i32, i32, i32, i32, f32)] = &[
-    // (이름, 글리프, 색상, HP, 공격력, 방어력, 시야 반경, 속도)
-    ("고블린", "g", [0.2, 0.8, 0.2],  6, 3, 0, 6, 1.5),
-    ("오크",   "O", [0.9, 0.5, 0.1], 10, 5, 2, 8, 1.0),
-    ("트롤",   "T", [0.3, 0.7, 0.5], 16, 8, 3, 5, 0.5),
-];
 
 #[derive(Component)]
 pub struct Monster {
@@ -87,9 +195,14 @@ pub struct MonsterPlugin;
 
 impl Plugin for MonsterPlugin {
     fn build(&self, app: &mut App) {
-        app.add_event::<PlayerDetectedEvent>()
+        app.init_resource::<MonsterRegistry>()
+            .add_event::<PlayerDetectedEvent>()
             .add_event::<SpawnGuardEvent>()
-            .add_systems(Startup, spawn_on_startup.after(draw_map))
+            .add_event::<SpawnMonsterEvent>()
+            .add_systems(Startup, (
+                load_monsters.in_set(MonsterSystemSet::Load),
+                spawn_on_startup.after(draw_map).after(MonsterSystemSet::Load),
+            ))
             .add_systems(PreUpdate, sync_monster_tiles)
             .add_systems(Update, (
                 respawn_on_regen.after(MapSystemSet::ExecuteRegen),
@@ -97,9 +210,69 @@ impl Plugin for MonsterPlugin {
                     .chain()
                     .after(PlayerSystemSet::MovementComplete),
                 handle_spawn_guards,
+                handle_spawn_monster,
                 smooth_monster_move,
             ));
     }
+}
+
+/// 퀘스트(또는 다른 시스템)가 특정 MonsterDef 를 현재 위치 근처에 `count` 마리
+/// 스폰하라고 요청하는 이벤트. `QuestAction::SpawnMonster` 가 발행하고
+/// `handle_spawn_monster` 가 처리한다. quest_only 보스/퀘스트 전용 몬스터용.
+#[derive(Event)]
+pub struct SpawnMonsterEvent {
+    pub id: String,
+    pub count: u32,
+}
+
+/// 자연 스폰 후보가 되는 MonsterDef 의 인덱스 목록을 반환한다 (순수 함수).
+///
+/// 후보 조건: `quest_only == false` AND (`zones` 가 비었거나 현재 존을 포함)
+/// AND (`spawn_condition` 이 없거나 `eval_condition` 이 참).
+/// rand 의존이 없어 zone/조건 분기를 단독으로 테스트한다.
+pub fn natural_spawn_candidates(
+    registry: &MonsterRegistry,
+    zone: &ZoneId,
+    inventory: &PlayerInventory,
+    world: &WorldState,
+    quest_state: &QuestState,
+    quest_items: &ItemRegistry,
+) -> Vec<usize> {
+    registry.monsters.iter().enumerate()
+        .filter(|(_, def)| !def.quest_only)
+        .filter(|(_, def)| def.zones.is_empty() || def.zones.contains(zone))
+        .filter(|(_, def)| match &def.spawn_condition {
+            None => true,
+            Some(cond) => eval_condition(cond, inventory, world, quest_state, quest_items),
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// 후보 인덱스 중 spawn_weight 가중치로 하나를 고른다 (순수 함수, seam 으로 rng 주입).
+///
+/// 후보가 비어 있으면 None. 가중치 합이 0 이하면 첫 후보로 폴백한다. roll 은
+/// `[0, total_weight)` 범위의 난수 — 결정적 값을 넣어 양쪽 경계를 테스트한다.
+pub fn choose_monster_index(
+    registry: &MonsterRegistry,
+    candidates: &[usize],
+    roll: f32,
+) -> Option<usize> {
+    if candidates.is_empty() { return None; }
+    let total: f32 = candidates.iter()
+        .map(|&i| registry.monsters[i].spawn_weight.max(0.0))
+        .sum();
+    if total <= 0.0 {
+        // 가중치 합 0 — 균등 분포가 불가능하므로 첫 후보로 폴백.
+        return Some(candidates[0]);
+    }
+    let mut acc = 0.0;
+    for &i in candidates {
+        acc += registry.monsters[i].spawn_weight.max(0.0);
+        if roll < acc { return Some(i); }
+    }
+    // 부동소수 오차로 roll 이 total 에 매우 근접한 경우의 폴백 — 마지막 후보.
+    Some(*candidates.last().unwrap())
 }
 
 fn sync_monster_tiles(
@@ -112,22 +285,31 @@ fn sync_monster_tiles(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_on_startup(
     mut commands: Commands,
     map_res: Res<MapResource>,
     asset_server: Res<AssetServer>,
     mut persistence: ResMut<ZonePersistence>,
     world: Res<WorldState>,
+    registry: Res<MonsterRegistry>,
+    inventory: Res<PlayerInventory>,
+    quest_state: Res<QuestState>,
+    items: Res<ItemRegistry>,
 ) {
     let map = map_res.map();
     if map.map_type == MapType::Dungeon {
         let zone_id = world.current.clone();
-        let slots = init_zone_monster_slots(&map.rooms);
+        let mut rng = rand::thread_rng();
+        let slots = init_zone_monster_slots(
+            &map.rooms, &registry, &zone_id, &inventory, &world, &quest_state, &items, &mut rng,
+        );
         persistence.0.entry(zone_id).or_default().monster_slots = slots.clone();
-        spawn_from_slots(&mut commands, &map.rooms, &slots, 0, &asset_server);
+        spawn_from_slots(&mut commands, &map.rooms, &slots, 0, &asset_server, &registry);
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn respawn_on_regen(
     mut commands: Commands,
     mut events: EventReader<MonsterRespawnEvent>,
@@ -136,6 +318,10 @@ fn respawn_on_regen(
     world: Res<WorldState>,
     global_turn: Res<GlobalTurn>,
     mut persistence: ResMut<ZonePersistence>,
+    registry: Res<MonsterRegistry>,
+    inventory: Res<PlayerInventory>,
+    quest_state: Res<QuestState>,
+    items: Res<ItemRegistry>,
 ) {
     for event in events.read() {
         for entity in monster_query.iter() {
@@ -152,8 +338,11 @@ fn respawn_on_regen(
             .map(|s| s.monster_slots.is_empty())
             .unwrap_or(true);
         if needs_init {
-            persistence.0.entry(zone_id.clone()).or_default().monster_slots =
-                init_zone_monster_slots(&event.rooms);
+            let mut rng = rand::thread_rng();
+            let slots = init_zone_monster_slots(
+                &event.rooms, &registry, &zone_id, &inventory, &world, &quest_state, &items, &mut rng,
+            );
+            persistence.0.entry(zone_id.clone()).or_default().monster_slots = slots;
         }
 
         // 만료된 리스폰 타이머 처리(지나간 턴 따라잡기)
@@ -168,13 +357,33 @@ fn respawn_on_regen(
         }
 
         let slots = persistence.0[&zone_id].monster_slots.clone();
-        spawn_from_slots(&mut commands, &event.rooms, &slots, global_turn.0, &asset_server);
+        spawn_from_slots(&mut commands, &event.rooms, &slots, global_turn.0, &asset_server, &registry);
     }
 }
 
-fn init_zone_monster_slots(rooms: &[Rect]) -> Vec<MonsterSlot> {
-    rooms.iter().skip(1).take(10).enumerate()
-        .map(|(i, _)| MonsterSlot { data_idx: i % MONSTER_DATA.len(), respawn_at_turn: None })
+/// 방마다 자연 스폰 후보 중 하나를 가중치로 골라 슬롯(`data_idx` = 레지스트리
+/// 인덱스)을 만든다. 후보가 없으면 그 방은 슬롯을 만들지 않는다(빈 던전).
+/// 첫 방(시작 방)은 skip, 최대 10개.
+#[allow(clippy::too_many_arguments)]
+fn init_zone_monster_slots(
+    rooms: &[Rect],
+    registry: &MonsterRegistry,
+    zone: &ZoneId,
+    inventory: &PlayerInventory,
+    world: &WorldState,
+    quest_state: &QuestState,
+    quest_items: &ItemRegistry,
+    rng: &mut impl Rng,
+) -> Vec<MonsterSlot> {
+    let candidates = natural_spawn_candidates(registry, zone, inventory, world, quest_state, quest_items);
+    if candidates.is_empty() { return Vec::new(); }
+    let total: f32 = candidates.iter().map(|&i| registry.monsters[i].spawn_weight.max(0.0)).sum();
+    rooms.iter().skip(1).take(10)
+        .filter_map(|_| {
+            let roll = if total > 0.0 { rng.gen_range(0.0..total) } else { 0.0 };
+            choose_monster_index(registry, &candidates, roll)
+                .map(|idx| MonsterSlot { data_idx: idx, respawn_at_turn: None })
+        })
         .collect()
 }
 
@@ -184,6 +393,7 @@ fn spawn_from_slots(
     slots: &[MonsterSlot],
     global_turn: u64,
     asset_server: &AssetServer,
+    registry: &MonsterRegistry,
 ) {
     let font = asset_server.load("fonts/FiraMono-Medium.ttf");
     let mut rng = rand::thread_rng();
@@ -198,8 +408,8 @@ fn spawn_from_slots(
         if let Some(t) = slot.respawn_at_turn {
             if t > global_turn { continue; }
         }
-        let data = MONSTER_DATA[slot.data_idx];
-        let (name, glyph, color, hp, atk, def, vis, spd) = (data.0, data.1, data.2, data.3, data.4, data.5, data.6, data.7);
+        // 슬롯의 data_idx 가 (레지스트리 변경 등으로) 범위를 벗어나면 그 슬롯은 건너뛴다.
+        let Some(def) = registry.monsters.get(slot.data_idx) else { continue };
 
         // room 경계 안에서 무작위 좌표 — wall 위 / 영역 밖 회피.
         // Map 객체가 없는 컨텍스트라 Floor 검사는 못 하고, room 좌표가 항상 Floor 라고
@@ -215,24 +425,71 @@ fn spawn_from_slots(
         used.insert(tile);
         let (tx, ty) = tile;
 
-        let coord = tile_to_world_coords(tx, ty);
-        commands.spawn((
-            Text2dBundle {
-                text: Text::from_section(glyph, TextStyle {
-                    font: font.clone(),
-                    font_size: TILE_SIZE,
-                    color: Color::rgb(color[0], color[1], color[2]),
-                }),
-                transform: Transform::from_xyz(coord.x, coord.y, Z_MONSTER),
-                ..default()
-            },
-            Monster { name: name.to_string(), tile_x: tx, tile_y: ty, vision_radius: vis, alert_turns: 0, slot_idx },
-            CombatStats { hp, max_hp: hp, mp: 0, max_mp: 0, attack: atk, defense: def },
-            Speed::new(spd),
-            MoveQueue::default(),
-            ElementalStatus::default(),
-            Facing::default(),
-        ));
+        spawn_monster_entity(commands, &font, def, tx, ty, slot_idx);
+    }
+}
+
+/// MonsterDef 한 건을 (tx, ty) 에 엔티티로 스폰한다. 자연 스폰·SpawnMonster 가
+/// 공유하는 단일 생성 경로 — 글리프/색/스탯/시야/원소가 모두 정의에서 나온다.
+fn spawn_monster_entity(
+    commands: &mut Commands,
+    font: &Handle<Font>,
+    def: &MonsterDef,
+    tx: usize, ty: usize,
+    slot_idx: usize,
+) {
+    let coord = tile_to_world_coords(tx, ty);
+    commands.spawn((
+        Text2dBundle {
+            text: Text::from_section(def.glyph.clone(), TextStyle {
+                font: font.clone(),
+                font_size: TILE_SIZE,
+                color: def.color(),
+            }),
+            transform: Transform::from_xyz(coord.x, coord.y, Z_MONSTER),
+            ..default()
+        },
+        Monster {
+            name: def.display_name.clone(),
+            tile_x: tx, tile_y: ty,
+            vision_radius: def.vision_radius,
+            alert_turns: 0,
+            slot_idx,
+        },
+        CombatStats { hp: def.hp, max_hp: def.hp.max(1), mp: 0, max_mp: 0, attack: def.attack, defense: def.defense },
+        Speed::new(def.speed),
+        MoveQueue::default(),
+        ElementalStatus::default(),
+        Facing::default(),
+    ));
+}
+
+/// `SpawnMonsterEvent` 를 받아 현재 맵의 통과타일 무작위 위치에 해당 MonsterDef 를
+/// `count` 마리 스폰한다. 보스/퀘스트 전용(quest_only) 몬스터도 여기서는 등장한다.
+/// slot_idx 는 자연 스폰 슬롯과 무관하므로 usize::MAX 로 둔다(리스폰 슬롯 미연결).
+fn handle_spawn_monster(
+    mut commands: Commands,
+    mut events: EventReader<SpawnMonsterEvent>,
+    map_res: Res<MapResource>,
+    asset_server: Res<AssetServer>,
+    mut used_spawn: ResMut<UsedSpawnTiles>,
+    registry: Res<MonsterRegistry>,
+) {
+    let map = map_res.map();
+    let font = asset_server.load("fonts/FiraMono-Medium.ttf");
+    let mut rng = rand::thread_rng();
+    for ev in events.read() {
+        let Some(def) = registry.by_id(&ev.id) else {
+            warn!("SpawnMonster: 알 수 없는 monster id '{}'", ev.id);
+            continue;
+        };
+        for _ in 0..ev.count {
+            let Some((tx, ty)) = random_floor_tile_anywhere(&map.rooms, map, &mut used_spawn.0, &mut rng) else {
+                info!("몬스터 스폰 실패 — 통과타일 없음: {}", ev.id);
+                continue;
+            };
+            spawn_monster_entity(&mut commands, &font, def, tx, ty, usize::MAX);
+        }
     }
 }
 
@@ -310,6 +567,7 @@ fn handle_spawn_guards(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_player_attack(
     mut events: EventReader<AttackMonsterEvent>,
     mut player_query: Query<&mut CombatStats, (With<Player>, Without<Monster>)>,
@@ -321,6 +579,7 @@ fn handle_player_attack(
     mut elemental_writer: EventWriter<ElementalApplyEvent>,
     equipment: Res<PlayerEquipment>,
     items: Res<crate::modules::item::ItemRegistry>,
+    registry: Res<MonsterRegistry>,
 ) {
     for AttackMonsterEvent(tx, ty) in events.read() {
         let Ok(mut player_stats) = player_query.get_single_mut() else { continue };
@@ -329,9 +588,8 @@ fn handle_player_attack(
             if monster_stats.hp <= 0 { continue; }
             let dmg = calc_damage(player_stats.attack, monster_stats.defense);
             monster_stats.hp -= dmg;
-            let original_color = MONSTER_DATA.iter()
-                .find(|(n, ..)| *n == monster.name.as_str())
-                .map(|(_, _, c, ..)| Color::rgb(c[0], c[1], c[2]))
+            let original_color = registry.by_display_name(&monster.name)
+                .map(|def| def.color())
                 .unwrap_or(Color::WHITE);
             feedback_writer.send(CombatFeedbackEvent {
                 tile_x: *tx,
@@ -395,6 +653,7 @@ fn monster_turn(
     mut feedback_writer: EventWriter<CombatFeedbackEvent>,
     mut elemental_writer: EventWriter<ElementalApplyEvent>,
     mut detected_writer: EventWriter<PlayerDetectedEvent>,
+    registry: Res<MonsterRegistry>,
 ) {
     if events.read().next().is_none() { return; }
 
@@ -456,7 +715,7 @@ fn monster_turn(
                     // 원소 부여 (35% 확률, 몬스터 속성에 따라)
                     // (이 `!player_dead` 는 바로 위 L329 가드 안이라 항상 참 — 도달 불가 방어코드의 false 분기)
                     if !player_dead {
-                        if let Some(element) = monster_element(&monster.name) {
+                        if let Some(element) = registry.by_display_name(&monster.name).and_then(|d| d.element_enum()) {
                             if rng.gen_bool(0.35) {
                                 elemental_writer.send(ElementalApplyEvent {
                                     target: player_entity,
@@ -889,11 +1148,21 @@ mod tests {
 
     // --- spawn_on_startup ---
 
+    /// 스폰 관련 시스템이 요구하는 컨텍스트 리소스(레지스트리/인벤토리/퀘스트/아이템)를
+    /// 주입한다. MonsterRegistry 는 실제 RON 을 로드해 기존 3종을 그대로 사용.
+    fn insert_spawn_context(app: &mut App) {
+        app.insert_resource(build_test_registry());
+        app.init_resource::<PlayerInventory>();
+        app.init_resource::<QuestState>();
+        app.insert_resource(crate::modules::item::build_test_registry());
+    }
+
     fn startup_app(map: Map) -> App {
         let mut app = asset_app();
         app.insert_resource(MapResource(map));
         app.init_resource::<ZonePersistence>();
         app.init_resource::<WorldState>();
+        insert_spawn_context(&mut app);
         app.add_systems(Startup, spawn_on_startup);
         app
     }
@@ -925,14 +1194,42 @@ mod tests {
 
     // --- init_zone_monster_slots ---
 
+    fn slot_ctx() -> (MonsterRegistry, PlayerInventory, WorldState, QuestState, ItemRegistry) {
+        (
+            build_test_registry(),
+            PlayerInventory::default(),
+            WorldState::default(),
+            QuestState::default(),
+            crate::modules::item::build_test_registry(),
+        )
+    }
+
     #[test]
     fn 슬롯초기화는_첫번째_방을_제외하고_최대_열개까지_만든다() {
         let mut rooms = vec![Rect::new(0, 0, 1, 1)];
         for i in 0..15 { rooms.push(Rect::new(i, 0, 1, 1)); }
-        let slots = init_zone_monster_slots(&rooms);
+        let (reg, inv, world, qs, items) = slot_ctx();
+        let mut rng = rand::thread_rng();
+        let slots = init_zone_monster_slots(&rooms, &reg, &ZoneId::Town, &inv, &world, &qs, &items, &mut rng);
         assert_eq!(slots.len(), 10, "skip(1).take(10) 으로 10개 제한");
-        assert_eq!(slots[0].data_idx, 0);
-        assert_eq!(slots[3].data_idx, 3 % MONSTER_DATA.len());
+        // 모든 슬롯의 data_idx 는 자연 스폰 가능한 레지스트리 인덱스를 가리킨다.
+        for slot in &slots {
+            assert!(reg.monsters.get(slot.data_idx).is_some(), "유효한 레지스트리 인덱스");
+            assert!(!reg.monsters[slot.data_idx].quest_only, "자연 스폰 가능한 정의만 선택");
+        }
+    }
+
+    #[test]
+    fn 자연_스폰_후보가_없으면_슬롯을_만들지_않는다() {
+        // 모든 정의가 quest_only → 후보 없음 → 빈 슬롯(빈 던전).
+        let mut reg = build_test_registry();
+        for m in &mut reg.monsters { m.quest_only = true; }
+        let mut rooms = vec![Rect::new(0, 0, 1, 1)];
+        for i in 0..3 { rooms.push(Rect::new(i, 0, 1, 1)); }
+        let (_, inv, world, qs, items) = slot_ctx();
+        let mut rng = rand::thread_rng();
+        let slots = init_zone_monster_slots(&rooms, &reg, &ZoneId::Town, &inv, &world, &qs, &items, &mut rng);
+        assert!(slots.is_empty(), "자연 스폰 후보가 없으면 슬롯도 없다");
     }
 
     // --- spawn_from_slots (직접 호출, Commands 통한 스폰) ---
@@ -941,8 +1238,9 @@ mod tests {
         let mut app = asset_app();
         let rooms = rooms.to_vec();
         let slots = slots.to_vec();
-        app.add_systems(Update, move |mut commands: Commands, asset_server: Res<AssetServer>| {
-            spawn_from_slots(&mut commands, &rooms, &slots, turn, &asset_server);
+        app.insert_resource(build_test_registry());
+        app.add_systems(Update, move |mut commands: Commands, asset_server: Res<AssetServer>, reg: Res<MonsterRegistry>| {
+            spawn_from_slots(&mut commands, &rooms, &slots, turn, &asset_server, &reg);
         });
         app.update();
         app
@@ -1013,6 +1311,7 @@ mod tests {
         app.init_resource::<WorldState>();
         app.init_resource::<GlobalTurn>();
         app.init_resource::<ZonePersistence>();
+        insert_spawn_context(&mut app);
         app.add_systems(Update, respawn_on_regen);
         app
     }
@@ -1097,6 +1396,7 @@ mod tests {
         app.init_resource::<PlayerProgress>();
         app.insert_resource(PlayerEquipment::default());
         app.insert_resource(ItemRegistry::default());
+        app.insert_resource(build_test_registry());
         app.add_systems(Update, handle_player_attack);
         app
     }
@@ -1202,6 +1502,7 @@ mod tests {
         app.init_resource::<PlayerProgress>();
         app.insert_resource(PlayerEquipment { weapon: Some(WeaponKind::SWORD), armor: None, ..Default::default() });
         app.insert_resource(crate::modules::item::build_test_registry());
+        app.insert_resource(build_test_registry());
         app.add_systems(Update, handle_player_attack);
 
         let p = spawn_player(&mut app, (1, 1));
@@ -1239,6 +1540,7 @@ mod tests {
         });
         app.insert_resource(reg);
         app.insert_resource(PlayerEquipment { weapon: Some(WeaponKind("plain")), armor: None, ..Default::default() });
+        app.insert_resource(build_test_registry());
         app.add_systems(Update, handle_player_attack);
 
         let p = spawn_player(&mut app, (1, 1));
@@ -1260,6 +1562,7 @@ mod tests {
         app.add_event::<CombatFeedbackEvent>();
         app.add_event::<ElementalApplyEvent>();
         app.add_event::<PlayerDetectedEvent>();
+        app.insert_resource(build_test_registry());
         app.add_systems(Update, monster_turn);
         app
     }
@@ -1916,5 +2219,331 @@ mod tests {
         let guards = app.world.query::<&Monster>()
             .iter(&app.world).filter(|m| m.name == "가드").count();
         assert_eq!(guards, 3, "두 이벤트 카운트 합산 스폰");
+    }
+
+    // ── MonsterDef / MonsterRegistry: RON 로드·조회·매핑 ───────────────────────
+
+    /// 임의 MonsterDef 를 만든다 (스폰 규칙 테스트용 — 필드 기본값 채움).
+    fn def(id: &str, name: &str, element: Option<&str>, weight: f32) -> MonsterDef {
+        MonsterDef {
+            id: id.into(),
+            display_name: name.into(),
+            glyph: "x".into(),
+            color: (0.1, 0.2, 0.3),
+            hp: 5, attack: 2, defense: 1, vision_radius: 4, speed: 1.0,
+            element: element.map(|s| s.into()),
+            spawn_weight: weight,
+            zones: Vec::new(),
+            spawn_condition: None,
+            quest_only: false,
+        }
+    }
+
+    #[test]
+    fn 몬스터RON을_읽으면_세_종류가_적재된다() {
+        let reg = build_test_registry();
+        assert_eq!(reg.monsters.len(), 3, "goblin/orc/troll 세 종");
+        assert!(reg.by_id("goblin").is_some());
+        assert!(reg.by_id("orc").is_some());
+        assert!(reg.by_id("troll").is_some());
+    }
+
+    #[test]
+    fn 없는_경로의_몬스터RON은_읽기_실패_에러를_반환한다() {
+        // read_monster_defs 의 Err(읽기 실패) 분기 — process::exit 없는 seam.
+        let r = read_monster_defs("assets/monsters/does_not_exist.ron");
+        assert!(r.is_err(), "없는 파일은 Err");
+    }
+
+    #[test]
+    fn 깨진_몬스터RON은_파싱_실패_에러를_반환한다() {
+        // read_monster_defs 의 Err(파싱 실패) 분기 — 임시 파일에 잘못된 RON.
+        let dir = std::env::temp_dir().join(format!("mrtest_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("broken.ron");
+        std::fs::write(&path, "이건 RON 이 아니다").unwrap();
+        let r = read_monster_defs(path.to_str().unwrap());
+        assert!(r.is_err(), "깨진 RON 은 Err");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn id로_조회하면_해당_정의를_없으면_None을_반환한다() {
+        let reg = build_test_registry();
+        assert_eq!(reg.by_id("goblin").unwrap().display_name, "고블린");
+        assert!(reg.by_id("unknown_id").is_none(), "없는 id 는 None");
+    }
+
+    #[test]
+    fn 표시이름으로_조회하면_해당_정의를_없으면_None을_반환한다() {
+        let reg = build_test_registry();
+        assert_eq!(reg.by_display_name("트롤").unwrap().id, "troll");
+        assert!(reg.by_display_name("유령").is_none(), "없는 이름은 None");
+    }
+
+    #[test]
+    fn 기존_세_몬스터의_수치_글리프_색이_이전과_동등하다() {
+        // 동작 보존: const 테이블에서 이전한 값이 그대로인지 확인.
+        let reg = build_test_registry();
+        let g = reg.by_id("goblin").unwrap();
+        assert_eq!((g.display_name.as_str(), g.glyph.as_str()), ("고블린", "g"));
+        assert_eq!((g.hp, g.attack, g.defense, g.vision_radius), (6, 3, 0, 6));
+        assert_eq!(g.speed, 1.5);
+        assert_eq!(g.color, (0.2, 0.8, 0.2));
+
+        let o = reg.by_id("orc").unwrap();
+        assert_eq!((o.display_name.as_str(), o.glyph.as_str()), ("오크", "O"));
+        assert_eq!((o.hp, o.attack, o.defense, o.vision_radius), (10, 5, 2, 8));
+        assert_eq!(o.speed, 1.0);
+        assert_eq!(o.color, (0.9, 0.5, 0.1));
+
+        let t = reg.by_id("troll").unwrap();
+        assert_eq!((t.display_name.as_str(), t.glyph.as_str()), ("트롤", "T"));
+        assert_eq!((t.hp, t.attack, t.defense, t.vision_radius), (16, 8, 3, 5));
+        assert_eq!(t.speed, 0.5);
+        assert_eq!(t.color, (0.3, 0.7, 0.5));
+    }
+
+    #[test]
+    fn 기존_세_몬스터의_원소가_이전과_동등하다() {
+        // monster_element 제거 후에도 원소 매핑이 일관: 고블린=독/오크=불/트롤=얼음.
+        let reg = build_test_registry();
+        assert_eq!(reg.by_id("goblin").unwrap().element_enum(), Some(Element::Poison));
+        assert_eq!(reg.by_id("orc").unwrap().element_enum(), Some(Element::Fire));
+        assert_eq!(reg.by_id("troll").unwrap().element_enum(), Some(Element::Ice));
+    }
+
+    #[test]
+    fn 원소문자열은_네_원소로_매핑되고_없거나_미인식이면_None이다() {
+        assert_eq!(def("a", "A", Some("fire"), 1.0).element_enum(),      Some(Element::Fire));
+        assert_eq!(def("a", "A", Some("ice"), 1.0).element_enum(),       Some(Element::Ice));
+        assert_eq!(def("a", "A", Some("poison"), 1.0).element_enum(),    Some(Element::Poison));
+        assert_eq!(def("a", "A", Some("lightning"), 1.0).element_enum(), Some(Element::Lightning));
+        assert_eq!(def("a", "A", None, 1.0).element_enum(),              None, "원소 없음");
+        assert_eq!(def("a", "A", Some("plasma"), 1.0).element_enum(),    None, "미인식 문자열");
+    }
+
+    #[test]
+    fn 정의의_색은_RGB_튜플로_변환된다() {
+        assert_eq!(def("a", "A", None, 1.0).color(), Color::rgb(0.1, 0.2, 0.3));
+    }
+
+    #[test]
+    fn 스폰가중치_기본값은_1점0이다() {
+        // RON 에서 spawn_weight 생략 시 serde default 1.0.
+        let d: MonsterDef = ron::de::from_str(
+            r#"MonsterDef(id:"x",display_name:"엑스",glyph:"x",color:(0.0,0.0,0.0),hp:1,attack:1,defense:0,vision_radius:1,speed:1.0)"#
+        ).unwrap();
+        assert_eq!(d.spawn_weight, 1.0);
+        assert!(d.zones.is_empty());
+        assert!(d.spawn_condition.is_none());
+        assert!(!d.quest_only);
+        assert!(d.element.is_none());
+    }
+
+    // ── natural_spawn_candidates (순수 함수: zones / 조건 / quest_only 필터) ────
+
+    fn spawn_ctx() -> (PlayerInventory, WorldState, QuestState, ItemRegistry) {
+        (
+            PlayerInventory::default(),
+            WorldState::default(),
+            QuestState::default(),
+            crate::modules::item::build_test_registry(),
+        )
+    }
+
+    fn registry_of(defs: Vec<MonsterDef>) -> MonsterRegistry {
+        MonsterRegistry { monsters: defs }
+    }
+
+    #[test]
+    fn 자연스폰후보는_zones가_비면_모든_존에서_나온다() {
+        let reg = registry_of(vec![def("a", "A", None, 1.0)]);
+        let (inv, world, qs, items) = spawn_ctx();
+        let cands = natural_spawn_candidates(&reg, &ZoneId::Dungeon(3), &inv, &world, &qs, &items);
+        assert_eq!(cands, vec![0], "zones 비면 어느 존이든 후보");
+    }
+
+    #[test]
+    fn 자연스폰후보는_현재존이_zones에_포함될때만_나온다() {
+        let mut d = def("a", "A", None, 1.0);
+        d.zones = vec![ZoneId::Dungeon(1)];
+        let reg = registry_of(vec![d]);
+        let (inv, world, qs, items) = spawn_ctx();
+        assert_eq!(
+            natural_spawn_candidates(&reg, &ZoneId::Dungeon(1), &inv, &world, &qs, &items),
+            vec![0], "지정 존이면 후보"
+        );
+        assert!(
+            natural_spawn_candidates(&reg, &ZoneId::Dungeon(2), &inv, &world, &qs, &items).is_empty(),
+            "다른 존이면 제외"
+        );
+    }
+
+    #[test]
+    fn 자연스폰후보는_quest_only면_제외된다() {
+        let mut d = def("boss", "보스", None, 1.0);
+        d.quest_only = true;
+        let reg = registry_of(vec![d, def("a", "A", None, 1.0)]);
+        let (inv, world, qs, items) = spawn_ctx();
+        let cands = natural_spawn_candidates(&reg, &ZoneId::Town, &inv, &world, &qs, &items);
+        assert_eq!(cands, vec![1], "quest_only(인덱스 0)는 제외, 일반(1)만");
+    }
+
+    #[test]
+    fn 자연스폰후보는_spawn_condition이_참일때만_나온다() {
+        let mut d = def("a", "A", None, 1.0);
+        d.spawn_condition = Some(QuestCondition::HasFlag("awake".into()));
+        let reg = registry_of(vec![d]);
+        let (inv, world, mut qs, items) = spawn_ctx();
+        // 플래그 미설정 → 조건 거짓 → 제외
+        assert!(
+            natural_spawn_candidates(&reg, &ZoneId::Town, &inv, &world, &qs, &items).is_empty(),
+            "조건 거짓이면 제외"
+        );
+        // 플래그 설정 → 조건 참 → 포함
+        qs.set_flag("awake", "true");
+        assert_eq!(
+            natural_spawn_candidates(&reg, &ZoneId::Town, &inv, &world, &qs, &items),
+            vec![0], "조건 참이면 후보"
+        );
+    }
+
+    // ── choose_monster_index (순수 함수: 가중 선택) ────────────────────────────
+
+    #[test]
+    fn 후보가_없으면_선택은_None이다() {
+        let reg = registry_of(vec![def("a", "A", None, 1.0)]);
+        assert_eq!(choose_monster_index(&reg, &[], 0.0), None);
+    }
+
+    #[test]
+    fn 가중선택은_roll이_속한_구간의_후보를_고른다() {
+        // 가중치 [2.0, 1.0, 3.0] (총 6.0). 누적 경계: A<2, B<3, C<6.
+        let reg = registry_of(vec![
+            def("a", "A", None, 2.0),
+            def("b", "B", None, 1.0),
+            def("c", "C", None, 3.0),
+        ]);
+        let cands = vec![0, 1, 2];
+        assert_eq!(choose_monster_index(&reg, &cands, 0.0), Some(0), "roll 0 → 첫 구간");
+        assert_eq!(choose_monster_index(&reg, &cands, 1.9), Some(0), "1.9 < 2 → A");
+        assert_eq!(choose_monster_index(&reg, &cands, 2.0), Some(1), "2.0 → B 구간 시작");
+        assert_eq!(choose_monster_index(&reg, &cands, 2.5), Some(1), "2.5 → B");
+        assert_eq!(choose_monster_index(&reg, &cands, 3.0), Some(2), "3.0 → C 구간 시작");
+        assert_eq!(choose_monster_index(&reg, &cands, 5.9), Some(2), "5.9 → C");
+    }
+
+    #[test]
+    fn 가중합이_경계를_넘으면_마지막_후보로_폴백한다() {
+        // roll 이 total 과 같거나 초과(부동소수 오차 가정) → 마지막 후보.
+        let reg = registry_of(vec![def("a", "A", None, 1.0), def("b", "B", None, 1.0)]);
+        assert_eq!(choose_monster_index(&reg, &[0, 1], 2.0), Some(1), "경계 초과 → 마지막");
+    }
+
+    #[test]
+    fn 가중합이_0이하면_첫_후보로_폴백한다() {
+        // 모든 가중치 0 → total 0 → 첫 후보.
+        let reg = registry_of(vec![def("a", "A", None, 0.0), def("b", "B", None, 0.0)]);
+        assert_eq!(choose_monster_index(&reg, &[0, 1], 0.0), Some(0), "가중 0 → 첫 후보");
+    }
+
+    // ── handle_spawn_monster (SpawnMonster 액션 → 스폰) ────────────────────────
+
+    fn spawn_monster_app(map: Map) -> App {
+        let mut app = asset_app();
+        app.insert_resource(MapResource(map));
+        app.init_resource::<UsedSpawnTiles>();
+        app.add_event::<SpawnMonsterEvent>();
+        app.insert_resource(build_test_registry());
+        app.add_systems(Update, handle_spawn_monster);
+        app
+    }
+
+    #[test]
+    fn 스폰몬스터이벤트는_지정_몬스터를_요청_마릿수만큼_스폰한다() {
+        let mut map = full_floor_map();
+        map.rooms = rooms_with(3);
+        let mut app = spawn_monster_app(map);
+        app.world.send_event(SpawnMonsterEvent { id: "troll".into(), count: 2 });
+        app.update();
+        let trolls = app.world.query::<&Monster>()
+            .iter(&app.world).filter(|m| m.name == "트롤").count();
+        assert_eq!(trolls, 2, "트롤 2마리 스폰");
+    }
+
+    #[test]
+    fn 스폰몬스터로_나온_몬스터는_정의의_스탯을_가진다() {
+        let mut map = full_floor_map();
+        map.rooms = rooms_with(1);
+        let mut app = spawn_monster_app(map);
+        app.world.send_event(SpawnMonsterEvent { id: "orc".into(), count: 1 });
+        app.update();
+        let mut q = app.world.query::<(&Monster, &CombatStats)>();
+        let (m, stats) = q.iter(&app.world).find(|(m, _)| m.name == "오크").expect("오크 존재");
+        assert_eq!((stats.max_hp, stats.attack, stats.defense), (10, 5, 2), "정의 스탯");
+        assert_eq!(m.vision_radius, 8, "정의 시야");
+        assert_eq!(m.slot_idx, usize::MAX, "리스폰 슬롯 미연결");
+    }
+
+    #[test]
+    fn quest_only_보스도_스폰몬스터로는_등장한다() {
+        // quest_only 는 자연 스폰만 막고 SpawnMonster 로는 등장한다.
+        let mut map = full_floor_map();
+        map.rooms = rooms_with(1);
+        let mut reg = build_test_registry();
+        reg.monsters.push(MonsterDef {
+            id: "dragon".into(), display_name: "드래곤".into(), glyph: "D".into(),
+            color: (1.0, 0.0, 0.0), hp: 100, attack: 30, defense: 10,
+            vision_radius: 12, speed: 1.0, element: Some("fire".into()),
+            spawn_weight: 1.0, zones: Vec::new(), spawn_condition: None, quest_only: true,
+        });
+        let mut app = asset_app();
+        app.insert_resource(MapResource(map));
+        app.init_resource::<UsedSpawnTiles>();
+        app.add_event::<SpawnMonsterEvent>();
+        app.insert_resource(reg);
+        app.add_systems(Update, handle_spawn_monster);
+        app.world.send_event(SpawnMonsterEvent { id: "dragon".into(), count: 1 });
+        app.update();
+        let dragons = app.world.query::<&Monster>()
+            .iter(&app.world).filter(|m| m.name == "드래곤").count();
+        assert_eq!(dragons, 1, "quest_only 보스도 명시적 스폰은 가능");
+    }
+
+    #[test]
+    fn 알수없는_id로_스폰몬스터를_요청하면_아무것도_스폰하지_않는다() {
+        let mut map = full_floor_map();
+        map.rooms = rooms_with(1);
+        let mut app = spawn_monster_app(map);
+        app.world.send_event(SpawnMonsterEvent { id: "없는몬스터".into(), count: 3 });
+        app.update();
+        let n = app.world.query::<&Monster>().iter(&app.world).count();
+        assert_eq!(n, 0, "미등록 id 는 스폰 안 함");
+    }
+
+    #[test]
+    fn 통과타일이_없으면_스폰몬스터는_스폰을_건너뛴다() {
+        // 전부 Wall + room 없음 → random_floor_tile_anywhere 항상 None.
+        let mut map = Map::new(MAP_WIDTH, MAP_HEIGHT);
+        map.rooms = vec![];
+        let mut app = spawn_monster_app(map);
+        app.world.send_event(SpawnMonsterEvent { id: "goblin".into(), count: 2 });
+        app.update();
+        let n = app.world.query::<&Monster>().iter(&app.world).count();
+        assert_eq!(n, 0, "Floor 타일 없으면 스폰 실패 (continue)");
+    }
+
+    #[test]
+    fn 레지스트리에_없는_data_idx_슬롯은_스폰에서_건너뛴다() {
+        // spawn_from_slots 의 registry.monsters.get(idx) None 분기.
+        let rooms = rooms_with(2);
+        let slots = vec![
+            MonsterSlot { data_idx: 0, respawn_at_turn: None },   // 유효
+            MonsterSlot { data_idx: 999, respawn_at_turn: None }, // 범위 밖 → skip
+        ];
+        let mut app = run_spawn_from_slots(&rooms, &slots, 0);
+        let n = app.world.query::<&Monster>().iter(&app.world).count();
+        assert_eq!(n, 1, "범위 밖 data_idx 슬롯은 스폰 제외");
     }
 }

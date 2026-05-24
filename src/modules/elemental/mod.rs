@@ -121,15 +121,6 @@ pub fn weapon_element(kind: WeaponKind, items: &crate::modules::item::ItemRegist
     }
 }
 
-pub fn monster_element(name: &str) -> Option<Element> {
-    match name {
-        "고블린" => Some(Element::Poison),
-        "오크"   => Some(Element::Fire),
-        "트롤"   => Some(Element::Ice),
-        _ => None,
-    }
-}
-
 fn apply_elements(
     mut events: EventReader<ElementalApplyEvent>,
     mut commands: Commands,
@@ -338,21 +329,6 @@ mod tests {
     }
 
     #[test]
-    fn 고블린은_독_속성을_가진다() {
-        assert_eq!(monster_element("고블린"), Some(Element::Poison));
-    }
-
-    #[test]
-    fn 오크는_화염_속성을_가진다() {
-        assert_eq!(monster_element("오크"), Some(Element::Fire));
-    }
-
-    #[test]
-    fn 트롤은_얼음_속성을_가진다() {
-        assert_eq!(monster_element("트롤"), Some(Element::Ice));
-    }
-
-    #[test]
     fn 모든_원소의_기본_지속시간은_양수이다() {
         for el in [Element::Fire, Element::Ice, Element::Poison, Element::Lightning] {
             assert!(el.default_duration() > 0);
@@ -446,11 +422,6 @@ mod tests {
         assert_eq!(weapon_element(WeaponKind("f"), &registry_with_one_weapon("f", Some("fire"))),      Some(Element::Fire));
         assert_eq!(weapon_element(WeaponKind("i"), &registry_with_one_weapon("i", Some("ice"))),       Some(Element::Ice));
         assert_eq!(weapon_element(WeaponKind("l"), &registry_with_one_weapon("l", Some("lightning"))), Some(Element::Lightning));
-    }
-
-    #[test]
-    fn 알수없는_몬스터는_원소를_가지지_않는다() {
-        assert_eq!(monster_element("슬라임"), None);
     }
 
     // ── 추가: Bevy 시스템 App 하네스 테스트 (모든 분기) ──────────────────────
