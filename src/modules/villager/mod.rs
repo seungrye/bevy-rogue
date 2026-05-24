@@ -481,30 +481,48 @@ fn handle_bump(
         .collect();
 
     for BumpTileEvent(bx, by) in events.read() {
-        // 1) 범프 타일 자체에 있는 주민과 상호작용 (직접 인접).
-        let mut handled_villager = false;
-        for mut villager in villager_query.iter_mut() {
-            if villager.tile_x != *bx || villager.tile_y != *by { continue; }
+        // 상호작용 대상 타일을 하나 정한다:
+        //   - 범프 타일에 주민이 있으면 그 타일(직접 인접).
+        //   - 아니면 카운터 너머 vendor 타일(없으면 이 이벤트 skip).
+        let target = if villager_query.iter().any(|v| v.tile_x == *bx && v.tile_y == *by) {
+            (*bx, *by)
+        } else {
+            match vendor_for_interaction(*bx, *by, map, |x, y| vendor_tiles.contains(&(x, y))) {
+                Some(t) => t,
+                None => continue,
+            }
+        };
 
-            if villager.vendor {
-                shop_open.send(crate::modules::ui::shop::ShopOpenEvent);
-            } else if let Some(quest_id) = registry.quest_for_giver(&villager.id).map(|(qid, _)| qid.to_string()) {
-                show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut writers, &quest_items);
+        // 대상 타일의 주민(한 명)에게 단일 결정을 적용한다.
+        for mut villager in villager_query.iter_mut() {
+            if villager.tile_x != target.0 || villager.tile_y != target.1 { continue; }
+
+            // 이 주민이 giver 인 quest 와, 그 quest 가 아직 종료 전인지(=대화 우선) 판정.
+            let giver = registry.quest_for_giver(&villager.id)
+                .map(|(qid, def)| (qid.to_string(), def));
+            let quest_active = giver.as_ref()
+                .map(|(qid, def)| !is_quest_terminal_def(def, &quest_state, qid))
+                .unwrap_or(false);
+
+            if quest_active {
+                // vendor 여부와 무관하게 퀘스트가 끝나기 전엔 퀘스트 대화 우선 — 핵심 수정.
+                let qid = giver.as_ref().unwrap().0.clone();
+                show_quest_dialog(&mut villager, &qid, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut writers, &quest_items);
                 // QuestGiver 마커는 discover_quest_npcs_in_fov 가 quest 상태에 따라 자동 갱신
+            } else if villager.vendor {
+                // 순수 vendor, 또는 퀘스트가 종료된 vendor-giver → 상점.
+                shop_open.send(crate::modules::ui::shop::ShopOpenEvent);
+            } else if let Some((qid, _)) = giver.as_ref() {
+                // 비-vendor giver 가 종료된 경우: 종료 페이즈 대화 유지(회귀 방지).
+                let qid = qid.clone();
+                show_quest_dialog(&mut villager, &qid, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut writers, &quest_items);
             } else if !villager.dialogues.is_empty() {
                 let msg = villager.dialogues[villager.dialogue_idx].clone();
                 log_writer.send(LogMessage(msg));
                 villager.dialogue_idx = next_dialogue_idx(villager.dialogue_idx, villager.dialogues.len());
             }
             villager.just_bumped = true;
-            handled_villager = true;
             break;
-        }
-        if handled_villager { continue; }
-
-        // 2) 범프 타일이 가판대면 그 너머의 vendor 상점을 연다 (카운터 막힘 보정).
-        if vendor_for_interaction(*bx, *by, map, |x, y| vendor_tiles.contains(&(x, y))).is_some() {
-            shop_open.send(crate::modules::ui::shop::ShopOpenEvent);
         }
     }
 }
@@ -2307,6 +2325,233 @@ mod tests {
         let st = app.world.resource::<QuestState>();
         assert_eq!(st.phases.get("test_quest").map(|s| s.as_str()), Some("active"),
             "not_started → active 로 전진해야 한다");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // vendor 가 동시에 quest giver 인 경우 (퀘스트 체이닝 시연 — vault_heist 버그)
+    //   규칙: 퀘스트가 종료(terminal) 전이면 대화 우선, 종료 후엔 상점.
+    //   직접 인접 / 카운터 너머 양쪽에 동일 적용.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// merchant 처럼 vendor 이면서 quest giver 인 주민을 스폰한다.
+    fn spawn_vendor_giver(app: &mut App, id: &str, name: &str, tile: (usize, usize)) -> Entity {
+        app.world.spawn((
+            Text::from_section("$", TextStyle::default()),
+            Transform::from_translation(tile_to_world_coords(tile.0, tile.1).extend(Z_VILLAGER)),
+            Villager {
+                id: id.to_string(), name: name.to_string(),
+                dialogues: vec!["좋은 물건 있소".to_string()],
+                dialogue_idx: 0, tile_x: tile.0, tile_y: tile.1,
+                just_bumped: false, quest_dialogue_idx: 0,
+                base_color: Color::WHITE, home_room: None,
+                stationary: true, vendor: true,
+            },
+            Speed::new(1.0), MoveQueue::default(),
+        )).id()
+    }
+
+    #[test]
+    fn 가판대상인은_퀘스트가_끝나기_전엔_대화하고_상점을_열지_않는다() {
+        // vendor + giver, 퀘스트 비종료(not_started) → 직접 범프 시 상점이 아니라 퀘스트 대화.
+        let qreg = registry_with_giver("vault_heist_quest", "merchant");
+        let mut app = bump_app(qreg);
+        {
+            let mut reg = app.world.resource_mut::<QuestRegistry>();
+            let q = reg.quests.get_mut("vault_heist_quest").unwrap();
+            q.phases.insert("not_started".to_string(), phase(&["은밀한 거래를 들어볼까", "어떻소?"]));
+        }
+        spawn_vendor_giver(&mut app, "merchant", "상인", (5, 5));
+        app.world.send_event(BumpTileEvent(5, 5));
+        app.update();
+        assert_eq!(app.world.resource::<Events<ShopOpenEvent>>().len(), 0,
+            "퀘스트 비종료 vendor-giver 는 상점을 열면 안 된다");
+        assert!(app.world.resource::<Events<LogMessage>>().len() >= 1,
+            "대신 퀘스트 대사가 출력되어야 한다");
+    }
+
+    #[test]
+    fn 가판대상인은_퀘스트가_끝난_뒤엔_상점을_연다() {
+        // vendor + giver, 퀘스트 종료(done = terminal phase) → 직접 범프 시 상점.
+        let qreg = registry_with_giver("vault_heist_quest", "merchant");
+        let mut app = bump_app(qreg);
+        // done phase 는 outgoing transition 이 없어 terminal.
+        app.world.resource_mut::<QuestState>().set_phase("vault_heist_quest", "done");
+        spawn_vendor_giver(&mut app, "merchant", "상인", (5, 5));
+        app.world.send_event(BumpTileEvent(5, 5));
+        app.update();
+        assert_eq!(app.world.resource::<Events<ShopOpenEvent>>().len(), 1,
+            "퀘스트가 종료된 vendor-giver 는 상점을 연다");
+    }
+
+    #[test]
+    fn 카운터너머_vendor_giver도_퀘스트수락이_가능하다() {
+        // 카운터 뒤 고정 merchant: 손님이 카운터를 범프 → 퀘스트 비종료면 퀘스트 대화.
+        let qreg = registry_with_giver("vault_heist_quest", "merchant");
+        let mut app = bump_app(qreg);
+        {
+            let mut reg = app.world.resource_mut::<QuestRegistry>();
+            let q = reg.quests.get_mut("vault_heist_quest").unwrap();
+            // 단일 대사 → 카운터 범프 한 번에 마지막 줄 → transition 평가(수락).
+            q.phases.insert("not_started".to_string(), phase(&["수락하겠소?"]));
+        }
+        app.world.resource_mut::<MapResource>().map_mut().set_tile(5, 6, TileKind::Counter);
+        spawn_vendor_giver(&mut app, "merchant", "상인", (5, 5)); // 카운터(5,6) 뒤
+        app.world.send_event(BumpTileEvent(5, 6)); // 카운터를 범프
+        app.update();
+        assert_eq!(app.world.resource::<Events<ShopOpenEvent>>().len(), 0,
+            "카운터 너머라도 퀘스트 비종료면 상점을 열면 안 된다");
+        let st = app.world.resource::<QuestState>();
+        assert_eq!(st.phases.get("vault_heist_quest").map(|s| s.as_str()), Some("active"),
+            "카운터 너머 범프로 퀘스트가 수락(전진)되어야 한다");
+    }
+
+    #[test]
+    fn 카운터너머_vendor_giver는_퀘스트종료후엔_상점을_연다() {
+        // 카운터 너머 + 종료 퀘스트 → 상점.
+        let qreg = registry_with_giver("vault_heist_quest", "merchant");
+        let mut app = bump_app(qreg);
+        app.world.resource_mut::<QuestState>().set_phase("vault_heist_quest", "done");
+        app.world.resource_mut::<MapResource>().map_mut().set_tile(5, 6, TileKind::Counter);
+        spawn_vendor_giver(&mut app, "merchant", "상인", (5, 5));
+        app.world.send_event(BumpTileEvent(5, 6));
+        app.update();
+        assert_eq!(app.world.resource::<Events<ShopOpenEvent>>().len(), 1,
+            "카운터 너머 + 종료 퀘스트면 상점을 연다");
+    }
+
+    /// 체이닝 시연용 vault_heist 모사 QuestDef (giver=merchant):
+    ///   locked --Auto(infiltration done)--> not_started --Interact--> infiltrating(terminal)
+    fn vault_heist_like_def() -> QuestDef {
+        let mut phases = HM::new();
+        phases.insert("locked".to_string(), phase(&["순서가 있는 법이오."]));
+        phases.insert("not_started".to_string(), phase(&["은밀한 거래를 들어보겠소?"]));
+        phases.insert("infiltrating".to_string(), phase(&["인장을 가져오시오."]));
+        QuestDef {
+            id: "vault_heist_quest".into(),
+            title: "얼어붙은 금고".into(),
+            giver_npc: "merchant".into(),
+            initial_phase: "locked".into(),
+            phases,
+            transitions: vec![
+                QuestTransition {
+                    from: "locked".into(), trigger: TriggerKind::Auto,
+                    when: Some(QuestCondition::PhaseIs {
+                        quest: "infiltration_quest".into(),
+                        phase: "done_clean".into(),
+                    }),
+                    actions: vec![], to: "not_started".into(),
+                },
+                QuestTransition {
+                    from: "not_started".into(), trigger: TriggerKind::Interact,
+                    when: None, actions: vec![], to: "infiltrating".into(),
+                },
+            ],
+            spawns: vec![], spawn_chance: 1.0,
+        }
+    }
+
+    #[test]
+    fn 체이닝퀘스트가_잠겨있어도_merchant는_상점대신_퀘스트대화를_연다() {
+        // 버그 핵심: vault_heist 가 잠긴(locked, 비-terminal) 동안에도 vendor-giver
+        // merchant 범프는 상점이 아니라 퀘스트 대화여야 한다. (locked 는 Auto 출구가
+        // 있어 terminal 이 아님 → quest_active=true.)
+        let mut app = bump_app(QuestRegistry::default());
+        {
+            let mut reg = app.world.resource_mut::<QuestRegistry>();
+            reg.quests.insert("vault_heist_quest".into(), vault_heist_like_def());
+        }
+        spawn_vendor_giver(&mut app, "merchant", "상인", (5, 5));
+        app.world.send_event(BumpTileEvent(5, 5));
+        app.update();
+        assert_eq!(app.world.resource::<Events<ShopOpenEvent>>().len(), 0,
+            "잠긴 체이닝 퀘스트 동안 vendor-giver 는 상점이 아니라 대화한다");
+        assert!(app.world.resource::<Events<LogMessage>>().len() >= 1,
+            "잠금 안내 대사가 출력되어야 한다");
+    }
+
+    #[test]
+    fn 선행퀘스트가_끝나_체이닝이_개방되면_merchant범프로_수락된다() {
+        // 체이닝 시연 복구 증명:
+        //  - 선행(infiltration) 완료 → Auto 로 vault_heist locked→not_started 개방
+        //    (Auto 전이는 quest 모듈의 check_auto_advance 시스템 담당이므로 여기선
+        //     개방된 상태 not_started 를 직접 세팅해 handle_bump 경계만 검증).
+        //  - 개방 후 merchant 범프 시 상점이 아니라 퀘스트 수락(infiltrating)이 진행.
+        let mut app = bump_app(QuestRegistry::default());
+        {
+            let mut reg = app.world.resource_mut::<QuestRegistry>();
+            // 단일 대사 not_started → 첫 범프에 마지막 줄 → Interact 전이(수락).
+            let mut def = vault_heist_like_def();
+            def.phases.insert("not_started".into(), phase(&["수락하겠소?"]));
+            reg.quests.insert("vault_heist_quest".into(), def);
+        }
+        // 선행 완료 후 Auto 로 도달한 상태 (개방됨).
+        app.world.resource_mut::<QuestState>().set_phase("infiltration_quest", "done_clean");
+        app.world.resource_mut::<QuestState>().set_phase("vault_heist_quest", "not_started");
+
+        spawn_vendor_giver(&mut app, "merchant", "상인", (5, 5));
+        app.world.send_event(BumpTileEvent(5, 5));
+        app.update();
+
+        assert_eq!(app.world.resource::<Events<ShopOpenEvent>>().len(), 0,
+            "개방된 체이닝 퀘스트 수락 단계에서도 상점이 아니라 퀘스트 대화가 진행되어야 한다");
+        let accepted = app.world.resource::<QuestState>()
+            .phases.get("vault_heist_quest").cloned();
+        assert_eq!(accepted.as_deref(), Some("infiltrating"),
+            "merchant 범프로 vault_heist_quest 가 수락(infiltrating)되어야 한다");
+    }
+
+    #[test]
+    fn 비vendor_giver는_퀘스트종료후에도_대화를_유지한다() {
+        // 회귀 방지: 순수 quest giver(burgomaster 류)는 vendor 가 아니므로
+        // 퀘스트가 종료(terminal)되어도 종료 페이즈 대화를 유지한다(상점 없음).
+        let qreg = registry_with_giver("test_quest", "burgomaster");
+        let mut app = bump_app(qreg);
+        {
+            let mut reg = app.world.resource_mut::<QuestRegistry>();
+            let q = reg.quests.get_mut("test_quest").unwrap();
+            q.phases.insert("done".to_string(), phase(&["이미 끝난 일이네."]));
+        }
+        // done = terminal phase.
+        app.world.resource_mut::<QuestState>().set_phase("test_quest", "done");
+        // burgomaster: vendor=false 인 일반 quest giver.
+        let e = spawn_villager(&mut app, "burgomaster", "촌장", (5, 5));
+        app.world.send_event(BumpTileEvent(5, 5));
+        app.update();
+        assert_eq!(app.world.resource::<Events<ShopOpenEvent>>().len(), 0,
+            "비-vendor giver 는 종료 후에도 상점을 열지 않는다");
+        assert!(app.world.resource::<Events<LogMessage>>().len() >= 1,
+            "종료 페이즈 대화가 출력되어야 한다");
+        assert!(app.world.get::<Villager>(e).unwrap().just_bumped);
+    }
+
+    #[test]
+    fn 대상타일과_다른_주민은_건너뛰고_대상_주민만_반응한다() {
+        // handle_bump 내부 루프의 `tile_x != target.0 || tile_y != target.1` continue
+        // 분기(양쪽 항)를 커버한다: 대상이 아닌 주민들을 건너뛰고 대상만 반응.
+        let mut app = bump_app(QuestRegistry::default());
+        // x 가 다른 주민 (tile_x != target.0 → 첫 항 True)
+        spawn_villager(&mut app, "other_x", "딴사람가로", (9, 5));
+        // x 같고 y 다른 주민 (tile_x == target.0, tile_y != target.1 → 둘째 항 True)
+        spawn_villager(&mut app, "other_y", "딴사람세로", (5, 9));
+        // 대상 주민
+        let target = spawn_villager(&mut app, "farmer", "농부", (5, 5));
+        app.world.send_event(BumpTileEvent(5, 5));
+        app.update();
+        // 대상 주민만 반응.
+        assert!(app.world.get::<Villager>(target).unwrap().just_bumped, "대상 주민이 반응");
+        assert_eq!(app.world.resource::<Events<LogMessage>>().len(), 1, "대상 주민 대사 한 줄만");
+    }
+
+    #[test]
+    fn 일반대사주민은_giver도_vendor도_아니면_대사를_순환한다() {
+        // 통합 재작성 후에도 일반 주민 분기가 유지되는지 확인(회귀 방지).
+        let mut app = bump_app(QuestRegistry::default());
+        let e = spawn_villager(&mut app, "farmer", "농부", (5, 5));
+        app.world.send_event(BumpTileEvent(5, 5));
+        app.update();
+        assert_eq!(app.world.resource::<Events<ShopOpenEvent>>().len(), 0);
+        assert_eq!(app.world.resource::<Events<LogMessage>>().len(), 1, "일반 대사 한 줄");
+        assert_eq!(app.world.get::<Villager>(e).unwrap().dialogue_idx, 1, "대사 인덱스 전진");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
