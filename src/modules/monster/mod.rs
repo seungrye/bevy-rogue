@@ -1037,7 +1037,7 @@ mod tests {
         app.add_event::<ItemDropEvent>();
         app.add_event::<ElementalApplyEvent>();
         app.init_resource::<PlayerProgress>();
-        app.insert_resource(PlayerEquipment { weapon: Some(WeaponKind::SWORD), armor: None });
+        app.insert_resource(PlayerEquipment { weapon: Some(WeaponKind::SWORD), armor: None, ..Default::default() });
         app.insert_resource(crate::modules::item::build_test_registry());
         app.add_systems(Update, handle_player_attack);
 
@@ -1072,10 +1072,10 @@ mod tests {
         let mut reg = ItemRegistry::default();
         reg.weapons.insert("plain", WeaponMeta {
             display_name: "막대기", glyph_ascii: "/", glyph_unicode: "/", glyph_game_icon: "/",
-            pickup_message: "막대기", attack_power: 1, element: None,
+            pickup_message: "막대기", attack_power_min: 1, attack_power_max: 1, tier: 1, element: None,
         });
         app.insert_resource(reg);
-        app.insert_resource(PlayerEquipment { weapon: Some(WeaponKind("plain")), armor: None });
+        app.insert_resource(PlayerEquipment { weapon: Some(WeaponKind("plain")), armor: None, ..Default::default() });
         app.add_systems(Update, handle_player_attack);
 
         let p = spawn_player(&mut app, (1, 1));

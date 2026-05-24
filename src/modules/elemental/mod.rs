@@ -418,7 +418,7 @@ mod tests {
         r.weapons.insert(id, WeaponMeta {
             display_name: "테스트무기",
             glyph_ascii: "T", glyph_unicode: "T", glyph_game_icon: "T",
-            pickup_message: "획득", attack_power: 5, element,
+            pickup_message: "획득", attack_power_min: 5, attack_power_max: 5, tier: 1, element,
         });
         r
     }

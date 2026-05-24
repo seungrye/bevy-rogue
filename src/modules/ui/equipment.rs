@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use crate::modules::{
     item::{
         ItemKind, PlayerInventory, PlayerEquipment, EquipmentPanelOpen,
-        weapon_attack, armor_defense_bonus,
+        weapon_attack, armor_defense_bonus, weapon_rarity, armor_rarity,
     },
     player::Player,
     combat::CombatStats,
@@ -121,23 +121,28 @@ fn handle_equipment_input(
         let cursor = ui_state.cursor;
         let eq_len = inventory.items.len();
         if cursor < eq_len {
-            let kind = inventory.items[cursor].kind;
+            let inv_item = inventory.items[cursor].clone();
+            let kind = inv_item.kind;
             match kind {
                 ItemKind::Weapon(w) => {
                     if equipment.weapon == Some(w) {
                         equipment.weapon = None;
+                        equipment.weapon_rolled_attack = None;
                         log.send(LogMessage(format!("{} 해제.", w.display_name(&items))));
                     } else {
                         equipment.weapon = Some(w);
+                        equipment.weapon_rolled_attack = inv_item.rolled_attack;
                         log.send(LogMessage(format!("{} 장착.", w.display_name(&items))));
                     }
                 }
                 ItemKind::Armor(a) => {
                     if equipment.armor == Some(a) {
                         equipment.armor = None;
+                        equipment.armor_rolled_defense = None;
                         log.send(LogMessage(format!("{} 해제.", a.display_name(&items))));
                     } else {
                         equipment.armor = Some(a);
+                        equipment.armor_rolled_defense = inv_item.rolled_defense;
                         log.send(LogMessage(format!("{} 장착.", a.display_name(&items))));
                     }
                 }
@@ -256,10 +261,16 @@ pub(crate) fn build_panel_sections(
                 "bow"   => BOW_ICON,
                 _       => WEAPON_ICON,
             };
-            let atk = weapon_attack(w, quest_items);
+            let atk = equipment.weapon_rolled_attack.unwrap_or_else(|| weapon_attack(w, quest_items));
             let bar = "|".repeat(atk as usize);
+            // 롤된 공격력이 있으면 레어도 색·이름 표시.
+            let rarity = equipment.weapon_rolled_attack.and_then(|v| weapon_rarity(w, v, quest_items));
+            let (name_color, prefix) = match rarity {
+                Some(r) => (r.color(), format!("[{}] ", r.name_ko())),
+                None => (c_active, String::new()),
+            };
             s.push(ico(&format!("  {} ", icon_str),                        c_active));
-            s.push(kr(&format!("{}  ({})", w.display_name(quest_items), bar),         c_active));
+            s.push(kr(&format!("{}{}  ({})", prefix, w.display_name(quest_items), bar), name_color));
             s.push(kr(&format!("  ATK {}\n", atk),                        c_stat));
         }
     }
@@ -272,10 +283,15 @@ pub(crate) fn build_panel_sections(
             s.push(kr("없음\n",                        c_inactive));
         }
         Some(a) => {
-            let def = armor_defense_bonus(a, quest_items);
+            let def = equipment.armor_rolled_defense.unwrap_or_else(|| armor_defense_bonus(a, quest_items));
             let bar = "|".repeat((def * 3) as usize);
+            let rarity = equipment.armor_rolled_defense.and_then(|v| armor_rarity(a, v, quest_items));
+            let (name_color, prefix) = match rarity {
+                Some(r) => (r.color(), format!("[{}] ", r.name_ko())),
+                None => (c_active, String::new()),
+            };
             s.push(ico(&format!("  {} ", ARMOR_ICON),                      c_active));
-            s.push(kr(&format!("{}  ({})", a.display_name(quest_items), bar),         c_active));
+            s.push(kr(&format!("{}{}  ({})", prefix, a.display_name(quest_items), bar), name_color));
             s.push(kr(&format!("  +{}DEF\n", def),                        c_stat));
         }
     }
@@ -301,15 +317,29 @@ pub(crate) fn build_panel_sections(
                 }
                 _ => false,
             };
-            let stat = match inv_item.kind {
-                ItemKind::Weapon(w) => format!(" (ATK {})", weapon_attack(w, quest_items)),
-                ItemKind::Armor(a)  => format!(" (+{}DEF)", armor_defense_bonus(a, quest_items)),
-                _                   => String::new(),
+            // [등급] 접두사·이름 색은 무기/방어구의 롤값+range 로 계산한 레어도에서 가져온다.
+            let (rarity, stat) = match inv_item.kind {
+                ItemKind::Weapon(w) => {
+                    let atk = inv_item.rolled_attack.unwrap_or_else(|| weapon_attack(w, quest_items));
+                    let r = inv_item.rolled_attack.and_then(|v| weapon_rarity(w, v, quest_items));
+                    (r, format!(" (ATK {})", atk))
+                }
+                ItemKind::Armor(a) => {
+                    let def = inv_item.rolled_defense.unwrap_or_else(|| armor_defense_bonus(a, quest_items));
+                    let r = inv_item.rolled_defense.and_then(|v| armor_rarity(a, v, quest_items));
+                    (r, format!(" (+{}DEF)", def))
+                }
+                _ => (None, String::new()),
+            };
+            let (name_color, prefix) = match rarity {
+                Some(r) if i != cursor => (r.color(), format!("[{}] ", r.name_ko())),
+                Some(r)                => (color, format!("[{}] ", r.name_ko())),
+                None                   => (color, String::new()),
             };
             let icon_str = item_kind_icon(&inv_item.kind);
             s.push(kr(&format!("{} {} ", sel, i + 1),                     color));
             s.push(ico(&format!("{} ", icon_str),                          color));
-            s.push(kr(&format!("{}{}", inv_item.kind.display_name(quest_items), stat), color));
+            s.push(kr(&format!("{}{}{}", prefix, inv_item.kind.display_name(quest_items), stat), name_color));
             if equipped {
                 s.push(kr("  [장착]\n", c_equipped));
             } else {
@@ -373,7 +403,7 @@ mod tests {
     #[test]
     fn 장착된_무기에는_장착_표식이_붙는다() {
         let mut inv = empty_inv();
-        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
+        inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
         let mut eq = empty_eq();
         eq.weapon = Some(WeaponKind::SWORD);
         let text = build_panel_text(&inv, &eq, 0, qi());
@@ -383,7 +413,7 @@ mod tests {
     #[test]
     fn 장착되지_않은_무기에는_장착_표식이_없다() {
         let mut inv = empty_inv();
-        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
+        inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
         let text = build_panel_text(&inv, &empty_eq(), 0, qi());
         assert!(!text.contains("[장착]"));
     }
@@ -391,8 +421,8 @@ mod tests {
     #[test]
     fn 커서가_가리키는_줄은_화살표로_표시된다() {
         let mut inv = empty_inv();
-        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
-        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SPEAR) });
+        inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
+        inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SPEAR)));
         let text = build_panel_text(&inv, &empty_eq(), 1, qi());
         let spear_line = text.lines().find(|l| l.contains("창")).unwrap_or("");
         assert!(spear_line.starts_with("> "), "spear line was: {spear_line:?}");
@@ -409,26 +439,28 @@ mod tests {
     }
 
     #[test]
-    fn 패널은_무기_공격력을_표시한다() {
+    fn 패널은_롤값없는_무기의_중앙값_공격력을_표시한다() {
+        // 롤값 없는 창 → 중앙값 10.
         let mut inv = empty_inv();
-        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SPEAR) });
+        inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SPEAR)));
         let text = build_panel_text(&inv, &empty_eq(), 0, qi());
-        assert!(text.contains("ATK 9"));
+        assert!(text.contains("ATK 10"));
     }
 
     #[test]
-    fn 패널은_방어구_방어력을_표시한다() {
+    fn 패널은_롤값없는_방어구의_중앙값_방어력을_표시한다() {
+        // 롤값 없는 가죽 → 중앙값 3.
         let mut inv = empty_inv();
-        inv.items.push(InventoryItem { kind: ItemKind::Armor(ArmorKind::LEATHER_ARMOR) });
+        inv.items.push(InventoryItem::new(ItemKind::Armor(ArmorKind::LEATHER_ARMOR)));
         let text = build_panel_text(&inv, &empty_eq(), 0, qi());
-        assert!(text.contains("+2DEF"));
+        assert!(text.contains("+3DEF"));
     }
 
     #[test]
     fn 같은_종류_무기가_여러개여도_장착_표식은_하나만_붙는다() {
         let mut inv = empty_inv();
-        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
-        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
+        inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
+        inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
         let mut eq = empty_eq();
         eq.weapon = Some(WeaponKind::SWORD);
         let text = build_panel_text(&inv, &eq, 0, qi());
@@ -472,7 +504,7 @@ mod tests {
         // item_kind_icon / 장착 슬롯 모두의 `_ => WEAPON_ICON` 폴백 분기를 도달시킨다.
         let unknown = WeaponKind("trident");
         let mut inv = empty_inv();
-        inv.items.push(InventoryItem { kind: ItemKind::Weapon(unknown) });
+        inv.items.push(InventoryItem::new(ItemKind::Weapon(unknown)));
         let mut eq = empty_eq();
         eq.weapon = Some(unknown);
         let text = build_panel_text(&inv, &eq, 0, qi());
@@ -483,7 +515,7 @@ mod tests {
     fn 인벤토리의_장착중인_방어구에는_장착_표식이_붙는다() {
         // 인벤토리 목록 루프의 Armor equip 표식 분기(armor_marked).
         let mut inv = empty_inv();
-        inv.items.push(InventoryItem { kind: ItemKind::Armor(ArmorKind::LEATHER_ARMOR) });
+        inv.items.push(InventoryItem::new(ItemKind::Armor(ArmorKind::LEATHER_ARMOR)));
         let mut eq = empty_eq();
         eq.armor = Some(ArmorKind::LEATHER_ARMOR);
         let text = build_panel_text(&inv, &eq, 0, qi());
@@ -495,7 +527,7 @@ mod tests {
     fn 인벤토리의_퀘스트아이템은_능력치표기없이_표시된다() {
         // 인벤토리 목록 루프의 stat 폴백(_ => String::new()) 분기.
         let mut inv = empty_inv();
-        inv.items.push(InventoryItem { kind: ItemKind::QuestItem(QuestItemKind("eternal_gem")) });
+        inv.items.push(InventoryItem::new(ItemKind::QuestItem(QuestItemKind("eternal_gem"))));
         let text = build_panel_text(&inv, &empty_eq(), 0, qi());
         // 퀘스트 아이템 줄에는 ATK/DEF 표기가 없다.
         assert!(!text.contains("ATK"));
@@ -507,8 +539,8 @@ mod tests {
     fn 같은_방어구가_둘이면_뒤엣것은_장착_표식이_없다() {
         // armor equip-tag 의 `&& !armor_marked` 거짓(둘째 동일 방어구) 분기.
         let mut inv = empty_inv();
-        inv.items.push(InventoryItem { kind: ItemKind::Armor(ArmorKind::LEATHER_ARMOR) });
-        inv.items.push(InventoryItem { kind: ItemKind::Armor(ArmorKind::LEATHER_ARMOR) });
+        inv.items.push(InventoryItem::new(ItemKind::Armor(ArmorKind::LEATHER_ARMOR)));
+        inv.items.push(InventoryItem::new(ItemKind::Armor(ArmorKind::LEATHER_ARMOR)));
         let mut eq = empty_eq();
         eq.armor = Some(ArmorKind::LEATHER_ARMOR);
         let text = build_panel_text(&inv, &eq, 0, qi());
@@ -654,8 +686,8 @@ mod tests {
         app.world.resource_mut::<EquipmentPanelOpen>().0 = true;
         {
             let mut inv = app.world.resource_mut::<PlayerInventory>();
-            inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
-            inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SPEAR) });
+            inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
+            inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SPEAR)));
         }
         app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::ArrowDown);
         app.update();
@@ -673,7 +705,7 @@ mod tests {
         app.add_systems(Update, handle_equipment_input);
         app.world.resource_mut::<EquipmentPanelOpen>().0 = true;
         app.world.resource_mut::<PlayerInventory>().items
-            .push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
+            .push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
         // 첫 줄에서 위 → 그대로
         app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::ArrowUp);
         app.update();
@@ -702,7 +734,7 @@ mod tests {
         app.add_systems(Update, handle_equipment_input);
         app.world.resource_mut::<EquipmentPanelOpen>().0 = true;
         app.world.resource_mut::<PlayerInventory>().items
-            .push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
+            .push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
         app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
         app.update();
         assert_eq!(app.world.resource::<PlayerEquipment>().weapon, Some(WeaponKind::SWORD));
@@ -714,7 +746,7 @@ mod tests {
         app.add_systems(Update, handle_equipment_input);
         app.world.resource_mut::<EquipmentPanelOpen>().0 = true;
         app.world.resource_mut::<PlayerInventory>().items
-            .push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
+            .push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
         app.world.resource_mut::<PlayerEquipment>().weapon = Some(WeaponKind::SWORD);
         app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
         app.update();
@@ -727,7 +759,7 @@ mod tests {
         app.add_systems(Update, handle_equipment_input);
         app.world.resource_mut::<EquipmentPanelOpen>().0 = true;
         app.world.resource_mut::<PlayerInventory>().items
-            .push(InventoryItem { kind: ItemKind::Armor(ArmorKind::LEATHER_ARMOR) });
+            .push(InventoryItem::new(ItemKind::Armor(ArmorKind::LEATHER_ARMOR)));
         app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
         app.update();
         assert_eq!(app.world.resource::<PlayerEquipment>().armor, Some(ArmorKind::LEATHER_ARMOR));
@@ -739,7 +771,7 @@ mod tests {
         app.add_systems(Update, handle_equipment_input);
         app.world.resource_mut::<EquipmentPanelOpen>().0 = true;
         app.world.resource_mut::<PlayerInventory>().items
-            .push(InventoryItem { kind: ItemKind::Armor(ArmorKind::LEATHER_ARMOR) });
+            .push(InventoryItem::new(ItemKind::Armor(ArmorKind::LEATHER_ARMOR)));
         app.world.resource_mut::<PlayerEquipment>().armor = Some(ArmorKind::LEATHER_ARMOR);
         app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
         app.update();
@@ -753,7 +785,7 @@ mod tests {
         app.add_systems(Update, handle_equipment_input);
         app.world.resource_mut::<EquipmentPanelOpen>().0 = true;
         app.world.resource_mut::<PlayerInventory>().items
-            .push(InventoryItem { kind: ItemKind::QuestItem(QuestItemKind("eternal_gem")) });
+            .push(InventoryItem::new(ItemKind::QuestItem(QuestItemKind("eternal_gem"))));
         app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
         app.update();
         assert!(app.world.resource::<PlayerEquipment>().weapon.is_none());
@@ -831,7 +863,7 @@ mod tests {
         app.world.resource_mut::<EquipmentPanelOpen>().0 = true;
         {
             let mut inv = app.world.resource_mut::<PlayerInventory>();
-            inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
+            inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
             inv.consumables.push((ConsumableKind::HEALTH_POTION, 1));
         }
         app.world.spawn((Player, CombatStats { hp: 50, max_hp: 100, mp: 0, max_mp: 0, attack: 1, defense: 0 }));
@@ -863,7 +895,7 @@ mod tests {
         app.add_systems(Update, handle_equipment_input);
         app.world.resource_mut::<EquipmentPanelOpen>().0 = true;
         app.world.resource_mut::<PlayerInventory>().items
-            .push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
+            .push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
         // 커서를 items.len()(=1) 로: cursor >= eq_len 이면서 소모품은 없음.
         app.world.resource_mut::<EquipmentUiState>().cursor = 1;
         app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
@@ -908,7 +940,7 @@ mod tests {
     fn 패널이_열리면_텍스트가_채워진다() {
         let mut app = 패널_하네스();
         app.world.resource_mut::<PlayerInventory>().items
-            .push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
+            .push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
         app.world.resource_mut::<EquipmentPanelOpen>().0 = true;
         app.update();
         let text = app.world.query_filtered::<&Text, With<EquipmentPanelContent>>().single(&app.world);
@@ -928,7 +960,7 @@ mod tests {
             text.sections.clear();
         }
         app.world.resource_mut::<PlayerInventory>().items
-            .push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
+            .push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
         app.update();
         let text = app.world.query_filtered::<&Text, With<EquipmentPanelContent>>().single(&app.world);
         assert!(!text.sections.is_empty());
@@ -955,9 +987,9 @@ mod tests {
         // 189 OR 의 ui_state.is_changed() 피연산자 True 도달.
         let mut app = 패널_하네스();
         app.world.resource_mut::<PlayerInventory>().items
-            .push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
+            .push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
         app.world.resource_mut::<PlayerInventory>().items
-            .push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SPEAR) });
+            .push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SPEAR)));
         app.world.resource_mut::<EquipmentPanelOpen>().0 = true;
         app.update();
         {
@@ -1011,5 +1043,143 @@ mod tests {
         app.update(); // open=false
         let text = app.world.query_filtered::<&Text, With<EquipmentPanelContent>>().single(&app.world);
         assert!(text.sections.is_empty());
+    }
+
+    // ── 레어도/롤값 장착 흐름 + 표시 ────────────────────────────────────────
+
+    fn rolled_weapon(rolled: i32) -> InventoryItem {
+        InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD), rolled_attack: Some(rolled), rolled_defense: None }
+    }
+    fn rolled_armor(rolled: i32) -> InventoryItem {
+        InventoryItem { kind: ItemKind::Armor(ArmorKind::LEATHER_ARMOR), rolled_attack: None, rolled_defense: Some(rolled) }
+    }
+
+    #[test]
+    fn 무기를_장착하면_롤된_공격력이_장비로_복사된다() {
+        let mut app = 키_입력_하네스();
+        app.add_systems(Update, handle_equipment_input);
+        app.world.resource_mut::<EquipmentPanelOpen>().0 = true;
+        app.world.resource_mut::<PlayerInventory>().items.push(rolled_weapon(8));
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
+        app.update();
+        let eq = app.world.resource::<PlayerEquipment>();
+        assert_eq!(eq.weapon, Some(WeaponKind::SWORD));
+        assert_eq!(eq.weapon_rolled_attack, Some(8), "롤값이 장비로 복사됨");
+    }
+
+    #[test]
+    fn 무기를_해제하면_롤된_공격력도_사라진다() {
+        let mut app = 키_입력_하네스();
+        app.add_systems(Update, handle_equipment_input);
+        app.world.resource_mut::<EquipmentPanelOpen>().0 = true;
+        app.world.resource_mut::<PlayerInventory>().items.push(rolled_weapon(8));
+        {
+            let mut eq = app.world.resource_mut::<PlayerEquipment>();
+            eq.weapon = Some(WeaponKind::SWORD);
+            eq.weapon_rolled_attack = Some(8);
+        }
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
+        app.update();
+        let eq = app.world.resource::<PlayerEquipment>();
+        assert!(eq.weapon.is_none());
+        assert_eq!(eq.weapon_rolled_attack, None, "해제 시 롤값도 None");
+    }
+
+    #[test]
+    fn 방어구를_장착하면_롤된_방어보너스가_장비로_복사된다() {
+        let mut app = 키_입력_하네스();
+        app.add_systems(Update, handle_equipment_input);
+        app.world.resource_mut::<EquipmentPanelOpen>().0 = true;
+        app.world.resource_mut::<PlayerInventory>().items.push(rolled_armor(4));
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
+        app.update();
+        let eq = app.world.resource::<PlayerEquipment>();
+        assert_eq!(eq.armor, Some(ArmorKind::LEATHER_ARMOR));
+        assert_eq!(eq.armor_rolled_defense, Some(4));
+    }
+
+    #[test]
+    fn 방어구를_해제하면_롤된_방어보너스도_사라진다() {
+        let mut app = 키_입력_하네스();
+        app.add_systems(Update, handle_equipment_input);
+        app.world.resource_mut::<EquipmentPanelOpen>().0 = true;
+        app.world.resource_mut::<PlayerInventory>().items.push(rolled_armor(4));
+        {
+            let mut eq = app.world.resource_mut::<PlayerEquipment>();
+            eq.armor = Some(ArmorKind::LEATHER_ARMOR);
+            eq.armor_rolled_defense = Some(4);
+        }
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
+        app.update();
+        let eq = app.world.resource::<PlayerEquipment>();
+        assert!(eq.armor.is_none());
+        assert_eq!(eq.armor_rolled_defense, None);
+    }
+
+    #[test]
+    fn 인벤토리의_롤된_무기는_등급과_롤공격력을_표시한다() {
+        // 검 5~9, 롤 9 → 전설. 패널에 [전설] 과 ATK 9 가 표시되어야 한다.
+        let mut inv = empty_inv();
+        inv.items.push(rolled_weapon(9));
+        let text = build_panel_text(&inv, &empty_eq(), 9, qi()); // 커서를 항목 밖에 둬 색만 검증 회피
+        assert!(text.contains("[전설]"), "레어도 이름 표시: {text:?}");
+        assert!(text.contains("ATK 9"), "롤된 공격력 표시: {text:?}");
+    }
+
+    #[test]
+    fn 인벤토리의_롤된_방어구는_등급과_롤방어력을_표시한다() {
+        let mut inv = empty_inv();
+        inv.items.push(rolled_armor(2)); // 가죽 2~4, 롤 2 → 일반
+        let text = build_panel_text(&inv, &empty_eq(), 9, qi());
+        assert!(text.contains("[일반]"), "레어도 이름 표시: {text:?}");
+        assert!(text.contains("+2DEF"), "롤된 방어력 표시: {text:?}");
+    }
+
+    #[test]
+    fn 커서가_가리키는_롤된_무기도_등급접두사를_표시한다() {
+        // cursor == i 분기(Some(r) if i != cursor 의 거짓 → 두 번째 arm).
+        let mut inv = empty_inv();
+        inv.items.push(rolled_weapon(9));
+        let text = build_panel_text(&inv, &empty_eq(), 0, qi());
+        assert!(text.contains("[전설]"));
+    }
+
+    #[test]
+    fn 장착슬롯의_롤된_무기는_등급이름과_롤공격력을_표시한다() {
+        let mut eq = empty_eq();
+        eq.weapon = Some(WeaponKind::SWORD);
+        eq.weapon_rolled_attack = Some(9);
+        let text = build_panel_text(&empty_inv(), &eq, 0, qi());
+        assert!(text.contains("[전설]"));
+        assert!(text.contains("ATK 9"));
+    }
+
+    #[test]
+    fn 장착슬롯의_롤된_방어구는_등급이름과_롤방어력을_표시한다() {
+        let mut eq = empty_eq();
+        eq.armor = Some(ArmorKind::LEATHER_ARMOR);
+        eq.armor_rolled_defense = Some(4);
+        let text = build_panel_text(&empty_inv(), &eq, 0, qi());
+        assert!(text.contains("[전설]"));
+        assert!(text.contains("+4DEF"));
+    }
+
+    #[test]
+    fn 롤값없는_장착무기는_등급표기없이_중앙값을_표시한다() {
+        // weapon_rolled_attack None → 레어도 접두사 없음, 중앙값(7) 표시.
+        let mut eq = empty_eq();
+        eq.weapon = Some(WeaponKind::SWORD);
+        let text = build_panel_text(&empty_inv(), &eq, 0, qi());
+        assert!(!text.contains("[전설]") && !text.contains("[일반]"), "등급 접두사 없음: {text:?}");
+        assert!(text.contains("ATK 7"), "중앙값 표시: {text:?}");
+    }
+
+    #[test]
+    fn 롤값없는_장착방어구는_등급표기없이_중앙값을_표시한다() {
+        let mut eq = empty_eq();
+        eq.armor = Some(ArmorKind::LEATHER_ARMOR);
+        let text = build_panel_text(&empty_inv(), &eq, 0, qi());
+        assert!(!text.contains("[일반]") && !text.contains("[전설]"));
+        assert!(text.contains("+3DEF"), "중앙값 3 표시: {text:?}");
     }
 }

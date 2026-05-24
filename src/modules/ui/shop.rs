@@ -203,7 +203,7 @@ fn handle_shop_input(
                 }
                 match entry.kind {
                     ItemKind::Consumable(c) => inventory.add_consumable(c),
-                    kind => inventory.items.push(crate::modules::item::InventoryItem { kind }),
+                    kind => inventory.items.push(crate::modules::item::InventoryItem::new(kind)),
                 }
                 // 장착 아이템 자동 장착 (빈 슬롯일 경우)
                 match entry.kind {
@@ -368,8 +368,8 @@ mod tests {
     #[test]
     fn 판매목록은_퀘스트_아이템을_제외한다() {
         let mut inv = make_inventory(0);
-        inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
-        inv.items.push(InventoryItem { kind: ItemKind::QuestItem(QuestItemKind("eternal_gem")) });
+        inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
+        inv.items.push(InventoryItem::new(ItemKind::QuestItem(QuestItemKind("eternal_gem"))));
         let list = build_sell_list(&inv, qi());
         assert_eq!(list.len(), 1);
         assert!(matches!(list[0].0, ItemKind::Weapon(WeaponKind::SWORD)));
@@ -690,7 +690,7 @@ mod tests {
         app.world.resource_mut::<ShopPanelOpen>().0 = true;
         app.world.resource_mut::<ShopUiState>().mode = ShopMode::Sell;
         app.world.resource_mut::<PlayerInventory>().items
-            .push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
+            .push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
         app.world.resource_mut::<PlayerEquipment>().weapon = Some(WeaponKind::SWORD);
         app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
         app.update();
@@ -707,7 +707,7 @@ mod tests {
         app.world.resource_mut::<ShopPanelOpen>().0 = true;
         app.world.resource_mut::<ShopUiState>().mode = ShopMode::Sell;
         app.world.resource_mut::<PlayerInventory>().items
-            .push(InventoryItem { kind: ItemKind::Armor(ArmorKind::LEATHER_ARMOR) });
+            .push(InventoryItem::new(ItemKind::Armor(ArmorKind::LEATHER_ARMOR)));
         app.world.resource_mut::<PlayerEquipment>().armor = Some(ArmorKind::LEATHER_ARMOR);
         app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
         app.update();
@@ -723,7 +723,7 @@ mod tests {
         app.world.resource_mut::<ShopPanelOpen>().0 = true;
         app.world.resource_mut::<ShopUiState>().mode = ShopMode::Sell;
         app.world.resource_mut::<PlayerInventory>().items
-            .push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
+            .push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
         // 다른 무기(활)를 장착 중.
         app.world.resource_mut::<PlayerEquipment>().weapon = Some(WeaponKind::BOW);
         app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
@@ -741,7 +741,7 @@ mod tests {
         app.world.resource_mut::<ShopPanelOpen>().0 = true;
         app.world.resource_mut::<ShopUiState>().mode = ShopMode::Sell;
         app.world.resource_mut::<PlayerInventory>().items
-            .push(InventoryItem { kind: ItemKind::Armor(ArmorKind::LEATHER_ARMOR) });
+            .push(InventoryItem::new(ItemKind::Armor(ArmorKind::LEATHER_ARMOR)));
         // 방어구 미장착.
         app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
         app.update();
@@ -758,8 +758,8 @@ mod tests {
         app.world.resource_mut::<ShopUiState>().mode = ShopMode::Sell;
         {
             let mut inv = app.world.resource_mut::<PlayerInventory>();
-            inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
-            inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SPEAR) });
+            inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
+            inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SPEAR)));
         }
         app.world.resource_mut::<ShopUiState>().cursor = 0;
         app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
@@ -776,8 +776,8 @@ mod tests {
         app.world.resource_mut::<ShopUiState>().mode = ShopMode::Sell;
         {
             let mut inv = app.world.resource_mut::<PlayerInventory>();
-            inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
-            inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SPEAR) });
+            inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
+            inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SPEAR)));
         }
         app.world.resource_mut::<ShopUiState>().cursor = 1; // 마지막(창)
         app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
@@ -795,9 +795,9 @@ mod tests {
         app.world.resource_mut::<ShopUiState>().mode = ShopMode::Sell;
         {
             let mut inv = app.world.resource_mut::<PlayerInventory>();
-            inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
-            inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SPEAR) });
-            inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::BOW) });
+            inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
+            inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SPEAR)));
+            inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind::BOW)));
         }
         // 커서 1(가운데) → 판매 후 2개 남으니 1 < 2, 보정 안함.
         app.world.resource_mut::<ShopUiState>().cursor = 1;
@@ -829,7 +829,7 @@ mod tests {
         app.world.resource_mut::<ShopPanelOpen>().0 = true;
         app.world.resource_mut::<ShopUiState>().mode = ShopMode::Sell;
         app.world.resource_mut::<PlayerInventory>().items
-            .push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
+            .push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
         // 아무것도 장착하지 않은 상태.
         app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
         app.update();
@@ -887,7 +887,7 @@ mod tests {
         app.world.resource_mut::<ShopPanelOpen>().0 = true;
         app.world.resource_mut::<ShopUiState>().mode = ShopMode::Sell;
         app.world.resource_mut::<PlayerInventory>().items
-            .push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
+            .push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
         app.update();
         let text = app.world.query_filtered::<&Text, With<ShopPanelContent>>().single(&app.world);
         let joined: String = text.sections.iter().map(|s| s.value.as_str()).collect();
@@ -902,8 +902,8 @@ mod tests {
         app.world.resource_mut::<ShopUiState>().mode = ShopMode::Sell;
         {
             let mut inv = app.world.resource_mut::<PlayerInventory>();
-            inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) });
-            inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind::SPEAR) });
+            inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD)));
+            inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind::SPEAR)));
         }
         app.world.resource_mut::<ShopUiState>().cursor = 0;
         app.update();

@@ -1,6 +1,22 @@
 // 방어구 정의 — 게임 코드와 분리된 데이터
 // 형식: Vec<ArmorDef>
+//   defense_bonus_min / defense_bonus_max: 드롭 시 이 범위에서 방어보너스가 롤된다
+//   tier: 1~5 등급
+//
+// specs/item-random-stats.md §6 5티어 풀세트 참고
 [
+    // ── T1 ──
+    ArmorDef(
+        id: "cloth_armor",
+        display_name: "천 갑옷",
+        glyph_ascii: "]",
+        glyph_unicode: "\u{1F6E1}",
+        glyph_game_icon: "\u{EA96}",
+        pickup_message: "천 갑옷을 획득했다!",
+        defense_bonus_min: 1,
+        defense_bonus_max: 2,
+        tier: 1,
+    ),
     ArmorDef(
         id: "leather_armor",
         display_name: "가죽 갑옷",
@@ -8,6 +24,104 @@
         glyph_unicode: "\u{1F6E1}",
         glyph_game_icon: "\u{EA96}",
         pickup_message: "가죽 갑옷을 획득했다!",
-        defense_bonus: 2,
+        defense_bonus_min: 2,
+        defense_bonus_max: 4,
+        tier: 1,
+    ),
+
+    // ── T2 ──
+    ArmorDef(
+        id: "light_armor",
+        display_name: "경갑",
+        glyph_ascii: "]",
+        glyph_unicode: "\u{1F6E1}",
+        glyph_game_icon: "\u{EA96}",
+        pickup_message: "경갑을 획득했다!",
+        defense_bonus_min: 3,
+        defense_bonus_max: 5,
+        tier: 2,
+    ),
+    ArmorDef(
+        id: "chain_mail",
+        display_name: "사슬 갑옷",
+        glyph_ascii: "]",
+        glyph_unicode: "\u{1F6E1}",
+        glyph_game_icon: "\u{EA96}",
+        pickup_message: "사슬 갑옷을 획득했다!",
+        defense_bonus_min: 4,
+        defense_bonus_max: 7,
+        tier: 2,
+    ),
+
+    // ── T3 ──
+    ArmorDef(
+        id: "scale_armor",
+        display_name: "비늘 갑옷",
+        glyph_ascii: "]",
+        glyph_unicode: "\u{1F6E1}",
+        glyph_game_icon: "\u{EA96}",
+        pickup_message: "비늘 갑옷을 획득했다!",
+        defense_bonus_min: 6,
+        defense_bonus_max: 9,
+        tier: 3,
+    ),
+    ArmorDef(
+        id: "knight_armor",
+        display_name: "기사 갑옷",
+        glyph_ascii: "]",
+        glyph_unicode: "\u{1F6E1}",
+        glyph_game_icon: "\u{EA96}",
+        pickup_message: "기사 갑옷을 획득했다!",
+        defense_bonus_min: 7,
+        defense_bonus_max: 11,
+        tier: 3,
+    ),
+
+    // ── T4 ──
+    ArmorDef(
+        id: "plate_armor",
+        display_name: "판금 갑옷",
+        glyph_ascii: "]",
+        glyph_unicode: "\u{1F6E1}",
+        glyph_game_icon: "\u{EA96}",
+        pickup_message: "판금 갑옷을 획득했다!",
+        defense_bonus_min: 10,
+        defense_bonus_max: 14,
+        tier: 4,
+    ),
+    ArmorDef(
+        id: "mercenary_armor",
+        display_name: "용병 갑주",
+        glyph_ascii: "]",
+        glyph_unicode: "\u{1F6E1}",
+        glyph_game_icon: "\u{EA96}",
+        pickup_message: "용병 갑주를 획득했다!",
+        defense_bonus_min: 9,
+        defense_bonus_max: 13,
+        tier: 4,
+    ),
+
+    // ── T5 ──
+    ArmorDef(
+        id: "paladin_armor",
+        display_name: "성기사 갑옷",
+        glyph_ascii: "]",
+        glyph_unicode: "\u{1F6E1}",
+        glyph_game_icon: "\u{EA96}",
+        pickup_message: "성기사 갑옷을 획득했다!",
+        defense_bonus_min: 14,
+        defense_bonus_max: 20,
+        tier: 5,
+    ),
+    ArmorDef(
+        id: "dragonscale_armor",
+        display_name: "용비늘 갑주",
+        glyph_ascii: "]",
+        glyph_unicode: "\u{1F6E1}",
+        glyph_game_icon: "\u{EA96}",
+        pickup_message: "용비늘 갑주를 획득했다!",
+        defense_bonus_min: 17,
+        defense_bonus_max: 24,
+        tier: 5,
     ),
 ]

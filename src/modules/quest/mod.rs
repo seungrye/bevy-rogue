@@ -610,7 +610,7 @@ pub fn execute_actions(
         match action {
             QuestAction::GiveItem(item_id) => {
                 if let Some(kind) = item_id_to_kind(item_id, quest_items) {
-                    inventory.items.push(InventoryItem { kind });
+                    inventory.items.push(InventoryItem::new(kind));
                     log.send(crate::modules::ui::LogMessage(
                         format!("{} 획득!", kind.display_name(quest_items))
                     ));
@@ -621,7 +621,7 @@ pub fn execute_actions(
                     for _ in 0..*count {
                         match kind {
                             ItemKind::Consumable(ck) => inventory.add_consumable(ck),
-                            _ => inventory.items.push(InventoryItem { kind }),
+                            _ => inventory.items.push(InventoryItem::new(kind)),
                         }
                     }
                     log.send(crate::modules::ui::LogMessage(
@@ -790,7 +790,7 @@ fn spawn_quest_items(
                         transform: Transform::from_xyz(pos.x, pos.y, 0.3),
                         ..default()
                     },
-                    Item { kind, tile_x: tx, tile_y: ty },
+                    Item { kind, tile_x: tx, tile_y: ty, rolled_attack: None, rolled_defense: None },
                 ));
                 // 퀘스트 아이템은 목표물 자체이므로 스폰되는 순간 미니맵 목표 마커로 등록한다.
                 markers.add(tx, ty, MarkerKind::QuestTarget, world.current.clone());
@@ -944,7 +944,7 @@ mod tests {
         let mut inv = PlayerInventory::default();
         for id in item_ids {
             if let Some(kind) = item_id_to_kind(id, qi()) {
-                inv.items.push(InventoryItem { kind });
+                inv.items.push(InventoryItem::new(kind));
             }
         }
         inv
@@ -1880,7 +1880,7 @@ mod tests {
         // 사전에 보유 상태로 세팅
         {
             let kind = item_id_to_kind("eternal_gem", qi()).unwrap();
-            app.world.resource_mut::<PlayerInventory>().items.push(InventoryItem { kind });
+            app.world.resource_mut::<PlayerInventory>().items.push(InventoryItem::new(kind));
         }
         app.update();
         assert!(app.world.resource::<PlayerInventory>().items.is_empty());
@@ -1978,7 +1978,7 @@ mod tests {
         let mut app = auto_advance_app(reg, state);
         // 보석 보유
         let kind = item_id_to_kind("eternal_gem", qi()).unwrap();
-        app.world.resource_mut::<PlayerInventory>().items.push(InventoryItem { kind });
+        app.world.resource_mut::<PlayerInventory>().items.push(InventoryItem::new(kind));
         app.update();
         assert_eq!(
             app.world.resource::<QuestState>().current_phase("gem_quest"),
@@ -2010,7 +2010,7 @@ mod tests {
         state.set_phase("gem_quest", "active");
         let mut app = auto_advance_app(reg, state);
         let kind = item_id_to_kind("eternal_gem", qi()).unwrap();
-        app.world.resource_mut::<PlayerInventory>().items.push(InventoryItem { kind });
+        app.world.resource_mut::<PlayerInventory>().items.push(InventoryItem::new(kind));
         app.update();
         assert_eq!(
             app.world.resource::<QuestState>().current_phase("gem_quest"),
@@ -2072,7 +2072,7 @@ mod tests {
         let mut app = auto_advance_app(reg, state);
         // 인벤토리에 eternal_gem 보유 → RemoveItem 대상
         let kind = item_id_to_kind("eternal_gem", qi()).unwrap();
-        app.world.resource_mut::<PlayerInventory>().items.push(InventoryItem { kind });
+        app.world.resource_mut::<PlayerInventory>().items.push(InventoryItem::new(kind));
         app.update();
 
         let st = app.world.resource::<QuestState>();

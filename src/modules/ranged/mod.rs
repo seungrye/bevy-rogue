@@ -435,7 +435,7 @@ mod tests {
         app.init_asset::<Font>();
         app.insert_resource(ButtonInput::<KeyCode>::default())
             .init_resource::<RangedTargeting>()
-            .insert_resource(PlayerEquipment { weapon: Some(WeaponKind::BOW), armor: None })
+            .insert_resource(PlayerEquipment { weapon: Some(WeaponKind::BOW), armor: None, ..Default::default() })
             .init_resource::<EquipmentPanelOpen>()
             .init_resource::<ShopPanelOpen>()
             .init_resource::<HelpPanelOpen>()

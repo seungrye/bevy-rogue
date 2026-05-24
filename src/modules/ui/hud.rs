@@ -157,6 +157,7 @@ mod tests {
         let equipment = PlayerEquipment {
             weapon: Some(WeaponKind::SWORD),
             armor: Some(ArmorKind::LEATHER_ARMOR),
+            ..Default::default()
         };
         let stats = CombatStats { hp: 12, max_hp: 30, mp: 4, max_mp: 20, attack: 7, defense: 3 };
 
@@ -179,7 +180,7 @@ mod tests {
         let world = WorldState::default();
         let map = Map::new(10, 10);
         let inventory = PlayerInventory::default();
-        let equipment = PlayerEquipment { weapon: None, armor: None };
+        let equipment = PlayerEquipment { weapon: None, armor: None, ..Default::default() };
         let stats = CombatStats { hp: 1, max_hp: 1, mp: 0, max_mp: 0, attack: 1, defense: 0 };
         let progress = PlayerProgress::default();
         let items = crate::modules::item::build_test_registry();

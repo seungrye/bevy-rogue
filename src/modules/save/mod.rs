@@ -414,11 +414,11 @@ mod tests {
             player_defense: 3,
             player_progress: PlayerProgress { level: 3, xp: 7, next_level_xp: xp_to_next_level_for_test(3), kills: 12 },
             inventory: PlayerInventory {
-                items: vec![InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD) }],
+                items: vec![InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD))],
                 consumables: vec![(ConsumableKind::HEALTH_POTION, 2)],
                 gold: 75,
             },
-            equipment: PlayerEquipment { weapon: Some(WeaponKind::SWORD), armor: None },
+            equipment: PlayerEquipment { weapon: Some(WeaponKind::SWORD), armor: None, ..Default::default() },
             quest_state: QuestState::default(),
             active_quests: std::collections::HashSet::new(),
             current_zone: ZoneId::Town,

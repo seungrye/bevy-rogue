@@ -256,7 +256,10 @@ pub fn build_test_registry() -> ItemRegistry {
             glyph_unicode:   Box::leak(def.glyph_unicode.into_boxed_str()),
             glyph_game_icon: Box::leak(def.glyph_game_icon.into_boxed_str()),
             pickup_message:  Box::leak(def.pickup_message.into_boxed_str()),
-            attack_power: def.attack_power, element,
+            attack_power_min: def.attack_power_min,
+            attack_power_max: def.attack_power_max,
+            tier: def.tier,
+            element,
         });
     }
     // armors
@@ -270,7 +273,9 @@ pub fn build_test_registry() -> ItemRegistry {
             glyph_unicode:   Box::leak(def.glyph_unicode.into_boxed_str()),
             glyph_game_icon: Box::leak(def.glyph_game_icon.into_boxed_str()),
             pickup_message:  Box::leak(def.pickup_message.into_boxed_str()),
-            defense_bonus: def.defense_bonus,
+            defense_bonus_min: def.defense_bonus_min,
+            defense_bonus_max: def.defense_bonus_max,
+            tier: def.tier,
         });
     }
     // consumables
@@ -363,7 +368,9 @@ pub struct WeaponDef {
     pub glyph_unicode: String,
     pub glyph_game_icon: String,
     pub pickup_message: String,
-    pub attack_power: i32,
+    pub attack_power_min: i32,
+    pub attack_power_max: i32,
+    pub tier: u8,
     pub element: Option<String>,
 }
 
@@ -375,7 +382,9 @@ pub struct ArmorDef {
     pub glyph_unicode: String,
     pub glyph_game_icon: String,
     pub pickup_message: String,
-    pub defense_bonus: i32,
+    pub defense_bonus_min: i32,
+    pub defense_bonus_max: i32,
+    pub tier: u8,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -402,8 +411,18 @@ pub struct WeaponMeta {
     pub glyph_unicode: &'static str,
     pub glyph_game_icon: &'static str,
     pub pickup_message: &'static str,
-    pub attack_power: i32,
+    pub attack_power_min: i32,
+    pub attack_power_max: i32,
+    /// 레벨 스케일 드롭 시 티어 그룹화·가중치에 사용 (§7-B).
+    pub tier: u8,
     pub element: Option<&'static str>,
+}
+
+impl WeaponMeta {
+    /// 롤 없이 표시·기본값으로 쓰는 범위 중앙값 (min+max)/2 (정수 내림).
+    pub fn attack_mid(&self) -> i32 {
+        (self.attack_power_min + self.attack_power_max) / 2
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -413,7 +432,17 @@ pub struct ArmorMeta {
     pub glyph_unicode: &'static str,
     pub glyph_game_icon: &'static str,
     pub pickup_message: &'static str,
-    pub defense_bonus: i32,
+    pub defense_bonus_min: i32,
+    pub defense_bonus_max: i32,
+    /// 레벨 스케일 드롭 시 티어 그룹화·가중치에 사용 (§7-B).
+    pub tier: u8,
+}
+
+impl ArmorMeta {
+    /// 롤 없이 표시·기본값으로 쓰는 범위 중앙값.
+    pub fn defense_mid(&self) -> i32 {
+        (self.defense_bonus_min + self.defense_bonus_max) / 2
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -496,9 +525,9 @@ pub fn apply_start_loadout(
 
     for id in &loadout.items {
         if let Some(intern) = registry.intern_weapon(id) {
-            inv.items.push(InventoryItem { kind: ItemKind::Weapon(WeaponKind(intern)) });
+            inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind(intern))));
         } else if let Some(intern) = registry.intern_armor(id) {
-            inv.items.push(InventoryItem { kind: ItemKind::Armor(ArmorKind(intern)) });
+            inv.items.push(InventoryItem::new(ItemKind::Armor(ArmorKind(intern))));
         } else {
             warn!("start_loadout: 알 수 없는 item id '{}'", id);
         }
@@ -559,7 +588,9 @@ fn load_weapons_system(mut registry: ResMut<ItemRegistry>) {
             glyph_unicode:   Box::leak(def.glyph_unicode.into_boxed_str()),
             glyph_game_icon: Box::leak(def.glyph_game_icon.into_boxed_str()),
             pickup_message:  Box::leak(def.pickup_message.into_boxed_str()),
-            attack_power: def.attack_power,
+            attack_power_min: def.attack_power_min,
+            attack_power_max: def.attack_power_max,
+            tier: def.tier,
             element,
         });
     }
@@ -582,7 +613,9 @@ fn load_armors_system(mut registry: ResMut<ItemRegistry>) {
             glyph_unicode:   Box::leak(def.glyph_unicode.into_boxed_str()),
             glyph_game_icon: Box::leak(def.glyph_game_icon.into_boxed_str()),
             pickup_message:  Box::leak(def.pickup_message.into_boxed_str()),
-            defense_bonus: def.defense_bonus,
+            defense_bonus_min: def.defense_bonus_min,
+            defense_bonus_max: def.defense_bonus_max,
+            tier: def.tier,
         });
     }
     info!("armor 로드: {} 종", map.len());
@@ -679,26 +712,262 @@ impl ConsumableKind {
     }
 }
 
+// ── 레어도 등급 (롤 백분위 파생) — specs/item-random-stats.md §2 ────────────
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Rarity {
+    Common,
+    Uncommon,
+    Rare,
+    Epic,
+    Legendary,
+}
+
+impl Rarity {
+    /// 롤된 값이 [min, max] 안에서 차지하는 백분위로 등급을 매긴다.
+    /// min == max 면 분모가 0 이므로 백분위 0(Common) 으로 처리한다.
+    pub fn from_roll(rolled: i32, min: i32, max: i32) -> Rarity {
+        let p = if max <= min {
+            0.0
+        } else {
+            (rolled - min) as f32 / (max - min) as f32
+        };
+        if p < 0.40 {
+            Rarity::Common
+        } else if p < 0.70 {
+            Rarity::Uncommon
+        } else if p < 0.90 {
+            Rarity::Rare
+        } else if p < 0.98 {
+            Rarity::Epic
+        } else {
+            Rarity::Legendary
+        }
+    }
+
+    pub fn name_ko(self) -> &'static str {
+        match self {
+            Rarity::Common    => "일반",
+            Rarity::Uncommon  => "고급",
+            Rarity::Rare      => "희귀",
+            Rarity::Epic      => "영웅",
+            Rarity::Legendary => "전설",
+        }
+    }
+
+    pub fn color(self) -> Color {
+        match self {
+            Rarity::Common    => Color::rgb(0.7, 0.7, 0.7),
+            Rarity::Uncommon  => Color::rgb(0.3, 0.9, 0.3),
+            Rarity::Rare      => Color::rgb(0.3, 0.5, 1.0),
+            Rarity::Epic      => Color::rgb(0.7, 0.3, 1.0),
+            Rarity::Legendary => Color::rgb(1.0, 0.8, 0.2),
+        }
+    }
+}
+
+/// 무기 단일 공격력 — 범위의 중앙값 (registry 단일값이 필요한 호출처용).
 pub fn weapon_attack(kind: WeaponKind, r: &ItemRegistry) -> i32 {
-    r.weapon(kind).map(|m| m.attack_power).unwrap_or(0)
+    r.weapon(kind).map(|m| m.attack_mid()).unwrap_or(0)
 }
 
+/// 방어구 단일 방어보너스 — 범위의 중앙값.
 pub fn armor_defense_bonus(kind: ArmorKind, r: &ItemRegistry) -> i32 {
-    r.armor(kind).map(|m| m.defense_bonus).unwrap_or(0)
+    r.armor(kind).map(|m| m.defense_mid()).unwrap_or(0)
 }
 
+/// 무기 종류의 롤된 공격력으로 레어도를 계산한다. (장비창 표시용)
+pub fn weapon_rarity(kind: WeaponKind, rolled: i32, r: &ItemRegistry) -> Option<Rarity> {
+    r.weapon(kind).map(|m| Rarity::from_roll(rolled, m.attack_power_min, m.attack_power_max))
+}
+
+/// 방어구 종류의 롤된 방어보너스로 레어도를 계산한다.
+pub fn armor_rarity(kind: ArmorKind, rolled: i32, r: &ItemRegistry) -> Option<Rarity> {
+    r.armor(kind).map(|m| Rarity::from_roll(rolled, m.defense_bonus_min, m.defense_bonus_max))
+}
+
+/// 드롭/인벤토리 아이템의 글리프·표시 색. 무기/방어구는 롤값+range 로 레어도 색을
+/// 계산하고, 롤값이 없거나(소비/퀘스트) range 조회 실패면 기존 카테고리 색으로 폴백한다.
+pub fn item_display_color(
+    kind: ItemKind,
+    rolled_attack: Option<i32>,
+    rolled_defense: Option<i32>,
+    r: &ItemRegistry,
+) -> Color {
+    match kind {
+        ItemKind::Weapon(w) => match rolled_attack.and_then(|v| weapon_rarity(w, v, r)) {
+            Some(rarity) => rarity.color(),
+            None => kind.color(),
+        },
+        ItemKind::Armor(a) => match rolled_defense.and_then(|v| armor_rarity(a, v, r)) {
+            Some(rarity) => rarity.color(),
+            None => kind.color(),
+        },
+        ItemKind::Consumable(_) | ItemKind::QuestItem(_) => kind.color(),
+    }
+}
+
+/// 무기/방어구 드롭 시 tier 범위 안에서 스탯을 롤한다.
+/// Consumable/QuestItem 은 (None, None). registry 조회 실패도 (None, None).
+pub fn roll_item_stats<R: Rng + ?Sized>(
+    kind: ItemKind,
+    rng: &mut R,
+    r: &ItemRegistry,
+) -> (Option<i32>, Option<i32>) {
+    match kind {
+        ItemKind::Weapon(w) => match r.weapon(w) {
+            Some(m) => (Some(rng.gen_range(m.attack_power_min..=m.attack_power_max)), None),
+            None => (None, None),
+        },
+        ItemKind::Armor(a) => match r.armor(a) {
+            Some(m) => (None, Some(rng.gen_range(m.defense_bonus_min..=m.defense_bonus_max))),
+            None => (None, None),
+        },
+        ItemKind::Consumable(_) | ItemKind::QuestItem(_) => (None, None),
+    }
+}
+
+// ── 레벨 스케일 드롭 티어 선택 — specs/item-random-stats.md §7-B ────────────
+// 플레이어 레벨에 따라 드롭되는 장비의 티어 분포를 조정한다.
+// 결정 로직은 순수 함수로 분리해 경계를 단위 테스트로 전부 커버한다.
+
+/// 최소/최대 티어 (RON 데이터의 tier 범위).
+const MIN_TIER: u8 = 1;
+const MAX_TIER: u8 = 5;
+/// 티어 밴드 중심이 한 단계 오르는 데 필요한 레벨 간격 (≈ 3레벨마다 +1티어).
+const LEVELS_PER_TIER: u32 = 3;
+
+/// 플레이어 레벨 L 에 대응하는 "티어 밴드 중심".
+/// `center = (1 + (L-1)/LEVELS_PER_TIER).clamp(MIN_TIER, MAX_TIER)`.
+/// 레벨 1~3 → 1, 4~6 → 2, ... 13 이상 → 5 로 상한 클램프.
+pub fn tier_band_center(level: u32) -> u8 {
+    let raw = 1 + level.saturating_sub(1) / LEVELS_PER_TIER;
+    (raw as u8).clamp(MIN_TIER, MAX_TIER)
+}
+
+/// 아이템 티어가 레벨 대비 받는 드롭 가중치.
+/// `d = item_tier - center` 에 따라 스펙 §7-B 표 그대로:
+/// d≥+2 → 0.0(게이트), +1 → 0.5, 0 → 1.0, -1 → 0.6, -2 → 0.3, ≤-3 → 0.1.
+pub fn tier_weight(item_tier: u8, level: u32) -> f32 {
+    let center = tier_band_center(level);
+    let d = item_tier as i32 - center as i32;
+    if d >= 2 {
+        0.0
+    } else if d == 1 {
+        0.5
+    } else if d == 0 {
+        1.0
+    } else if d == -1 {
+        0.6
+    } else if d == -2 {
+        0.3
+    } else {
+        // d <= -3
+        0.1
+    }
+}
+
+/// 사용 가능한 티어 목록에서 레벨 가중치로 하나를 추첨한다.
+/// 모든 후보의 가중치 합이 0(전부 게이트)이면 None.
+pub fn weighted_tier_pick<R: Rng + ?Sized>(
+    level: u32,
+    available_tiers: &[u8],
+    rng: &mut R,
+) -> Option<u8> {
+    // 양수 가중치 티어만 후보로 모은다 (가중치 0=게이트 제외).
+    let candidates: Vec<(u8, f32)> = available_tiers.iter()
+        .map(|&t| (t, tier_weight(t, level)))
+        .filter(|&(_, w)| w > 0.0)
+        .collect();
+    let total: f32 = candidates.iter().map(|&(_, w)| w).sum();
+    if total <= 0.0 {
+        return None;
+    }
+    // 마지막 후보를 catch-all 로 두어 부동소수 누적 오차와 무관하게 항상 선택이 된다.
+    let mut roll = rng.gen::<f32>() * total;
+    let last = candidates.len() - 1;
+    for &(t, w) in &candidates[..last] {
+        if roll < w {
+            return Some(t);
+        }
+        roll -= w;
+    }
+    Some(candidates[last].0)
+}
+
+/// ID→tier 메타 접근을 추상화해 무기/방어구 양쪽에 동일 그룹화·선택 로직을 재사용한다.
+/// (tier 로 그룹화 → 레벨 가중 추첨 → 그 티어 중 랜덤 ID 선택).
+/// 후보가 없거나 전부 게이트되면 None.
+fn pick_leveled_id<'a, R: Rng + ?Sized, I>(level: u32, entries: I, rng: &mut R) -> Option<&'a str>
+where
+    I: Iterator<Item = (&'a str, u8)>,
+{
+    let mut by_tier: HashMap<u8, Vec<&'a str>> = HashMap::new();
+    for (id, tier) in entries {
+        by_tier.entry(tier).or_default().push(id);
+    }
+    let mut tiers: Vec<u8> = by_tier.keys().copied().collect();
+    tiers.sort_unstable();
+    let tier = weighted_tier_pick(level, &tiers, rng)?;
+    // tier 는 by_tier 의 키에서 왔으므로 ids 는 항상 존재하고 비어 있지 않다.
+    let ids = &by_tier[&tier];
+    Some(ids[rng.gen_range(0..ids.len())])
+}
+
+/// 레벨 가중으로 무기 한 종류를 고른다.
+/// 티어로 그룹화 → 레벨 가중 추첨 → 그 티어 무기 중 랜덤 선택.
+/// 후보 티어가 없거나 전부 게이트되면 None.
+pub fn pick_leveled_weapon<R: Rng + ?Sized>(
+    level: u32,
+    r: &ItemRegistry,
+    rng: &mut R,
+) -> Option<WeaponKind> {
+    let id = pick_leveled_id(level, r.weapons.iter().map(|(id, m)| (*id, m.tier)), rng)?;
+    Some(WeaponKind(id))
+}
+
+/// 레벨 가중으로 방어구 한 종류를 고른다 (무기와 동일 흐름).
+pub fn pick_leveled_armor<R: Rng + ?Sized>(
+    level: u32,
+    r: &ItemRegistry,
+    rng: &mut R,
+) -> Option<ArmorKind> {
+    let id = pick_leveled_id(level, r.armors.iter().map(|(id, m)| (*id, m.tier)), rng)?;
+    Some(ArmorKind(id))
+}
+
+/// 유효 공격력: 무기 장착 시 롤값(있으면) 또는 범위 중앙값, 무기 없으면 기본 ATK.
 pub fn effective_attack(equipment: &PlayerEquipment, r: &ItemRegistry) -> i32 {
-    equipment.weapon.map(|w| weapon_attack(w, r)).unwrap_or(PLAYER_ATK)
+    match equipment.weapon {
+        Some(w) => equipment.weapon_rolled_attack.unwrap_or_else(|| weapon_attack(w, r)),
+        None => PLAYER_ATK,
+    }
 }
 
+/// 유효 방어력: 방어구 장착 시 롤값(있으면) 또는 범위 중앙값 보너스 + 기본 DEF.
 pub fn effective_defense(equipment: &PlayerEquipment, r: &ItemRegistry) -> i32 {
-    let bonus = equipment.armor.map(|a| armor_defense_bonus(a, r)).unwrap_or(0);
+    let bonus = match equipment.armor {
+        Some(a) => equipment.armor_rolled_defense.unwrap_or_else(|| armor_defense_bonus(a, r)),
+        None => 0,
+    };
     PLAYER_DEF + bonus
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct InventoryItem {
     pub kind: ItemKind,
+    /// 무기일 때 드롭 시 롤된 공격력. serde default → 구 세이브는 None.
+    #[serde(default)]
+    pub rolled_attack: Option<i32>,
+    /// 방어구일 때 드롭 시 롤된 방어보너스. serde default → 구 세이브는 None.
+    #[serde(default)]
+    pub rolled_defense: Option<i32>,
+}
+
+impl InventoryItem {
+    /// 롤값 없이 종류만으로 인벤토리 아이템을 만든다 (시작 로드아웃·테스트용).
+    pub fn new(kind: ItemKind) -> Self {
+        Self { kind, rolled_attack: None, rolled_defense: None }
+    }
 }
 
 #[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
@@ -746,6 +1015,12 @@ impl PlayerInventory {
 pub struct PlayerEquipment {
     pub weapon: Option<WeaponKind>,
     pub armor:  Option<ArmorKind>,
+    /// 장착한 무기의 롤된 공격력. serde default → 구 세이브는 None(중앙값 사용).
+    #[serde(default)]
+    pub weapon_rolled_attack: Option<i32>,
+    /// 장착한 방어구의 롤된 방어보너스. serde default → 구 세이브는 None.
+    #[serde(default)]
+    pub armor_rolled_defense: Option<i32>,
 }
 
 #[derive(Resource, Default)]
@@ -756,6 +1031,10 @@ pub struct Item {
     pub kind:   ItemKind,
     pub tile_x: usize,
     pub tile_y: usize,
+    /// 드롭 시 롤된 무기 공격력 (무기일 때만 Some).
+    pub rolled_attack: Option<i32>,
+    /// 드롭 시 롤된 방어구 방어보너스 (방어구일 때만 Some).
+    pub rolled_defense: Option<i32>,
 }
 
 #[derive(Event)]
@@ -775,25 +1054,45 @@ pub struct ItemDropEvent {
     pub monster_name: String,
 }
 
-/// 몬스터별 드롭 테이블 — 각 항목은 독립 확률로 롤된다
-pub fn monster_drop_table(monster_name: &str) -> &'static [(ItemKind, f32)] {
+/// 몬스터 드롭 카테고리. 구체적 아이템 대신 "무엇을" 떨구나만 표현한다.
+/// 실제 장비 아이템은 플레이어 레벨 가중(`weighted_tier_pick`)으로 선택되어
+/// 신규 아이템도 tier 만 맞으면 자동 편입되는 데이터 주도 방식이 된다.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DropCategory {
+    /// 특정 소비아이템 드롭.
+    Consumable(ConsumableKind),
+    /// 무기 드롭 — 종류는 레벨 가중으로 선택.
+    Weapon,
+    /// 방어구 드롭 — 종류는 레벨 가중으로 선택.
+    Armor,
+}
+
+/// 몬스터별 드롭 테이블 — 각 항목은 독립 확률로 롤된다.
+/// 몬스터는 드롭 빈도/카테고리(포션·장비드롭 여부)에만 영향을 주고,
+/// 구체적 장비 아이템·티어는 플레이어 레벨 가중으로 결정된다(역할 분리).
+/// specs/item-random-stats.md §7 / §7-B 참고
+pub fn monster_drop_table(monster_name: &str) -> &'static [(DropCategory, f32)] {
     match monster_name {
+        // 약한 몬스터 — 포션 위주, 장비 드롭 확률 낮음
         "고블린" => &[
-            (ItemKind::Consumable(ConsumableKind::HEALTH_POTION), 0.30),
-            (ItemKind::Weapon(WeaponKind::SWORD), 0.15),
+            (DropCategory::Consumable(ConsumableKind::HEALTH_POTION), 0.30),
+            (DropCategory::Weapon, 0.20),
+            (DropCategory::Armor,  0.15),
         ],
+        // 중간 몬스터 — 장비 드롭 확률 상승
         "오크" => &[
-            (ItemKind::Consumable(ConsumableKind::HEALTH_POTION), 0.40),
-            (ItemKind::Weapon(WeaponKind::SPEAR), 0.20),
-            (ItemKind::Armor(ArmorKind::LEATHER_ARMOR), 0.10),
+            (DropCategory::Consumable(ConsumableKind::HEALTH_POTION), 0.40),
+            (DropCategory::Weapon, 0.28),
+            (DropCategory::Armor,  0.22),
         ],
+        // 강한 몬스터 — 포션·장비 모두 높음
         "트롤" => &[
-            (ItemKind::Consumable(ConsumableKind::HEALTH_POTION), 0.50),
-            (ItemKind::Weapon(WeaponKind::BOW), 0.25),
-            (ItemKind::Armor(ArmorKind::LEATHER_ARMOR), 0.20),
+            (DropCategory::Consumable(ConsumableKind::HEALTH_POTION), 0.50),
+            (DropCategory::Weapon, 0.35),
+            (DropCategory::Armor,  0.28),
         ],
         _ => &[
-            (ItemKind::Consumable(ConsumableKind::HEALTH_POTION), 0.25),
+            (DropCategory::Consumable(ConsumableKind::HEALTH_POTION), 0.25),
         ],
     }
 }
@@ -846,17 +1145,49 @@ fn setup_glyph_fonts(mut commands: Commands, asset_server: Res<AssetServer>) {
     });
 }
 
+/// 한 번의 드롭 이벤트에 대해 실제로 떨어질 아이템들을 결정한다 (rng 주입 seam).
+/// 몬스터 드롭 테이블로 카테고리·빈도를 굴리고, 장비 카테고리는 플레이어 레벨
+/// 가중으로 구체 아이템·티어를 정한 뒤 스탯을 롤한다.
+/// 시스템과 분리해 통계적 커버 + 레벨별 분포 검증을 용이하게 한다.
+fn resolve_drops<R: Rng + ?Sized>(
+    monster_name: &str,
+    level: u32,
+    r: &ItemRegistry,
+    rng: &mut R,
+) -> Vec<(ItemKind, Option<i32>, Option<i32>)> {
+    let mut out = Vec::new();
+    for &(category, rate) in monster_drop_table(monster_name) {
+        if rng.gen::<f32>() >= rate { continue; }
+        let kind = match category {
+            DropCategory::Consumable(ck) => ItemKind::Consumable(ck),
+            DropCategory::Weapon => match pick_leveled_weapon(level, r, rng) {
+                Some(w) => ItemKind::Weapon(w),
+                None => continue,
+            },
+            DropCategory::Armor => match pick_leveled_armor(level, r, rng) {
+                Some(a) => ItemKind::Armor(a),
+                None => continue,
+            },
+        };
+        let (rolled_attack, rolled_defense) = roll_item_stats(kind, rng, r);
+        out.push((kind, rolled_attack, rolled_defense));
+    }
+    out
+}
+
 fn spawn_dropped_items(
     mut events: EventReader<ItemDropEvent>,
     mut commands: Commands,
     config: Res<GlyphConfig>,
     font_handles: Res<GlyphFontHandles>,
     quest_items: Res<QuestItemRegistry>,
+    progress: Res<crate::modules::player::PlayerProgress>,
 ) {
     let mut rng = rand::thread_rng();
     for event in events.read() {
-        for &(kind, rate) in monster_drop_table(&event.monster_name) {
-            if rng.gen::<f32>() >= rate { continue; }
+        for (kind, rolled_attack, rolled_defense) in
+            resolve_drops(&event.monster_name, progress.level, &quest_items, &mut rng)
+        {
             let pos = tile_to_world_coords(event.tile_x, event.tile_y);
             commands.spawn((
                 Text2dBundle {
@@ -865,13 +1196,13 @@ fn spawn_dropped_items(
                         TextStyle {
                             font: font_handles.for_style(config.style),
                             font_size: TILE_SIZE,
-                            color: kind.color(),
+                            color: item_display_color(kind, rolled_attack, rolled_defense, &quest_items),
                         },
                     ),
                     transform: Transform::from_xyz(pos.x, pos.y, Z_ITEM),
                     ..default()
                 },
-                Item { kind, tile_x: event.tile_x, tile_y: event.tile_y },
+                Item { kind, tile_x: event.tile_x, tile_y: event.tile_y, rolled_attack, rolled_defense },
             ));
         }
     }
@@ -921,15 +1252,15 @@ fn pickup_items(
         .map(|m| world_to_tile_coords(m.target))
         .unwrap_or_else(|| world_to_tile_coords(transform.translation));
 
-    let at_tile: Vec<(Entity, ItemKind, usize, usize)> = item_query.iter()
+    let at_tile: Vec<(Entity, ItemKind, usize, usize, Option<i32>, Option<i32>)> = item_query.iter()
         .filter(|(_, item)| item.tile_x == px && item.tile_y == py)
-        .map(|(e, item)| (e, item.kind, item.tile_x, item.tile_y))
+        .map(|(e, item)| (e, item.kind, item.tile_x, item.tile_y, item.rolled_attack, item.rolled_defense))
         .collect();
 
-    for (entity, kind, tx, ty) in at_tile {
+    for (entity, kind, tx, ty, rolled_attack, rolled_defense) in at_tile {
         match kind {
             ItemKind::Weapon(_) | ItemKind::Armor(_) | ItemKind::QuestItem(_) => {
-                inventory.items.push(InventoryItem { kind });
+                inventory.items.push(InventoryItem { kind, rolled_attack, rolled_defense });
             }
             ItemKind::Consumable(ck) => {
                 inventory.add_consumable(ck);
@@ -1062,68 +1393,86 @@ mod tests {
     }
 
     #[test]
-    fn 검의_공격력은_7이다() {
+    fn 검의_공격력은_범위_중앙값_7이다() {
+        // 검 5~9 → 중앙값 (5+9)/2 = 7
         assert_eq!(weapon_attack(WeaponKind::SWORD, qi()), 7);
     }
 
     #[test]
-    fn 창의_공격력은_9이다() {
-        assert_eq!(weapon_attack(WeaponKind::SPEAR, qi()), 9);
+    fn 창의_공격력은_범위_중앙값_10이다() {
+        // 창 8~12 → 중앙값 10
+        assert_eq!(weapon_attack(WeaponKind::SPEAR, qi()), 10);
     }
 
     #[test]
-    fn 활의_공격력은_5이다() {
-        assert_eq!(weapon_attack(WeaponKind::BOW, qi()), 5);
+    fn 활의_공격력은_범위_중앙값_9이다() {
+        // 활 7~11 → 중앙값 9
+        assert_eq!(weapon_attack(WeaponKind::BOW, qi()), 9);
     }
 
     #[test]
-    fn 가죽갑옷의_방어보너스는_2이다() {
-        assert_eq!(armor_defense_bonus(ArmorKind::LEATHER_ARMOR, qi()), 2);
+    fn 가죽갑옷의_방어보너스는_범위_중앙값_3이다() {
+        // 가죽 2~4 → 중앙값 3
+        assert_eq!(armor_defense_bonus(ArmorKind::LEATHER_ARMOR, qi()), 3);
     }
 
     #[test]
     fn 무기가_없으면_유효공격력은_플레이어_기본값이다() {
-        let eq = PlayerEquipment { weapon: None, armor: None };
+        let eq = PlayerEquipment { weapon: None, armor: None, ..Default::default() };
         assert_eq!(effective_attack(&eq, qi()), PLAYER_ATK);
     }
 
     #[test]
-    fn 검을_장착하면_유효공격력은_7이다() {
-        let eq = PlayerEquipment { weapon: Some(WeaponKind::SWORD), armor: None };
+    fn 롤값없이_검을_장착하면_유효공격력은_중앙값_7이다() {
+        // 롤값(weapon_rolled_attack) 이 None 이면 검 범위 중앙값 7 을 쓴다.
+        let eq = PlayerEquipment { weapon: Some(WeaponKind::SWORD), armor: None, ..Default::default() };
         assert_eq!(effective_attack(&eq, qi()), 7);
     }
 
     #[test]
     fn 방어구가_없으면_유효방어력은_플레이어_기본값이다() {
-        let eq = PlayerEquipment { weapon: None, armor: None };
+        let eq = PlayerEquipment { weapon: None, armor: None, ..Default::default() };
         assert_eq!(effective_defense(&eq, qi()), PLAYER_DEF);
     }
 
     #[test]
-    fn 가죽갑옷을_장착하면_방어보너스가_더해진다() {
-        let eq = PlayerEquipment { weapon: None, armor: Some(ArmorKind::LEATHER_ARMOR) };
-        assert_eq!(effective_defense(&eq, qi()), PLAYER_DEF + 2);
+    fn 롤값없이_가죽갑옷을_장착하면_방어보너스_중앙값이_더해진다() {
+        // 롤값 None → 가죽 범위 중앙값 3 이 더해진다.
+        let eq = PlayerEquipment { weapon: None, armor: Some(ArmorKind::LEATHER_ARMOR), ..Default::default() };
+        assert_eq!(effective_defense(&eq, qi()), PLAYER_DEF + 3);
     }
 
     #[test]
-    fn 고블린_드롭테이블에는_포션과_검이_있다() {
+    fn 고블린_드롭테이블은_포션과_무기방어구_카테고리로_구성된다() {
+        // 드롭 테이블은 카테고리·빈도만 정의하고, 구체 아이템/티어는 레벨이 정한다.
+        // 고블린은 포션 + 무기 + 방어구 드롭 카테고리를 갖는다.
         let t = monster_drop_table("고블린");
-        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Consumable(ConsumableKind::HEALTH_POTION))));
-        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Weapon(WeaponKind::SWORD))));
+        assert!(t.iter().any(|(c, _)| matches!(c, DropCategory::Consumable(ConsumableKind::HEALTH_POTION))));
+        assert!(t.iter().any(|(c, _)| matches!(c, DropCategory::Weapon)));
+        assert!(t.iter().any(|(c, _)| matches!(c, DropCategory::Armor)));
     }
 
     #[test]
-    fn 오크_드롭테이블에는_창과_방어구가_있다() {
-        let t = monster_drop_table("오크");
-        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Weapon(WeaponKind::SPEAR))));
-        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Armor(ArmorKind::LEATHER_ARMOR))));
+    fn 강한_몬스터일수록_장비드롭_확률이_높다() {
+        // 몬스터는 드롭 빈도에만 영향을 준다 — 무기 드롭 확률은 고블린<오크<트롤.
+        let weapon_rate = |name: &str| -> f32 {
+            monster_drop_table(name).iter()
+                .find(|(c, _)| matches!(c, DropCategory::Weapon))
+                .map(|(_, r)| *r).unwrap()
+        };
+        assert!(weapon_rate("고블린") < weapon_rate("오크"));
+        assert!(weapon_rate("오크") < weapon_rate("트롤"));
     }
 
     #[test]
-    fn 트롤_드롭테이블에는_활과_방어구가_있다() {
-        let t = monster_drop_table("트롤");
-        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Weapon(WeaponKind::BOW))));
-        assert!(t.iter().any(|(k, _)| matches!(k, ItemKind::Armor(ArmorKind::LEATHER_ARMOR))));
+    fn 포션드롭_확률은_강한_몬스터일수록_높다() {
+        let potion_rate = |name: &str| -> f32 {
+            monster_drop_table(name).iter()
+                .find(|(c, _)| matches!(c, DropCategory::Consumable(_)))
+                .map(|(_, r)| *r).unwrap()
+        };
+        assert!(potion_rate("고블린") < potion_rate("오크"));
+        assert!(potion_rate("오크") < potion_rate("트롤"));
     }
 
     #[test]
@@ -1371,18 +1720,37 @@ mod tests {
     }
 
     #[test]
-    fn 무기_ron은_세_종류를_로드한다() {
-        assert_eq!(qi().weapons.len(), 3);
+    fn 무기_ron은_5티어_풀세트_열다섯_종류를_로드한다() {
+        // 5티어 × 3종 = 15 무기.
+        assert_eq!(qi().weapons.len(), 15);
         assert!(qi().weapon(WeaponKind::SWORD).is_some());
         assert!(qi().weapon(WeaponKind::SPEAR).is_some());
         assert!(qi().weapon(WeaponKind::BOW).is_some());
+        // 각 티어 대표 신규 무기도 로드된다.
+        assert!(qi().weapon(WeaponKind("dagger")).is_some());
+        assert!(qi().weapon(WeaponKind("holy_sword")).is_some());
     }
 
     #[test]
-    fn 무기들의_공격력이_정확하다() {
-        assert_eq!(qi().weapon(WeaponKind::SWORD).unwrap().attack_power, 7);
-        assert_eq!(qi().weapon(WeaponKind::SPEAR).unwrap().attack_power, 9);
-        assert_eq!(qi().weapon(WeaponKind::BOW).unwrap().attack_power, 5);
+    fn 무기들의_공격력_범위와_중앙값이_정확하다() {
+        let sword = qi().weapon(WeaponKind::SWORD).unwrap();
+        assert_eq!((sword.attack_power_min, sword.attack_power_max), (5, 9));
+        assert_eq!(sword.attack_mid(), 7);
+        let spear = qi().weapon(WeaponKind::SPEAR).unwrap();
+        assert_eq!((spear.attack_power_min, spear.attack_power_max), (8, 12));
+        assert_eq!(spear.attack_mid(), 10);
+        let bow = qi().weapon(WeaponKind::BOW).unwrap();
+        assert_eq!((bow.attack_power_min, bow.attack_power_max), (7, 11));
+        assert_eq!(bow.attack_mid(), 9);
+    }
+
+    #[test]
+    fn 무기들의_티어가_정확하다() {
+        assert_eq!(qi().weapon(WeaponKind("dagger")).unwrap().tier, 1);
+        assert_eq!(qi().weapon(WeaponKind::SPEAR).unwrap().tier, 2);
+        assert_eq!(qi().weapon(WeaponKind("crossbow")).unwrap().tier, 3);
+        assert_eq!(qi().weapon(WeaponKind("greatsword")).unwrap().tier, 4);
+        assert_eq!(qi().weapon(WeaponKind("dragon_spear")).unwrap().tier, 5);
     }
 
     #[test]
@@ -1390,14 +1758,27 @@ mod tests {
         assert_eq!(qi().weapon(WeaponKind::SWORD).unwrap().element, Some("fire"));
         assert_eq!(qi().weapon(WeaponKind::SPEAR).unwrap().element, Some("ice"));
         assert_eq!(qi().weapon(WeaponKind::BOW).unwrap().element, Some("lightning"));
+        // 원소 없는 무기(단검/몽둥이/전쟁해머)도 있다.
+        assert_eq!(qi().weapon(WeaponKind("dagger")).unwrap().element, None);
     }
 
     #[test]
-    fn 방어구_ron은_가죽갑옷을_로드한다() {
-        assert_eq!(qi().armors.len(), 1);
+    fn 방어구_ron은_5티어_풀세트_열_종류를_로드한다() {
+        // 5티어 × 2종 = 10 방어구.
+        assert_eq!(qi().armors.len(), 10);
         let leather = qi().armor(ArmorKind::LEATHER_ARMOR).unwrap();
         assert_eq!(leather.display_name, "가죽 갑옷");
-        assert_eq!(leather.defense_bonus, 2);
+        assert_eq!((leather.defense_bonus_min, leather.defense_bonus_max), (2, 4));
+        assert_eq!(leather.defense_mid(), 3);
+    }
+
+    #[test]
+    fn 방어구들의_티어가_정확하다() {
+        assert_eq!(qi().armor(ArmorKind("cloth_armor")).unwrap().tier, 1);
+        assert_eq!(qi().armor(ArmorKind("light_armor")).unwrap().tier, 2);
+        assert_eq!(qi().armor(ArmorKind("scale_armor")).unwrap().tier, 3);
+        assert_eq!(qi().armor(ArmorKind("plate_armor")).unwrap().tier, 4);
+        assert_eq!(qi().armor(ArmorKind("paladin_armor")).unwrap().tier, 5);
     }
 
     #[test]
@@ -1471,7 +1852,7 @@ mod tests {
     fn 알수없는_몬스터의_드롭테이블은_포션만_반환한다() {
         let t = monster_drop_table("듣보잡몬스터");
         assert_eq!(t.len(), 1);
-        assert!(matches!(t[0].0, ItemKind::Consumable(ConsumableKind::HEALTH_POTION)));
+        assert!(matches!(t[0].0, DropCategory::Consumable(ConsumableKind::HEALTH_POTION)));
     }
 
     #[test]
@@ -1674,7 +2055,7 @@ mod tests {
     #[test]
     fn 장비가_바뀌면_플레이어_전투스탯이_갱신된다() {
         let mut app = App::new();
-        app.insert_resource(PlayerEquipment { weapon: Some(WeaponKind::SPEAR), armor: Some(ArmorKind::LEATHER_ARMOR) })
+        app.insert_resource(PlayerEquipment { weapon: Some(WeaponKind::SPEAR), armor: Some(ArmorKind::LEATHER_ARMOR), ..Default::default() })
             .insert_resource(build_test_registry());
         let e = app.world.spawn((
             Player,
@@ -1683,8 +2064,9 @@ mod tests {
         app.add_systems(Update, apply_equipment_stats);
         app.update();
         let stats = app.world.get::<CombatStats>(e).unwrap();
-        assert_eq!(stats.attack, 9, "창 공격력");
-        assert_eq!(stats.defense, PLAYER_DEF + 2, "가죽 갑옷 +2");
+        // 롤값 없는 장비 → 범위 중앙값: 창 8~12 → 10, 가죽 2~4 → +3.
+        assert_eq!(stats.attack, 10, "창 공격력 중앙값");
+        assert_eq!(stats.defense, PLAYER_DEF + 3, "가죽 갑옷 중앙값 +3");
     }
 
     #[test]
@@ -1699,7 +2081,7 @@ mod tests {
     #[test]
     fn 장비가_바뀌지_않으면_전투스탯을_재계산하지_않는다() {
         let mut app = App::new();
-        app.insert_resource(PlayerEquipment { weapon: Some(WeaponKind::SWORD), armor: None })
+        app.insert_resource(PlayerEquipment { weapon: Some(WeaponKind::SWORD), armor: None, ..Default::default() })
             .insert_resource(build_test_registry());
         let e = app.world.spawn((
             Player,
@@ -1724,6 +2106,7 @@ mod tests {
         let e = app.world.spawn(Item {
             kind: ItemKind::QuestItem(QuestItemKind("eternal_gem")),
             tile_x: 1, tile_y: 1,
+            rolled_attack: None, rolled_defense: None,
         }).id();
         app.world.send_event(crate::modules::quest::DespawnWorldItemEvent("eternal_gem".to_string()));
         app.update();
@@ -1740,10 +2123,12 @@ mod tests {
         let target = app.world.spawn(Item {
             kind: ItemKind::QuestItem(QuestItemKind("eternal_gem")),
             tile_x: 1, tile_y: 1,
+            rolled_attack: None, rolled_defense: None,
         }).id();
         let other = app.world.spawn(Item {
             kind: ItemKind::QuestItem(QuestItemKind("philosophers_stone")),
             tile_x: 2, tile_y: 2,
+            rolled_attack: None, rolled_defense: None,
         }).id();
         app.world.send_event(crate::modules::quest::DespawnWorldItemEvent("eternal_gem".to_string()));
         app.update();
@@ -1760,6 +2145,7 @@ mod tests {
         let e = app.world.spawn(Item {
             kind: ItemKind::QuestItem(QuestItemKind("eternal_gem")),
             tile_x: 1, tile_y: 1,
+            rolled_attack: None, rolled_defense: None,
         }).id();
         app.world.send_event(crate::modules::quest::DespawnWorldItemEvent("does_not_exist".to_string()));
         app.update();
@@ -1789,7 +2175,7 @@ mod tests {
     fn 턴_이벤트가_없으면_아이템을_줍지_않는다() {
         let mut app = pickup_app();
         spawn_player_at(&mut app, 5, 5);
-        let item = app.world.spawn(Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 5, tile_y: 5 }).id();
+        let item = app.world.spawn(Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 5, tile_y: 5, rolled_attack: None, rolled_defense: None }).id();
         app.update(); // PlayerActedEvent 없음 → 반환
         assert!(app.world.get_entity(item).is_some());
         assert!(app.world.resource::<PlayerInventory>().items.is_empty());
@@ -1799,7 +2185,7 @@ mod tests {
     fn 플레이어가_없으면_아이템을_줍지_않는다() {
         // 턴 이벤트는 있지만 플레이어가 없으면 get_single Err → 조용히 반환 (panic 없음).
         let mut app = pickup_app();
-        app.world.spawn(Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 5, tile_y: 5 });
+        app.world.spawn(Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 5, tile_y: 5, rolled_attack: None, rolled_defense: None });
         app.world.send_event(PlayerActedEvent);
         app.update();
         assert!(app.world.resource::<PlayerInventory>().items.is_empty());
@@ -1809,7 +2195,7 @@ mod tests {
     fn 주운_무기는_인벤토리에_들어간다() {
         let mut app = pickup_app();
         spawn_player_at(&mut app, 5, 5);
-        app.world.spawn(Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 5, tile_y: 5 });
+        app.world.spawn(Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 5, tile_y: 5, rolled_attack: None, rolled_defense: None });
         app.world.send_event(PlayerActedEvent);
         app.update();
         let inv = app.world.resource::<PlayerInventory>();
@@ -1821,7 +2207,7 @@ mod tests {
     fn 주운_방어구는_인벤토리에_들어간다() {
         let mut app = pickup_app();
         spawn_player_at(&mut app, 5, 5);
-        app.world.spawn(Item { kind: ItemKind::Armor(ArmorKind::LEATHER_ARMOR), tile_x: 5, tile_y: 5 });
+        app.world.spawn(Item { kind: ItemKind::Armor(ArmorKind::LEATHER_ARMOR), tile_x: 5, tile_y: 5, rolled_attack: None, rolled_defense: None });
         app.world.send_event(PlayerActedEvent);
         app.update();
         assert_eq!(app.world.resource::<PlayerInventory>().items.len(), 1);
@@ -1831,7 +2217,7 @@ mod tests {
     fn 주운_소비아이템은_인벤토리에서_누적된다() {
         let mut app = pickup_app();
         spawn_player_at(&mut app, 5, 5);
-        app.world.spawn(Item { kind: ItemKind::Consumable(ConsumableKind::HEALTH_POTION), tile_x: 5, tile_y: 5 });
+        app.world.spawn(Item { kind: ItemKind::Consumable(ConsumableKind::HEALTH_POTION), tile_x: 5, tile_y: 5, rolled_attack: None, rolled_defense: None });
         app.world.send_event(PlayerActedEvent);
         app.update();
         let inv = app.world.resource::<PlayerInventory>();
@@ -1843,7 +2229,7 @@ mod tests {
     fn 퀘스트아이템을_주우면_획득이벤트가_발행되고_수집된다() {
         let mut app = pickup_app();
         spawn_player_at(&mut app, 5, 5);
-        app.world.spawn(Item { kind: ItemKind::QuestItem(QuestItemKind("eternal_gem")), tile_x: 5, tile_y: 5 });
+        app.world.spawn(Item { kind: ItemKind::QuestItem(QuestItemKind("eternal_gem")), tile_x: 5, tile_y: 5, rolled_attack: None, rolled_defense: None });
         app.world.send_event(PlayerActedEvent);
         app.update();
         assert_eq!(app.world.resource::<PlayerInventory>().items.len(), 1);
@@ -1855,7 +2241,7 @@ mod tests {
     fn 플레이어_타일에_없는_아이템은_줍지_않는다() {
         let mut app = pickup_app();
         spawn_player_at(&mut app, 5, 5);
-        app.world.spawn(Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 9, tile_y: 9 });
+        app.world.spawn(Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 9, tile_y: 9, rolled_attack: None, rolled_defense: None });
         app.world.send_event(PlayerActedEvent);
         app.update();
         assert!(app.world.resource::<PlayerInventory>().items.is_empty(), "다른 타일 아이템은 안 주움");
@@ -1868,13 +2254,15 @@ mod tests {
         let pos = tile_to_world_coords(5, 5).extend(0.0);
         let target = tile_to_world_coords(7, 7).extend(0.0);
         app.world.spawn((Player, Transform::from_translation(pos), MovingTo { target }));
-        app.world.spawn(Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 7, tile_y: 7 });
+        app.world.spawn(Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 7, tile_y: 7, rolled_attack: None, rolled_defense: None });
         app.world.send_event(PlayerActedEvent);
         app.update();
         assert_eq!(app.world.resource::<PlayerInventory>().items.len(), 1);
     }
 
     // ── spawn_dropped_items (rng 기반 — 통계적 커버) ──
+    use crate::modules::player::PlayerProgress;
+
     #[test]
     fn 드롭_이벤트가_충분히_많으면_아이템이_월드에_스폰된다() {
         let mut app = App::new();
@@ -1883,6 +2271,7 @@ mod tests {
                 ascii: Handle::default(), unicode: Handle::default(), game_icon: Handle::default(),
             })
             .insert_resource(build_test_registry())
+            .insert_resource(PlayerProgress::default())
             .add_event::<ItemDropEvent>()
             .add_systems(Update, spawn_dropped_items);
         // 트롤은 포션 0.5 확률 — 200개 이벤트면 사실상 확실히 일부 드롭
@@ -1904,7 +2293,7 @@ mod tests {
             })
             .insert_resource(build_test_registry());
         let e = app.world.spawn((
-            Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 0, tile_y: 0 },
+            Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 0, tile_y: 0, rolled_attack: None, rolled_defense: None },
             Text::from_section("/", TextStyle::default()),
         )).id();
         app.add_systems(Update, update_item_glyphs);
@@ -1922,7 +2311,7 @@ mod tests {
             })
             .insert_resource(build_test_registry());
         let e = app.world.spawn((
-            Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 0, tile_y: 0 },
+            Item { kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 0, tile_y: 0, rolled_attack: None, rolled_defense: None },
             Text::from_section("X", TextStyle::default()),
         )).id();
         app.add_systems(Update, update_item_glyphs);
@@ -2186,5 +2575,510 @@ mod tests {
     fn 아이템플러그인이_정상적으로_빌드된다() {
         let mut app = App::new();
         app.add_plugins(ItemPlugin::default());
+    }
+
+    // ── 레어도 등급 (Rarity::from_roll) — §2 백분위 경계 ─────────────────────
+
+    #[test]
+    fn 최저롤은_일반등급이다() {
+        // p = 0.0 < 0.40 → Common
+        assert_eq!(Rarity::from_roll(0, 0, 100), Rarity::Common);
+    }
+
+    #[test]
+    fn 백분위_40미만은_일반_40이상은_고급이다() {
+        // 경계 0.40: 미만(39%) Common, 정확히 40% Uncommon.
+        assert_eq!(Rarity::from_roll(39, 0, 100), Rarity::Common);
+        assert_eq!(Rarity::from_roll(40, 0, 100), Rarity::Uncommon);
+    }
+
+    #[test]
+    fn 백분위_70미만은_고급_70이상은_희귀이다() {
+        assert_eq!(Rarity::from_roll(69, 0, 100), Rarity::Uncommon);
+        assert_eq!(Rarity::from_roll(70, 0, 100), Rarity::Rare);
+    }
+
+    #[test]
+    fn 백분위_90미만은_희귀_90이상은_영웅이다() {
+        assert_eq!(Rarity::from_roll(89, 0, 100), Rarity::Rare);
+        assert_eq!(Rarity::from_roll(90, 0, 100), Rarity::Epic);
+    }
+
+    #[test]
+    fn 백분위_98미만은_영웅_98이상은_전설이다() {
+        assert_eq!(Rarity::from_roll(97, 0, 100), Rarity::Epic);
+        assert_eq!(Rarity::from_roll(98, 0, 100), Rarity::Legendary);
+    }
+
+    #[test]
+    fn 최고롤은_전설등급이다() {
+        // p = 1.0 → Legendary
+        assert_eq!(Rarity::from_roll(100, 0, 100), Rarity::Legendary);
+    }
+
+    #[test]
+    fn 최소최대가_같으면_백분위_0으로_일반등급이다() {
+        // min == max → 분모 0, 백분위 0 으로 처리(Common).
+        assert_eq!(Rarity::from_roll(5, 5, 5), Rarity::Common);
+    }
+
+    #[test]
+    fn 각_레어도의_한글이름이_정확하다() {
+        assert_eq!(Rarity::Common.name_ko(),    "일반");
+        assert_eq!(Rarity::Uncommon.name_ko(),  "고급");
+        assert_eq!(Rarity::Rare.name_ko(),      "희귀");
+        assert_eq!(Rarity::Epic.name_ko(),      "영웅");
+        assert_eq!(Rarity::Legendary.name_ko(), "전설");
+    }
+
+    #[test]
+    fn 각_레어도의_색이_스펙과_일치한다() {
+        assert_eq!(Rarity::Common.color(),    Color::rgb(0.7, 0.7, 0.7));
+        assert_eq!(Rarity::Uncommon.color(),  Color::rgb(0.3, 0.9, 0.3));
+        assert_eq!(Rarity::Rare.color(),      Color::rgb(0.3, 0.5, 1.0));
+        assert_eq!(Rarity::Epic.color(),      Color::rgb(0.7, 0.3, 1.0));
+        assert_eq!(Rarity::Legendary.color(), Color::rgb(1.0, 0.8, 0.2));
+    }
+
+    // ── weapon_rarity / armor_rarity ────────────────────────────────────────
+
+    #[test]
+    fn 무기_레어도는_롤값과_무기범위로_계산된다() {
+        // 검 5~9. 롤 5(최저)→일반, 롤 9(최고)→전설.
+        assert_eq!(weapon_rarity(WeaponKind::SWORD, 5, qi()), Some(Rarity::Common));
+        assert_eq!(weapon_rarity(WeaponKind::SWORD, 9, qi()), Some(Rarity::Legendary));
+    }
+
+    #[test]
+    fn 방어구_레어도는_롤값과_방어구범위로_계산된다() {
+        // 가죽 2~4. 롤 2→일반, 롤 4→전설.
+        assert_eq!(armor_rarity(ArmorKind::LEATHER_ARMOR, 2, qi()), Some(Rarity::Common));
+        assert_eq!(armor_rarity(ArmorKind::LEATHER_ARMOR, 4, qi()), Some(Rarity::Legendary));
+    }
+
+    #[test]
+    fn 미등록_무기방어구의_레어도는_없음이다() {
+        assert_eq!(weapon_rarity(WeaponKind("nope"), 5, qi()), None);
+        assert_eq!(armor_rarity(ArmorKind("nope"), 5, qi()), None);
+    }
+
+    // ── roll_item_stats: 범위 내 롤 ────────────────────────────────────────
+
+    #[test]
+    fn 무기_롤은_무기범위_안의_공격력만_방어는_없음을_반환한다() {
+        let mut rng = rand::thread_rng();
+        let m = qi().weapon(WeaponKind::SWORD).unwrap();
+        for _ in 0..500 {
+            let (atk, def) = roll_item_stats(ItemKind::Weapon(WeaponKind::SWORD), &mut rng, qi());
+            let atk = atk.expect("무기는 공격력이 롤된다");
+            assert!(atk >= m.attack_power_min, "롤 {atk} 이 최소 미만");
+            assert!(atk <= m.attack_power_max, "롤 {atk} 이 최대 초과");
+            assert!(def.is_none(), "무기는 방어롤이 없다");
+        }
+    }
+
+    #[test]
+    fn 방어구_롤은_방어범위_안의_방어보너스만_공격은_없음을_반환한다() {
+        let mut rng = rand::thread_rng();
+        let m = qi().armor(ArmorKind::LEATHER_ARMOR).unwrap();
+        for _ in 0..500 {
+            let (atk, def) = roll_item_stats(ItemKind::Armor(ArmorKind::LEATHER_ARMOR), &mut rng, qi());
+            let def = def.expect("방어구는 방어보너스가 롤된다");
+            assert!(def >= m.defense_bonus_min, "롤 {def} 이 최소 미만");
+            assert!(def <= m.defense_bonus_max, "롤 {def} 이 최대 초과");
+            assert!(atk.is_none(), "방어구는 공격롤이 없다");
+        }
+    }
+
+    #[test]
+    fn 소비_퀘스트아이템은_롤되지_않는다() {
+        let mut rng = rand::thread_rng();
+        assert_eq!(roll_item_stats(ItemKind::Consumable(ConsumableKind::HEALTH_POTION), &mut rng, qi()), (None, None));
+        assert_eq!(roll_item_stats(ItemKind::QuestItem(QuestItemKind("eternal_gem")), &mut rng, qi()), (None, None));
+    }
+
+    #[test]
+    fn 미등록_무기방어구_롤은_없음을_반환한다() {
+        let mut rng = rand::thread_rng();
+        assert_eq!(roll_item_stats(ItemKind::Weapon(WeaponKind("nope")), &mut rng, qi()), (None, None));
+        assert_eq!(roll_item_stats(ItemKind::Armor(ArmorKind("nope")), &mut rng, qi()), (None, None));
+    }
+
+    // ── 레벨 스케일 드롭: tier_band_center (§7-B) ──────────────────────────────
+
+    #[test]
+    fn 티어밴드중심은_3레벨마다_한단계씩_오른다() {
+        // (1 + (L-1)/3).clamp(1,5): 1~3→1, 4~6→2, 7~9→3, 10~12→4.
+        assert_eq!(tier_band_center(1), 1);
+        assert_eq!(tier_band_center(3), 1, "3레벨까지는 여전히 중심 1");
+        assert_eq!(tier_band_center(4), 2, "4레벨에서 중심 2 로 상승");
+        assert_eq!(tier_band_center(6), 2);
+        assert_eq!(tier_band_center(7), 3, "7레벨에서 중심 3");
+        assert_eq!(tier_band_center(10), 4);
+    }
+
+    #[test]
+    fn 티어밴드중심은_상한_5로_클램프된다() {
+        // 13레벨에서 raw=5, 그 이상은 5 로 클램프.
+        assert_eq!(tier_band_center(13), 5);
+        assert_eq!(tier_band_center(100), 5, "고레벨도 상한 5");
+    }
+
+    // ── 레벨 스케일 드롭: tier_weight 각 d 구간 (§7-B 표) ──────────────────────
+
+    #[test]
+    fn 티어가_중심보다_2이상_높으면_가중치는_0이다() {
+        // center(레벨1)=1. tier 3 → d=+2 → 0.0 (게이트). tier 5 → d=+4 → 0.0.
+        assert_eq!(tier_weight(3, 1), 0.0);
+        assert_eq!(tier_weight(5, 1), 0.0);
+    }
+
+    #[test]
+    fn 티어가_중심보다_한단계_높으면_가중치는_절반이다() {
+        // center(레벨1)=1. tier 2 → d=+1 → 0.5.
+        assert_eq!(tier_weight(2, 1), 0.5);
+    }
+
+    #[test]
+    fn 티어가_중심과_같으면_가중치는_최대1이다() {
+        // center(레벨1)=1. tier 1 → d=0 → 1.0.
+        assert_eq!(tier_weight(1, 1), 1.0);
+    }
+
+    #[test]
+    fn 티어가_중심보다_한단계_낮으면_가중치는_06이다() {
+        // center(레벨4)=2. tier 1 → d=-1 → 0.6.
+        assert_eq!(tier_weight(1, 4), 0.6);
+    }
+
+    #[test]
+    fn 티어가_중심보다_두단계_낮으면_가중치는_03이다() {
+        // center(레벨7)=3. tier 1 → d=-2 → 0.3.
+        assert_eq!(tier_weight(1, 7), 0.3);
+    }
+
+    #[test]
+    fn 티어가_중심보다_세단계_이상_낮으면_가중치는_01로_줄어든다() {
+        // center(레벨10)=4. tier 1 → d=-3 → 0.1. center(레벨13)=5 → tier 1 d=-4 → 0.1.
+        assert_eq!(tier_weight(1, 10), 0.1);
+        assert_eq!(tier_weight(1, 13), 0.1);
+    }
+
+    // ── 레벨 스케일 드롭: weighted_tier_pick ──────────────────────────────────
+
+    #[test]
+    fn 가중추첨은_양수가중치_티어만_고른다() {
+        // 레벨1 중심1. 후보 [1,2,3,4,5] → 1(1.0),2(0.5) 만 양수, 3+ 는 0.
+        let mut rng = rand::thread_rng();
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..2000 {
+            let t = weighted_tier_pick(1, &[1, 2, 3, 4, 5], &mut rng).expect("양수 가중치 존재");
+            seen.insert(t);
+        }
+        assert!(seen.contains(&1), "적정 티어 1 은 뽑혀야 한다");
+        assert!(seen.contains(&2), "한 단계 위 티어 2 도 가끔 뽑힌다");
+        assert!(!seen.contains(&3), "게이트된 티어 3 은 절대 안 뽑힌다");
+        assert!(!seen.contains(&4));
+        assert!(!seen.contains(&5));
+    }
+
+    #[test]
+    fn 모든_후보가_게이트되면_가중추첨은_없음이다() {
+        // 레벨1 중심1. 후보가 전부 d>=+2(가중치 0) → 합 0 → None.
+        let mut rng = rand::thread_rng();
+        assert_eq!(weighted_tier_pick(1, &[3, 4, 5], &mut rng), None);
+    }
+
+    #[test]
+    fn 후보가_비어있으면_가중추첨은_없음이다() {
+        let mut rng = rand::thread_rng();
+        assert_eq!(weighted_tier_pick(1, &[], &mut rng), None);
+    }
+
+    #[test]
+    fn 단일_티어만_있으면_항상_그_티어를_고른다() {
+        let mut rng = rand::thread_rng();
+        for _ in 0..50 {
+            assert_eq!(weighted_tier_pick(1, &[1], &mut rng), Some(1));
+        }
+    }
+
+    #[test]
+    fn 마지막_catch_all_후보도_정상적으로_선택된다() {
+        // 레벨1 양수 가중치 후보 [1(1.0), 2(0.5)]. 충분히 추첨하면 앞 후보의
+        // `roll < w` 가 모두 False 인 경우(마지막 catch-all 2 선택)도 반드시 발생한다.
+        let mut rng = rand::thread_rng();
+        let mut saw_first = false;
+        let mut saw_last = false;
+        for _ in 0..2000 {
+            let t = weighted_tier_pick(1, &[1, 2], &mut rng).unwrap();
+            if t == 1 { saw_first = true; }
+            if t == 2 { saw_last = true; }
+        }
+        assert!(saw_first, "앞 후보(티어1) 선택 경로");
+        assert!(saw_last, "마지막 catch-all(티어2) 선택 경로");
+    }
+
+    // ── 레벨 스케일 드롭: pick_leveled_weapon / armor ─────────────────────────
+
+    #[test]
+    fn 저레벨_플레이어는_고티어_무기를_받지_못한다() {
+        // 레벨1 중심1. T3+ 무기(d>=+2)는 가중치 0 → 절대 안 나온다.
+        let mut rng = rand::thread_rng();
+        for _ in 0..3000 {
+            let w = pick_leveled_weapon(1, qi(), &mut rng).expect("저레벨도 T1/T2 는 나온다");
+            let tier = qi().weapon(w).unwrap().tier;
+            assert!(tier <= 2, "레벨1 에서 T{tier} 무기가 나오면 안 된다");
+        }
+    }
+
+    #[test]
+    fn 저레벨_플레이어는_고티어_방어구를_받지_못한다() {
+        let mut rng = rand::thread_rng();
+        for _ in 0..3000 {
+            let a = pick_leveled_armor(1, qi(), &mut rng).expect("저레벨도 T1/T2 는 나온다");
+            let tier = qi().armor(a).unwrap().tier;
+            assert!(tier <= 2, "레벨1 에서 T{tier} 방어구가 나오면 안 된다");
+        }
+    }
+
+    #[test]
+    fn 무기가_없는_레지스트리에서는_레벨드롭이_없음이다() {
+        // 후보 티어가 비어 weighted_tier_pick 이 None → pick_leveled_weapon None.
+        let empty = ItemRegistry::default();
+        let mut rng = rand::thread_rng();
+        assert_eq!(pick_leveled_weapon(1, &empty, &mut rng), None);
+    }
+
+    #[test]
+    fn 방어구가_없는_레지스트리에서는_레벨드롭이_없음이다() {
+        let empty = ItemRegistry::default();
+        let mut rng = rand::thread_rng();
+        assert_eq!(pick_leveled_armor(1, &empty, &mut rng), None);
+    }
+
+    #[test]
+    fn 고레벨_플레이어는_저티어_무기비중이_크게_감소한다() {
+        // 레벨13 중심5. T1(d=-4)=0.1 vs T5(d=0)=1.0 → T1 빈도 ≪ T5 빈도.
+        let mut rng = rand::thread_rng();
+        let mut t1 = 0;
+        let mut t5 = 0;
+        for _ in 0..5000 {
+            let w = pick_leveled_weapon(13, qi(), &mut rng).unwrap();
+            match qi().weapon(w).unwrap().tier {
+                1 => t1 += 1,
+                5 => t5 += 1,
+                _ => {}
+            }
+        }
+        assert!(t5 > t1 * 3, "고레벨에선 T5({t5}) 가 T1({t1}) 보다 훨씬 흔해야 한다");
+    }
+
+    // ── 레벨 스케일 드롭: resolve_drops (드롭 흐름) ───────────────────────────
+
+    #[test]
+    fn 드롭_해소는_저레벨에서_고티어_장비를_절대_떨구지_않는다() {
+        // 트롤(무기/방어구 드롭 확률 높음) × 레벨1 → 장비는 T1/T2 만 나온다.
+        let mut rng = rand::thread_rng();
+        let mut weapon_drops = 0;
+        for _ in 0..2000 {
+            for (kind, _, _) in resolve_drops("트롤", 1, qi(), &mut rng) {
+                match kind {
+                    ItemKind::Weapon(w) => {
+                        weapon_drops += 1;
+                        assert!(qi().weapon(w).unwrap().tier <= 2, "레벨1 장비드롭은 T1/T2");
+                    }
+                    ItemKind::Armor(a) => {
+                        assert!(qi().armor(a).unwrap().tier <= 2, "레벨1 장비드롭은 T1/T2");
+                    }
+                    ItemKind::Consumable(_) | ItemKind::QuestItem(_) => {}
+                }
+            }
+        }
+        assert!(weapon_drops > 0, "충분한 시도면 무기 드롭이 발생한다");
+    }
+
+    #[test]
+    fn 드롭_해소는_무기드롭시_공격력을_롤하고_방어구드롭시_방어를_롤한다() {
+        // 장비가 떨어지면 Phase1 의 roll_item_stats 로 스탯이 채워진다.
+        let mut rng = rand::thread_rng();
+        let mut saw_weapon_roll = false;
+        let mut saw_armor_roll = false;
+        for _ in 0..3000 {
+            for (kind, atk, def) in resolve_drops("트롤", 1, qi(), &mut rng) {
+                match kind {
+                    ItemKind::Weapon(_) => {
+                        assert!(atk.is_some(), "무기는 공격력이 롤된다");
+                        assert!(def.is_none(), "무기는 방어롤이 없다");
+                        saw_weapon_roll = true;
+                    }
+                    ItemKind::Armor(_) => {
+                        assert!(def.is_some(), "방어구는 방어가 롤된다");
+                        assert!(atk.is_none(), "방어구는 공격롤이 없다");
+                        saw_armor_roll = true;
+                    }
+                    // 트롤은 무기/방어구/포션만 드롭 — 포션은 롤 없음.
+                    _ => {
+                        assert!(atk.is_none(), "포션은 공격롤 없음");
+                        assert!(def.is_none(), "포션은 방어롤 없음");
+                    }
+                }
+            }
+        }
+        assert!(saw_weapon_roll, "무기 드롭 + 공격력 롤 확인");
+        assert!(saw_armor_roll, "방어구 드롭 + 방어 롤 확인");
+    }
+
+    #[test]
+    fn 장비가_없는_레지스트리면_장비카테고리_드롭은_건너뛴다() {
+        // pick_leveled_weapon/armor 가 None → resolve_drops 의 `None => continue` 분기.
+        // 빈 레지스트리라 무기/방어구는 못 만들고 포션만 나올 수 있다.
+        let empty = ItemRegistry::default();
+        let mut rng = rand::thread_rng();
+        for _ in 0..2000 {
+            for (kind, _, _) in resolve_drops("트롤", 1, &empty, &mut rng) {
+                assert!(matches!(kind, ItemKind::Consumable(_)), "장비 없으면 포션만");
+            }
+        }
+    }
+
+    #[test]
+    fn 알수없는_몬스터는_장비를_드롭하지_않고_포션만_떨군다() {
+        // 기타 몬스터 테이블엔 포션만 있다 → 무기/방어구는 절대 안 나온다.
+        let mut rng = rand::thread_rng();
+        for _ in 0..1000 {
+            for (kind, _, _) in resolve_drops("기타몬스터", 5, qi(), &mut rng) {
+                assert!(
+                    matches!(kind, ItemKind::Consumable(_)),
+                    "기타 몬스터는 포션만 드롭",
+                );
+            }
+        }
+    }
+
+    // ── item_display_color: 드롭 글리프 색 ─────────────────────────────────
+
+    #[test]
+    fn 롤된_무기의_표시색은_레어도색이다() {
+        // 검 5~9, 롤 9 → 전설(금색).
+        let c = item_display_color(ItemKind::Weapon(WeaponKind::SWORD), Some(9), None, qi());
+        assert_eq!(c, Rarity::Legendary.color());
+    }
+
+    #[test]
+    fn 롤된_방어구의_표시색은_레어도색이다() {
+        let c = item_display_color(ItemKind::Armor(ArmorKind::LEATHER_ARMOR), None, Some(2), qi());
+        assert_eq!(c, Rarity::Common.color());
+    }
+
+    #[test]
+    fn 롤없는_무기방어구의_표시색은_카테고리색으로_폴백한다() {
+        let w = item_display_color(ItemKind::Weapon(WeaponKind::SWORD), None, None, qi());
+        assert_eq!(w, ItemKind::Weapon(WeaponKind::SWORD).color());
+        let a = item_display_color(ItemKind::Armor(ArmorKind::LEATHER_ARMOR), None, None, qi());
+        assert_eq!(a, ItemKind::Armor(ArmorKind::LEATHER_ARMOR).color());
+    }
+
+    #[test]
+    fn 미등록_무기방어구의_표시색은_카테고리색으로_폴백한다() {
+        // 롤값은 있으나 range 조회 실패 → 카테고리 색.
+        let w = item_display_color(ItemKind::Weapon(WeaponKind("nope")), Some(5), None, qi());
+        assert_eq!(w, ItemKind::Weapon(WeaponKind("nope")).color());
+        let a = item_display_color(ItemKind::Armor(ArmorKind("nope")), None, Some(5), qi());
+        assert_eq!(a, ItemKind::Armor(ArmorKind("nope")).color());
+    }
+
+    #[test]
+    fn 소비_퀘스트아이템의_표시색은_항상_카테고리색이다() {
+        let c = item_display_color(ItemKind::Consumable(ConsumableKind::HEALTH_POTION), None, None, qi());
+        assert_eq!(c, ItemKind::Consumable(ConsumableKind::HEALTH_POTION).color());
+        let q = item_display_color(ItemKind::QuestItem(QuestItemKind("eternal_gem")), None, None, qi());
+        assert_eq!(q, ItemKind::QuestItem(QuestItemKind("eternal_gem")).color());
+    }
+
+    // ── effective_attack/defense: 롤값 우선 ─────────────────────────────────
+
+    #[test]
+    fn 롤값이_있으면_유효공격력은_롤값을_쓴다() {
+        let eq = PlayerEquipment {
+            weapon: Some(WeaponKind::SWORD), armor: None,
+            weapon_rolled_attack: Some(9), armor_rolled_defense: None,
+        };
+        assert_eq!(effective_attack(&eq, qi()), 9, "중앙값 7 이 아니라 롤값 9");
+    }
+
+    #[test]
+    fn 롤값이_있으면_유효방어력은_롤값을_더한다() {
+        let eq = PlayerEquipment {
+            weapon: None, armor: Some(ArmorKind::LEATHER_ARMOR),
+            weapon_rolled_attack: None, armor_rolled_defense: Some(4),
+        };
+        assert_eq!(effective_defense(&eq, qi()), PLAYER_DEF + 4, "중앙값 3 이 아니라 롤값 4");
+    }
+
+    // ── pickup_items: rolled 이전 ──────────────────────────────────────────
+
+    #[test]
+    fn 주운_무기는_롤된_공격력을_인벤토리로_이전한다() {
+        let mut app = pickup_app();
+        spawn_player_at(&mut app, 5, 5);
+        app.world.spawn(Item {
+            kind: ItemKind::Weapon(WeaponKind::SWORD), tile_x: 5, tile_y: 5,
+            rolled_attack: Some(8), rolled_defense: None,
+        });
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        let inv = app.world.resource::<PlayerInventory>();
+        assert_eq!(inv.items[0].rolled_attack, Some(8), "드롭 롤값이 인벤토리로 이전됨");
+    }
+
+    #[test]
+    fn 주운_방어구는_롤된_방어보너스를_인벤토리로_이전한다() {
+        let mut app = pickup_app();
+        spawn_player_at(&mut app, 5, 5);
+        app.world.spawn(Item {
+            kind: ItemKind::Armor(ArmorKind::LEATHER_ARMOR), tile_x: 5, tile_y: 5,
+            rolled_attack: None, rolled_defense: Some(4),
+        });
+        app.world.send_event(PlayerActedEvent);
+        app.update();
+        let inv = app.world.resource::<PlayerInventory>();
+        assert_eq!(inv.items[0].rolled_defense, Some(4));
+    }
+
+    // ── 세이브 호환: rolled 없는 구 데이터 역직렬화 ─────────────────────────
+
+    #[test]
+    fn rolled필드없는_구_인벤토리아이템도_역직렬화된다() {
+        // 구 세이브: rolled_attack/rolled_defense 필드가 없는 RON → serde default 로 None.
+        let old = "(kind: Weapon(\"sword\"))";
+        let parsed: InventoryItem = ron::de::from_str(old).expect("구 InventoryItem 역직렬화");
+        assert!(matches!(parsed.kind, ItemKind::Weapon(WeaponKind("sword"))));
+        assert_eq!(parsed.rolled_attack, None);
+        assert_eq!(parsed.rolled_defense, None);
+    }
+
+    #[test]
+    fn rolled필드없는_구_장비도_역직렬화된다() {
+        let old = "(weapon: Some(\"sword\"), armor: None)";
+        let parsed: PlayerEquipment = ron::de::from_str(old).expect("구 PlayerEquipment 역직렬화");
+        assert_eq!(parsed.weapon, Some(WeaponKind::SWORD));
+        assert_eq!(parsed.weapon_rolled_attack, None);
+        assert_eq!(parsed.armor_rolled_defense, None);
+    }
+
+    #[test]
+    fn rolled필드포함_인벤토리아이템은_직렬화_왕복이_보존된다() {
+        let item = InventoryItem { kind: ItemKind::Weapon(WeaponKind::SWORD), rolled_attack: Some(8), rolled_defense: None };
+        let s = ron::ser::to_string(&item).unwrap();
+        let parsed: InventoryItem = ron::de::from_str(&s).unwrap();
+        assert_eq!(parsed.rolled_attack, Some(8));
+    }
+
+    #[test]
+    fn 생성자로_만든_인벤토리아이템은_롤값이_없다() {
+        let item = InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD));
+        assert_eq!(item.rolled_attack, None);
+        assert_eq!(item.rolled_defense, None);
     }
 }

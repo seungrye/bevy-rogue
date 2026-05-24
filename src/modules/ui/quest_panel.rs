@@ -415,7 +415,7 @@ mod tests {
         let (reg, st) = make_registry_and_state("active");
         let mut inventory = default_inventory();
         let _ = qi();
-        inventory.items.push(InventoryItem { kind: ItemKind::QuestItem(QuestItemKind("eternal_gem")) });
+        inventory.items.push(InventoryItem::new(ItemKind::QuestItem(QuestItemKind("eternal_gem"))));
         let sections = build_quest_sections(&reg, &st, &inventory, &default_world(), &DiscoveredMarkers::default(), &Handle::default(), qi());
         let all_text = all_text(sections);
         assert!(all_text.contains("완료: 영원의 보석 1/1"));
