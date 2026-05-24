@@ -7,7 +7,7 @@ use crate::modules::{
         draw_map, Map, MapType, OccupiedTiles, Rect,
         tile_to_world_coords, world_to_tile_coords,
         MAP_HEIGHT, MAP_WIDTH, TILE_SIZE,
-        MapSystemSet, VillagerRespawnEvent, PlayerActedEvent, BumpTileEvent,
+        MapSystemSet, VillagerRespawnEvent, PlayerActedEvent, BumpTileEvent, ExplosionEvent,
     },
     player::{Player, MovingTo, MoveQueue, PlayerSystemSet, LERP_SPEED},
     ui::{LogMessage, minimap::{DiscoveredMarkers, MarkerKind}},
@@ -366,6 +366,7 @@ fn handle_bump(
     mut close_portal: EventWriter<crate::modules::zone::CloseQuestPortalEvent>,
     mut despawn_item: EventWriter<DespawnWorldItemEvent>,
     mut spawn_guards: EventWriter<SpawnGuardEvent>,
+    mut explode: EventWriter<ExplosionEvent>,
     mut shop_open: EventWriter<crate::modules::ui::shop::ShopOpenEvent>,
     quest_items: Res<crate::modules::item::QuestItemRegistry>,
 ) {
@@ -376,7 +377,7 @@ fn handle_bump(
             if villager.id == "merchant" {
                 shop_open.send(crate::modules::ui::shop::ShopOpenEvent);
             } else if let Some(quest_id) = registry.quest_for_giver(&villager.id).map(|(qid, _)| qid.to_string()) {
-                show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut kill_npc, &mut open_portal, &mut close_portal, &mut despawn_item, &mut spawn_guards, &quest_items);
+                show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut kill_npc, &mut open_portal, &mut close_portal, &mut despawn_item, &mut spawn_guards, &mut explode, &quest_items);
                 // QuestGiver 마커는 discover_quest_npcs_in_fov 가 quest 상태에 따라 자동 갱신
             } else if !villager.dialogues.is_empty() {
                 let msg = villager.dialogues[villager.dialogue_idx].clone();
@@ -402,8 +403,11 @@ fn show_quest_dialog(
     close_portal: &mut EventWriter<crate::modules::zone::CloseQuestPortalEvent>,
     despawn_item: &mut EventWriter<DespawnWorldItemEvent>,
     spawn_guards: &mut EventWriter<SpawnGuardEvent>,
+    explode: &mut EventWriter<ExplosionEvent>,
     quest_items: &crate::modules::item::QuestItemRegistry,
 ) {
+    // 폭발 등 위치 기반 액션의 트리거 위치 — 상호작용 대상 NPC 좌표.
+    let trigger_pos = (villager.tile_x, villager.tile_y);
     let Some(quest_def) = registry.get(quest_id) else { return };
 
     // state.phases 에 등록되지 않은 첫 만남이면 initial_phase 의 dialog 만
@@ -439,7 +443,7 @@ fn show_quest_dialog(
                     .unwrap_or(true))
             .cloned();
         if let Some(t) = matched {
-            execute_actions(&t.actions, quest_id, state, inventory, log, kill_npc, open_portal, close_portal, despawn_item, spawn_guards, quest_items);
+            execute_actions(&t.actions, quest_id, trigger_pos, state, inventory, log, kill_npc, open_portal, close_portal, despawn_item, spawn_guards, explode, quest_items);
             if t.to != phase_id {
                 state.set_phase(quest_id, &t.to);
                 info!("퀘스트 [{}] 단계 전진: {} → {}", quest_id, phase_id, t.to);
@@ -1788,6 +1792,7 @@ mod tests {
             .add_event::<CloseQuestPortalEvent>()
             .add_event::<DespawnWorldItemEvent>()
             .add_event::<SpawnGuardEvent>()
+            .add_event::<ExplosionEvent>()
             .add_event::<ShopOpenEvent>()
             .insert_resource(qreg)
             .insert_resource(QuestState::default())
@@ -1911,7 +1916,8 @@ mod tests {
             .add_event::<SpawnQuestPortalEvent>()
             .add_event::<CloseQuestPortalEvent>()
             .add_event::<DespawnWorldItemEvent>()
-            .add_event::<SpawnGuardEvent>();
+            .add_event::<SpawnGuardEvent>()
+            .add_event::<ExplosionEvent>();
         let e = Entity::PLACEHOLDER;
         (app, e)
     }
@@ -1934,11 +1940,12 @@ mod tests {
             EventWriter<CloseQuestPortalEvent>,
             EventWriter<DespawnWorldItemEvent>,
             EventWriter<SpawnGuardEvent>,
+            EventWriter<ExplosionEvent>,
         )> = SystemState::new(&mut app.world);
-        let (mut log, mut kill, mut open, mut close, mut despawn, mut guards) = ss.get_mut(&mut app.world);
+        let (mut log, mut kill, mut open, mut close, mut despawn, mut guards, mut explode) = ss.get_mut(&mut app.world);
         show_quest_dialog(
             villager, quest_id, registry, state, inventory, &mut log, world,
-            &mut kill, &mut open, &mut close, &mut despawn, &mut guards, quest_items,
+            &mut kill, &mut open, &mut close, &mut despawn, &mut guards, &mut explode, quest_items,
         );
         ss.apply(&mut app.world);
     }

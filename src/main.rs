@@ -115,6 +115,7 @@ fn main() {
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0))
         .add_plugins(modules::map::MapPlugin { initial_algorithm })
         .add_plugins(modules::player::PlayerPlugin)
+        .add_plugins(modules::combat::CombatPlugin)
         .add_plugins(modules::monster::MonsterPlugin)
         .add_plugins(modules::combat_feedback::CombatFeedbackPlugin)
         .add_plugins(modules::elemental::ElementalPlugin)

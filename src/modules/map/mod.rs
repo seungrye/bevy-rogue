@@ -27,20 +27,74 @@ pub enum TileKind {
     Floor,
     Water,
     Sand,
+    /// 파괴 가능한 벽(집/건물 구조물). 이동/시야상 일반 `Wall` 과 동일하지만
+    /// 폭발 등으로 부술 수 있다 — 부서지면 `Rubble` 이 된다.
+    DestructibleWall,
+    /// 부서진 잔해. 통행 가능하고 시야가 통과한다.
+    Rubble,
 }
 
 impl TileKind {
-    /// 이동 가능 여부. `Floor`/`Sand` 는 통과, `Wall`/`Water` 는 막힌다.
+    /// 이동 가능 여부. `Floor`/`Sand`/`Rubble` 은 통과, `Wall`/`Water`/`DestructibleWall` 은 막힌다.
     /// 플레이어·몬스터·주민 이동과 경로탐색이 이 술어를 사용한다.
     pub fn is_walkable(self) -> bool {
-        matches!(self, TileKind::Floor | TileKind::Sand)
+        matches!(self, TileKind::Floor | TileKind::Sand | TileKind::Rubble)
     }
 
-    /// 시야 차단 여부. `Wall` 만 시야를 막고, `Floor`/`Water`/`Sand` 는 시야가 통과한다.
-    /// FOV/시선(LoS) 계산이 이 술어를 사용한다(물 너머가 보인다).
+    /// 시야 차단 여부. `Wall`/`DestructibleWall` 이 시야를 막고, 나머지는 시야가 통과한다.
+    /// FOV/시선(LoS) 계산이 이 술어를 사용한다(물·잔해 너머가 보인다).
     pub fn blocks_sight(self) -> bool {
-        matches!(self, TileKind::Wall)
+        matches!(self, TileKind::Wall | TileKind::DestructibleWall)
     }
+
+    /// 파괴 가능 여부. `DestructibleWall` 만 부술 수 있다.
+    /// 일반 `Wall`(테두리·자연 암벽)은 파괴 불가다.
+    pub fn is_destructible(self) -> bool {
+        matches!(self, TileKind::DestructibleWall)
+    }
+}
+
+/// `(x, y)` 가 `DestructibleWall` 이고 맵 테두리가 아니면 `Rubble` 로 바꾸고 `true`.
+/// 그 외(경계·일반 벽·이미 잔해 등)는 보존하고 `false` 를 반환한다.
+pub fn destroy_tile(map: &mut Map, x: usize, y: usize) -> bool {
+    // 맵 테두리는 파괴 불가 (플레이어가 맵 밖으로 못 나가게 유지).
+    if x == 0 || y == 0 || x >= map.width - 1 || y >= map.height - 1 {
+        return false;
+    }
+    if map.get_tile(x, y).is_destructible() {
+        map.set_tile(x, y, TileKind::Rubble);
+        true
+    } else {
+        false
+    }
+}
+
+/// 중심 `(cx, cy)` 에서 반경 `radius` 안(원형, `dist² ≤ radius²`)의 맵 내부 타일
+/// 좌표를 모두 모은다. 맵 범위(`[0,w) × [0,h)`)를 벗어나는 좌표는 제외한다.
+pub fn tiles_in_radius(
+    center: (usize, usize),
+    radius: i32,
+    w: usize,
+    h: usize,
+) -> Vec<(usize, usize)> {
+    let (cx, cy) = (center.0 as i32, center.1 as i32);
+    let mut out = Vec::new();
+    if radius < 0 {
+        return out;
+    }
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            if dx * dx + dy * dy > radius * radius {
+                continue;
+            }
+            let (x, y) = (cx + dx, cy + dy);
+            if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
+                continue;
+            }
+            out.push((x as usize, y as usize));
+        }
+    }
+    out
 }
 
 /// 맵 타일 하나의 전체 상태를 담는 구조체.
@@ -220,6 +274,25 @@ pub struct ApplyMapEvent {
     pub spawn_pos: Option<(usize, usize)>,
 }
 
+/// 폭발 요청 이벤트. 퀘스트·전투·마법 등 어떤 소스든 이 이벤트를 발행하면
+/// `handle_explosion` 이 지형 파괴와 엔티티 피해를 공통으로 처리한다.
+#[derive(Event)]
+pub struct ExplosionEvent {
+    pub center: (usize, usize),
+    pub radius: i32,
+    /// 반경 내 파괴 가능 지형을 부술지 여부.
+    pub terrain: bool,
+    /// 반경 내 몬스터·플레이어에게 줄 피해. 0 이하면 엔티티 피해 없음.
+    pub entity_damage: i32,
+}
+
+/// 일부 타일의 종류가 런타임에 바뀌었음을 알리는 이벤트. 해당 좌표의 타일
+/// 엔티티 글리프/색만 국소적으로 다시 그린다.
+#[derive(Event)]
+pub struct TilesChangedEvent {
+    pub tiles: Vec<(usize, usize)>,
+}
+
 /// 몬스터 타일 위치 집합 — PreUpdate에서 동기화, 플레이어 이동 차단에 사용
 #[derive(Resource, Default)]
 pub struct MonsterTiles(pub std::collections::HashSet<(usize, usize)>);
@@ -295,6 +368,8 @@ impl Plugin for MapPlugin {
             .add_event::<PlayerActedEvent>()
             .add_event::<BumpTileEvent>()
             .add_event::<AttackMonsterEvent>()
+            .add_event::<ExplosionEvent>()
+            .add_event::<TilesChangedEvent>()
             .add_systems(Startup, (
                 create_and_store_map,
                 draw_map.after(create_and_store_map),
@@ -308,6 +383,8 @@ impl Plugin for MapPlugin {
                     .in_set(MapSystemSet::ExecuteRegen),
                 update_tile_visibility.after(MapSystemSet::ExecuteRegen),
                 increment_global_turn,
+                handle_explosion,
+                apply_tile_changes.after(handle_explosion),
             ));
     }
 }
@@ -460,6 +537,81 @@ pub fn update_tile_visibility(
     }
 }
 
+/// 폭발을 처리한다.
+/// - `terrain` 이면 반경 내 `destroy_tile` 로 파괴 가능 지형을 부수고, 실제로
+///   바뀐 좌표를 모아 `TilesChangedEvent` 로 국소 재렌더를 요청한다.
+/// - `entity_damage > 0` 이면 반경 내 몬스터·플레이어의 `CombatStats.hp` 를 깎는다
+///   (사망 처리는 기존 cleanup/Defeated 흐름이 그대로 담당).
+fn handle_explosion(
+    mut events: EventReader<ExplosionEvent>,
+    mut map_res: ResMut<MapResource>,
+    mut tiles_changed: EventWriter<TilesChangedEvent>,
+    mut monster_q: Query<(&crate::modules::monster::Monster, &mut crate::modules::combat::CombatStats), Without<crate::modules::player::Player>>,
+    mut player_q: Query<(&Transform, &mut crate::modules::combat::CombatStats), With<crate::modules::player::Player>>,
+) {
+    for ev in events.read() {
+        let (w, h) = (map_res.map().width, map_res.map().height);
+        let area = tiles_in_radius(ev.center, ev.radius, w, h);
+
+        if ev.terrain {
+            let mut changed: Vec<(usize, usize)> = Vec::new();
+            for &(x, y) in &area {
+                if destroy_tile(map_res.map_mut(), x, y) {
+                    changed.push((x, y));
+                }
+            }
+            if !changed.is_empty() {
+                tiles_changed.send(TilesChangedEvent { tiles: changed });
+            }
+        }
+
+        if ev.entity_damage > 0 {
+            let in_area = |tx: usize, ty: usize| area.iter().any(|&(x, y)| x == tx && y == ty);
+            // 몬스터 피해 — Monster 가 자기 타일을 들고 있으므로 좌표로 판정.
+            for (monster, mut stats) in monster_q.iter_mut() {
+                if in_area(monster.tile_x, monster.tile_y) {
+                    stats.hp -= ev.entity_damage;
+                }
+            }
+            // 플레이어 피해 — Transform 으로 현재 타일을 계산해 판정.
+            for (transform, mut stats) in player_q.iter_mut() {
+                let (px, py) = world_to_tile_coords(transform.translation);
+                if in_area(px, py) {
+                    stats.hp -= ev.entity_damage;
+                }
+            }
+        }
+    }
+}
+
+/// 일부 타일만 글리프/색을 다시 그린다(국소 재렌더). 전체 맵을 다시 스폰하지
+/// 않고 바뀐 좌표의 `TileEntity` 텍스트만 갱신한다.
+fn apply_tile_changes(
+    mut events: EventReader<TilesChangedEvent>,
+    map_res: Res<MapResource>,
+    mut tile_query: Query<(&TileEntity, &mut Text)>,
+) {
+    let map = map_res.map();
+    // 한 프레임에 도착한 변경 좌표를 모은다.
+    let mut changed: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+    for ev in events.read() {
+        for &t in &ev.tiles {
+            changed.insert(t);
+        }
+    }
+    if changed.is_empty() {
+        return;
+    }
+    for (tile, mut text) in tile_query.iter_mut() {
+        if !changed.contains(&(tile.x, tile.y)) {
+            continue;
+        }
+        let kind = map.get_tile(tile.x, tile.y);
+        text.sections[0].value = tile_glyph(kind).to_string();
+        text.sections[0].style.color = tile_base_color(kind);
+    }
+}
+
 /// 존 전환: 사전 생성된 Map 을 적용하고 관련 리스폰 이벤트를 발행한다
 fn execute_apply(
     mut commands: Commands,
@@ -537,18 +689,24 @@ pub fn tile_glyph(kind: TileKind) -> &'static str {
         TileKind::Floor => ".",
         TileKind::Water => "~",
         TileKind::Sand => ",",
+        TileKind::DestructibleWall => "▒",
+        TileKind::Rubble => "%",
     }
 }
 
 /// 타일 종류별 기본(밝은) 렌더 색.
 /// Wall/Floor 는 기존 동작과 동일하게 흰색을 유지하고,
 /// Water 는 파랑 계열, Sand 는 모래색을 쓴다.
+/// DestructibleWall 은 일반 Wall 과 살짝 구분되는 밝은 회색,
+/// Rubble 은 칙칙한 회갈색이다.
 pub fn tile_base_color(kind: TileKind) -> Color {
     match kind {
         TileKind::Wall => Color::WHITE,
         TileKind::Floor => Color::WHITE,
         TileKind::Water => Color::rgb(0.25, 0.5, 0.9),
         TileKind::Sand => Color::rgb(0.85, 0.78, 0.5),
+        TileKind::DestructibleWall => Color::rgb(0.75, 0.75, 0.78),
+        TileKind::Rubble => Color::rgb(0.5, 0.45, 0.4),
     }
 }
 
@@ -882,6 +1040,105 @@ mod tests {
         assert!(!TileKind::Sand.blocks_sight(), "Sand 는 시야가 통과해야 한다");
     }
 
+    // --- 파괴 가능 지형 술어 ---
+
+    #[test]
+    fn 파괴가능벽은_이동상_일반벽처럼_막히고_시야도_막는다() {
+        // DestructibleWall 은 이동/시야상 Wall 과 동일해야 한다(파괴만 추가).
+        assert!(!TileKind::DestructibleWall.is_walkable(), "파괴가능벽은 이동 불가여야 한다");
+        assert!(TileKind::DestructibleWall.blocks_sight(), "파괴가능벽은 시야를 막아야 한다");
+    }
+
+    #[test]
+    fn 잔해는_통행가능하고_시야가_통과한다() {
+        assert!(TileKind::Rubble.is_walkable(), "Rubble 은 통행 가능해야 한다");
+        assert!(!TileKind::Rubble.blocks_sight(), "Rubble 은 시야가 통과해야 한다");
+    }
+
+    #[test]
+    fn 파괴가능벽만_파괴할_수_있고_나머지는_파괴_불가다() {
+        assert!(TileKind::DestructibleWall.is_destructible(), "파괴가능벽만 파괴 가능");
+        assert!(!TileKind::Wall.is_destructible(), "일반 벽은 파괴 불가");
+        assert!(!TileKind::Floor.is_destructible(), "바닥은 파괴 불가");
+        assert!(!TileKind::Rubble.is_destructible(), "잔해는 더 이상 파괴 불가");
+        assert!(!TileKind::Water.is_destructible(), "물은 파괴 불가");
+        assert!(!TileKind::Sand.is_destructible(), "모래는 파괴 불가");
+    }
+
+    // --- destroy_tile ---
+
+    #[test]
+    fn 파괴가능벽을_부수면_잔해로_바뀌고_참을_반환한다() {
+        let mut map = Map::new(10, 10);
+        map.set_tile(5, 5, TileKind::DestructibleWall);
+        assert!(destroy_tile(&mut map, 5, 5), "파괴 성공 시 true");
+        assert_eq!(map.get_tile(5, 5), TileKind::Rubble, "부수면 잔해가 된다");
+    }
+
+    #[test]
+    fn 일반벽은_부수려_해도_보존되고_거짓을_반환한다() {
+        let mut map = Map::new(10, 10);
+        map.set_tile(5, 5, TileKind::Wall);
+        assert!(!destroy_tile(&mut map, 5, 5), "일반 벽은 파괴 불가 → false");
+        assert_eq!(map.get_tile(5, 5), TileKind::Wall, "일반 벽은 그대로 보존");
+    }
+
+    #[test]
+    fn 맵_테두리의_파괴가능벽은_부수지_못하고_보존된다() {
+        // 네 테두리(x=0, x=w-1, y=0, y=h-1)에 파괴가능벽을 둬도 파괴 불가여야 한다.
+        let mut map = Map::new(6, 6);
+        let edges = [(0, 3), (5, 3), (3, 0), (3, 5)];
+        for &(x, y) in &edges {
+            map.set_tile(x, y, TileKind::DestructibleWall);
+            assert!(!destroy_tile(&mut map, x, y), "테두리 ({},{}) 는 파괴 불가", x, y);
+            assert_eq!(map.get_tile(x, y), TileKind::DestructibleWall, "테두리는 보존");
+        }
+    }
+
+    // --- tiles_in_radius ---
+
+    #[test]
+    fn 반경0의_타일목록은_중심한칸만_포함한다() {
+        let tiles = tiles_in_radius((5, 5), 0, 10, 10);
+        assert_eq!(tiles, vec![(5, 5)], "반경 0 은 중심만");
+    }
+
+    #[test]
+    fn 반경내_타일은_원형으로_모서리를_제외한다() {
+        // 반경 1: 중심 + 상하좌우 4칸(=5칸). 대각선(dist²=2>1)은 제외.
+        let tiles = tiles_in_radius((5, 5), 1, 10, 10);
+        assert_eq!(tiles.len(), 5, "반경 1 원형은 십자 5칸");
+        assert!(tiles.contains(&(5, 5)));
+        assert!(tiles.contains(&(4, 5)) && tiles.contains(&(6, 5)));
+        assert!(tiles.contains(&(5, 4)) && tiles.contains(&(5, 6)));
+        assert!(!tiles.contains(&(4, 4)), "대각(4,4)는 반경 밖이라 제외돼야 한다");
+    }
+
+    #[test]
+    fn 반경계산은_맵_경계_밖_좌표를_제외한다() {
+        // 좌상 모서리(0,0) 중심 반경 2 → 음수 좌표(x<0, y<0)는 제외.
+        let lo = tiles_in_radius((0, 0), 2, 4, 4);
+        for &(x, y) in &lo {
+            assert!(x < 4 && y < 4, "({},{}) 가 맵 범위를 벗어났다", x, y);
+        }
+        assert!(lo.contains(&(0, 0)));
+        assert!(lo.contains(&(2, 0)) && lo.contains(&(0, 2)));
+
+        // 우하 모서리(3,3) 중심 반경 2 → 범위 초과 좌표(x>=w, y>=h)도 제외.
+        let hi = tiles_in_radius((3, 3), 2, 4, 4);
+        for &(x, y) in &hi {
+            assert!(x < 4 && y < 4, "({},{}) 가 맵 범위를 벗어났다(우하)", x, y);
+        }
+        assert!(hi.contains(&(3, 3)));
+        assert!(hi.contains(&(1, 3)) && hi.contains(&(3, 1)));
+    }
+
+    #[test]
+    fn 음수_반경은_빈_목록을_반환한다() {
+        // 방어: 음수 반경은 도달할 수 없는 입력이지만 안전하게 빈 목록.
+        assert!(tiles_in_radius((5, 5), -1, 10, 10).is_empty());
+    }
+
     // --- 렌더 글리프/색 매핑 ---
 
     #[test]
@@ -890,6 +1147,19 @@ mod tests {
         assert_eq!(tile_glyph(TileKind::Floor), ".");
         assert_eq!(tile_glyph(TileKind::Water), "~");
         assert_eq!(tile_glyph(TileKind::Sand), ",");
+        assert_eq!(tile_glyph(TileKind::DestructibleWall), "▒");
+        assert_eq!(tile_glyph(TileKind::Rubble), "%");
+    }
+
+    #[test]
+    fn 파괴가능벽과_잔해는_고유한_색으로_그려진다() {
+        let dwall = tile_base_color(TileKind::DestructibleWall);
+        let rubble = tile_base_color(TileKind::Rubble);
+        // 일반 Wall(흰색)과 살짝 구분돼야 한다.
+        assert_ne!(dwall, Color::WHITE, "파괴가능벽은 일반 벽과 색이 구분돼야 한다");
+        // 잔해는 칙칙한 회갈색 — 파괴가능벽보다 어둡고 둘은 서로 다르다.
+        assert_ne!(dwall, rubble, "파괴가능벽과 잔해 색은 서로 달라야 한다");
+        assert!(rubble.r() < dwall.r(), "잔해는 파괴가능벽보다 어두워야 한다");
     }
 
     #[test]
@@ -1609,5 +1879,170 @@ mod tests {
         app.add_event::<PlayerActedEvent>();
         app.init_resource::<GlobalTurn>();
         app.update();
+    }
+
+    // --- 폭발 (handle_explosion) ---
+
+    use crate::modules::combat::CombatStats;
+    use crate::modules::monster::Monster;
+    use crate::modules::player::Player;
+
+    /// 내부가 모두 파괴가능벽인 맵(테두리는 일반 Wall)을 만든다.
+    fn dwall_map(w: usize, h: usize) -> Map {
+        let mut m = Map::new(w, h);
+        for y in 1..h - 1 {
+            for x in 1..w - 1 {
+                m.set_tile(x, y, TileKind::DestructibleWall);
+            }
+        }
+        m
+    }
+
+    fn monster_at(x: usize, y: usize, hp: i32) -> (Monster, CombatStats) {
+        (
+            Monster { name: "고블린".into(), tile_x: x, tile_y: y, vision_radius: 5, alert_turns: 0, slot_idx: 0 },
+            CombatStats { hp, max_hp: hp, mp: 0, max_mp: 0, attack: 1, defense: 0 },
+        )
+    }
+
+    fn explosion_app(map: Map) -> App {
+        let mut app = App::new();
+        app.insert_resource(MapResource(map));
+        app.add_event::<ExplosionEvent>();
+        app.add_event::<TilesChangedEvent>();
+        app.add_systems(Update, handle_explosion);
+        app
+    }
+
+    #[test]
+    fn 폭발은_반경내_파괴가능지형을_부수고_타일변경_이벤트를_발행한다() {
+        let mut app = explosion_app(dwall_map(10, 10));
+        app.world.send_event(ExplosionEvent { center: (5, 5), radius: 1, terrain: true, entity_damage: 0 });
+        app.update();
+        // 반경 1 십자 5칸이 잔해가 됐는지.
+        let map = app.world.resource::<MapResource>().map().clone();
+        for &(x, y) in &[(5, 5), (4, 5), (6, 5), (5, 4), (5, 6)] {
+            assert_eq!(map.get_tile(x, y), TileKind::Rubble, "({},{}) 가 잔해가 돼야 한다", x, y);
+        }
+        // 대각은 반경 밖이라 그대로 파괴가능벽.
+        assert_eq!(map.get_tile(4, 4), TileKind::DestructibleWall, "대각은 부서지지 않아야 한다");
+        // TilesChangedEvent 가 발행됐고 좌표 5칸을 담는다.
+        let events = app.world.resource::<Events<TilesChangedEvent>>();
+        let mut cursor = events.get_reader();
+        let all: Vec<&TilesChangedEvent> = cursor.read(events).collect();
+        assert_eq!(all.len(), 1, "변경 이벤트 한 번");
+        assert_eq!(all[0].tiles.len(), 5, "바뀐 좌표 5칸");
+    }
+
+    #[test]
+    fn 폭발은_부술_지형이_없으면_타일변경_이벤트를_발행하지_않는다() {
+        // 전부 일반 Wall(파괴 불가) → 아무것도 안 바뀜 → 이벤트 없음.
+        let mut app = explosion_app(Map::new(10, 10));
+        app.world.send_event(ExplosionEvent { center: (5, 5), radius: 2, terrain: true, entity_damage: 0 });
+        app.update();
+        assert_eq!(app.world.resource::<Events<TilesChangedEvent>>().len(), 0,
+            "부순 타일이 없으면 변경 이벤트도 없어야 한다");
+    }
+
+    #[test]
+    fn 폭발은_terrain이_거짓이면_지형을_부수지_않는다() {
+        let mut app = explosion_app(dwall_map(10, 10));
+        app.world.send_event(ExplosionEvent { center: (5, 5), radius: 2, terrain: false, entity_damage: 0 });
+        app.update();
+        assert_eq!(app.world.resource::<MapResource>().map().get_tile(5, 5), TileKind::DestructibleWall,
+            "terrain=false 면 지형이 그대로여야 한다");
+        assert_eq!(app.world.resource::<Events<TilesChangedEvent>>().len(), 0);
+    }
+
+    #[test]
+    fn 폭발은_반경내_몬스터에게_피해를_준다() {
+        let mut app = explosion_app(Map::new(20, 20));
+        let near = app.world.spawn(monster_at(5, 5, 10)).id();
+        let far = app.world.spawn(monster_at(15, 15, 10)).id();
+        app.world.send_event(ExplosionEvent { center: (5, 5), radius: 2, terrain: false, entity_damage: 4 });
+        app.update();
+        assert_eq!(app.world.get::<CombatStats>(near).unwrap().hp, 6, "반경 내 몬스터는 피해");
+        assert_eq!(app.world.get::<CombatStats>(far).unwrap().hp, 10, "반경 밖 몬스터는 무사");
+    }
+
+    #[test]
+    fn 폭발은_반경내_플레이어에게는_피해를_주고_반경밖은_무사하다() {
+        let mut app = explosion_app(Map::new(20, 20));
+        let near = app.world.spawn((
+            Player,
+            Transform::from_translation(tile_to_world_coords(8, 8).extend(0.0)),
+            CombatStats { hp: 30, max_hp: 30, mp: 0, max_mp: 0, attack: 5, defense: 1 },
+        )).id();
+        // 반경 밖(멀리 떨어진) 플레이어 — in_area 의 False 분기.
+        let far = app.world.spawn((
+            Player,
+            Transform::from_translation(tile_to_world_coords(18, 18).extend(0.0)),
+            CombatStats { hp: 30, max_hp: 30, mp: 0, max_mp: 0, attack: 5, defense: 1 },
+        )).id();
+        app.world.send_event(ExplosionEvent { center: (8, 8), radius: 1, terrain: false, entity_damage: 7 });
+        app.update();
+        assert_eq!(app.world.get::<CombatStats>(near).unwrap().hp, 23, "반경 내 플레이어는 피해");
+        assert_eq!(app.world.get::<CombatStats>(far).unwrap().hp, 30, "반경 밖 플레이어는 무사");
+    }
+
+    #[test]
+    fn 폭발은_엔티티피해가_0이면_아무도_다치지_않는다() {
+        let mut app = explosion_app(Map::new(20, 20));
+        let m = app.world.spawn(monster_at(5, 5, 10)).id();
+        app.world.send_event(ExplosionEvent { center: (5, 5), radius: 3, terrain: false, entity_damage: 0 });
+        app.update();
+        assert_eq!(app.world.get::<CombatStats>(m).unwrap().hp, 10, "피해 0 이면 hp 변화 없음");
+    }
+
+    // --- 국소 재렌더 (apply_tile_changes) ---
+
+    #[test]
+    fn 타일변경_시스템은_바뀐_타일의_글리프와_색만_갱신한다() {
+        let mut app = App::new();
+        let mut map = Map::new(4, 1);
+        // (1,0) 을 잔해로 바꿔 두고, 타일 엔티티는 옛 글리프(파괴가능벽)로 스폰.
+        map.set_tile(1, 0, TileKind::Rubble);
+        app.world.spawn((
+            Text::from_section(tile_glyph(TileKind::DestructibleWall), TextStyle::default()),
+            TileEntity { x: 1, y: 0 },
+        ));
+        // 안 바뀐 타일도 하나 — 그대로 유지돼야 한다.
+        let other = app.world.spawn((
+            Text::from_section("#", TextStyle::default()),
+            TileEntity { x: 2, y: 0 },
+        )).id();
+        app.insert_resource(MapResource(map));
+        app.add_event::<TilesChangedEvent>();
+        app.add_systems(Update, apply_tile_changes);
+        app.world.send_event(TilesChangedEvent { tiles: vec![(1, 0)] });
+        app.update();
+
+        // (1,0) 타일은 Rubble 글리프/색으로 갱신.
+        let mut q = app.world.query::<(&TileEntity, &Text)>();
+        let mut by_x = std::collections::HashMap::new();
+        for (t, txt) in q.iter(&app.world) {
+            by_x.insert(t.x, (txt.sections[0].value.clone(), txt.sections[0].style.color));
+        }
+        assert_eq!(by_x[&1].0, tile_glyph(TileKind::Rubble), "바뀐 타일 글리프 갱신");
+        assert_eq!(by_x[&1].1, tile_base_color(TileKind::Rubble), "바뀐 타일 색 갱신");
+        // 변경 목록에 없는 (2,0)은 손대지 않음.
+        assert_eq!(by_x[&2].0, "#", "변경 안 된 타일은 글리프 유지");
+        let _ = other;
+    }
+
+    #[test]
+    fn 타일변경_시스템은_변경이_없으면_조기_종료한다() {
+        let mut app = App::new();
+        app.insert_resource(MapResource(Map::new(3, 1)));
+        app.world.spawn((
+            Text::from_section("#", TextStyle::default()),
+            TileEntity { x: 0, y: 0 },
+        ));
+        app.add_event::<TilesChangedEvent>();
+        app.add_systems(Update, apply_tile_changes);
+        app.update(); // 이벤트 없음 → changed 비어 조기 종료.
+        let mut q = app.world.query::<&Text>();
+        let txt = q.iter(&app.world).next().unwrap();
+        assert_eq!(txt.sections[0].value, "#", "변경 이벤트 없으면 글리프 유지");
     }
 }

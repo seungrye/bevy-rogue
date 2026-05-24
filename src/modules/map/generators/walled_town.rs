@@ -77,11 +77,12 @@ impl MapGenerator for WalledTownGenerator {
 }
 
 /// 건물 외벽을 두르고 한쪽에 문을 낸다.
+/// 건물 벽은 `DestructibleWall` 로 만들어 폭발로 부술 수 있게 한다(성벽·테두리는 일반 Wall 유지).
 fn carve_building(map: &mut Map, b: &Rect, rng: &mut impl Rng) {
     for wy in b.y1..b.y2 {
         for wx in b.x1..b.x2 {
             if wy == b.y1 || wy == b.y2 - 1 || wx == b.x1 || wx == b.x2 - 1 {
-                map.set_tile(wx, wy, TileKind::Wall);
+                map.set_tile(wx, wy, TileKind::DestructibleWall);
             } else {
                 map.set_tile(wx, wy, TileKind::Floor);
             }
@@ -164,5 +165,23 @@ mod tests {
         let gen = WalledTownGenerator;
         let map = gen.generate(40, 30, 7);
         assert!(map.rooms.len() >= 2, "건물 블록이 방으로 등록돼야 한다");
+    }
+
+    #[test]
+    fn 건물_벽은_파괴가능벽이고_맵_테두리는_일반벽으로_남는다() {
+        let gen = WalledTownGenerator;
+        let map = gen.generate(40, 30, 7);
+        // 건물(방) 외벽 중 적어도 일부가 DestructibleWall 이어야 한다.
+        let dwall = map.tiles.iter().filter(|t| t.kind == TileKind::DestructibleWall).count();
+        assert!(dwall > 0, "건물 벽은 파괴가능벽으로 생성돼야 한다");
+        // 맵 테두리는 일반 Wall 유지.
+        for x in 0..40 {
+            assert_eq!(map.get_tile(x, 0), TileKind::Wall, "상단 테두리는 일반 벽");
+            assert_eq!(map.get_tile(x, 30 - 1), TileKind::Wall, "하단 테두리는 일반 벽");
+        }
+        for y in 0..30 {
+            assert_eq!(map.get_tile(0, y), TileKind::Wall, "좌측 테두리는 일반 벽");
+            assert_eq!(map.get_tile(40 - 1, y), TileKind::Wall, "우측 테두리는 일반 벽");
+        }
     }
 }

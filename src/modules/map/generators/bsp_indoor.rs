@@ -16,7 +16,8 @@ impl MapGenerator for BspIndoorGenerator {
             for y in room.y1..room.y2 {
                 for x in room.x1..room.x2 {
                     if y == room.y1 || y == room.y2 - 1 || x == room.x1 || x == room.x2 - 1 {
-                        map.set_tile(x, y, TileKind::Wall);
+                        // 실내 건물 벽은 파괴 가능(DestructibleWall). 테두리는 손대지 않아 일반 Wall 유지.
+                        map.set_tile(x, y, TileKind::DestructibleWall);
                     } else {
                         map.set_tile(x, y, TileKind::Floor);
                     }
@@ -71,7 +72,8 @@ fn connect_rooms(map: &mut Map, a: &Rect, b: &Rect, rng: &mut impl Rng) {
                 .clamp(1, map.width as i32 - 2) as usize;
             let ty = (my as i32 + sign * step * (by as i32 - ay as i32).signum())
                 .clamp(1, map.height as i32 - 2) as usize;
-            if map.get_tile(tx, ty) == TileKind::Wall {
+            // 벽(일반/파괴가능 모두)을 도어웨이로 카브한다.
+            if map.get_tile(tx, ty).blocks_sight() {
                 let neighbors_floor = [(0i32, 1), (0, -1), (1, 0), (-1, 0)]
                     .iter()
                     .filter(|&&(dx, dy)| {
@@ -89,4 +91,39 @@ fn connect_rooms(map: &mut Map, a: &Rect, b: &Rect, rng: &mut impl Rng) {
     }
     let _ = rng;
     super::carve_corridor(map, ax, ay, bx, by);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::modules::map::MapGenerator;
+
+    #[test]
+    fn 실내_방벽은_파괴가능벽이고_맵_테두리는_일반벽으로_남는다() {
+        let gen = BspIndoorGenerator;
+        let map = gen.generate(50, 40, 7);
+        // 방 외벽 일부가 DestructibleWall.
+        let dwall = map.tiles.iter().filter(|t| t.kind == TileKind::DestructibleWall).count();
+        assert!(dwall > 0, "실내 방벽은 파괴가능벽이어야 한다");
+        // 테두리는 일반 Wall.
+        for x in 0..50 {
+            assert_eq!(map.get_tile(x, 0), TileKind::Wall, "상단 테두리는 일반 벽");
+            assert_eq!(map.get_tile(x, 40 - 1), TileKind::Wall, "하단 테두리는 일반 벽");
+        }
+        for y in 0..40 {
+            assert_eq!(map.get_tile(0, y), TileKind::Wall, "좌측 테두리는 일반 벽");
+            assert_eq!(map.get_tile(50 - 1, y), TileKind::Wall, "우측 테두리는 일반 벽");
+        }
+    }
+
+    #[test]
+    fn 같은_시드는_같은_맵을_만든다() {
+        let gen = BspIndoorGenerator;
+        let a = gen.generate(50, 40, 3);
+        let b = gen.generate(50, 40, 3);
+        assert_eq!(
+            a.tiles.iter().map(|t| t.kind).collect::<Vec<_>>(),
+            b.tiles.iter().map(|t| t.kind).collect::<Vec<_>>(),
+        );
+    }
 }

@@ -362,6 +362,8 @@ pub(crate) fn full_map_tile_color(map: &Map, x: i32, y: i32, player_x: usize, pl
             TileKind::Floor => C_VISIBLE_FLOOR,
             TileKind::Water => C_VISIBLE_WATER,
             TileKind::Sand => C_VISIBLE_SAND,
+            TileKind::DestructibleWall => C_VISIBLE_DWALL,
+            TileKind::Rubble => C_VISIBLE_RUBBLE,
         }
     } else {
         match map.tiles[idx].kind {
@@ -369,6 +371,8 @@ pub(crate) fn full_map_tile_color(map: &Map, x: i32, y: i32, player_x: usize, pl
             TileKind::Floor => C_REVEALED_FLOOR,
             TileKind::Water => C_REVEALED_WATER,
             TileKind::Sand => C_REVEALED_SAND,
+            TileKind::DestructibleWall => C_REVEALED_DWALL,
+            TileKind::Rubble => C_REVEALED_RUBBLE,
         }
     }
 }
@@ -403,10 +407,14 @@ const C_VISIBLE_WALL: [u8; 4] = [210, 176, 116, 255];
 const C_VISIBLE_FLOOR: [u8; 4] = [92, 128, 92, 255];
 const C_VISIBLE_WATER: [u8; 4] = [64, 128, 230, 255];
 const C_VISIBLE_SAND: [u8; 4] = [216, 200, 128, 255];
+const C_VISIBLE_DWALL: [u8; 4] = [180, 150, 150, 255];
+const C_VISIBLE_RUBBLE: [u8; 4] = [128, 116, 104, 255];
 const C_REVEALED_WALL: [u8; 4] = [84, 68, 48, 255];
 const C_REVEALED_FLOOR: [u8; 4] = [34, 48, 42, 255];
 const C_REVEALED_WATER: [u8; 4] = [26, 51, 92, 255];
 const C_REVEALED_SAND: [u8; 4] = [86, 80, 51, 255];
+const C_REVEALED_DWALL: [u8; 4] = [72, 60, 60, 255];
+const C_REVEALED_RUBBLE: [u8; 4] = [52, 47, 42, 255];
 const C_PLAYER: [u8; 4] = [255, 228, 64, 255];
 
 /// 미니맵 픽셀 하나가 대표할 월드 타일 좌표를 반환한다.
@@ -443,6 +451,8 @@ pub(crate) fn tile_color(map: &Map, x: i32, y: i32, player_x: usize, player_y: u
             TileKind::Floor => C_VISIBLE_FLOOR,
             TileKind::Water => C_VISIBLE_WATER,
             TileKind::Sand => C_VISIBLE_SAND,
+            TileKind::DestructibleWall => C_VISIBLE_DWALL,
+            TileKind::Rubble => C_VISIBLE_RUBBLE,
         }
     } else if map.tiles[idx].revealed {
         match map.tiles[idx].kind {
@@ -450,6 +460,8 @@ pub(crate) fn tile_color(map: &Map, x: i32, y: i32, player_x: usize, player_y: u
             TileKind::Floor => C_REVEALED_FLOOR,
             TileKind::Water => C_REVEALED_WATER,
             TileKind::Sand => C_REVEALED_SAND,
+            TileKind::DestructibleWall => C_REVEALED_DWALL,
+            TileKind::Rubble => C_REVEALED_RUBBLE,
         }
     } else {
         C_UNEXPLORED
@@ -773,6 +785,34 @@ mod tests {
     }
 
     #[test]
+    fn 미니맵은_파괴가능벽과_잔해에_고유한_색을_매핑한다() {
+        let mut map = Map::new(10, 10);
+        map.set_tile(2, 2, TileKind::DestructibleWall);
+        map.set_tile(3, 3, TileKind::Rubble);
+        let d_idx = map.index(2, 2);
+        let r_idx = map.index(3, 3);
+
+        // 보이는 상태
+        map.tiles[d_idx].visible = true;
+        map.tiles[r_idx].visible = true;
+        assert_eq!(tile_color(&map, 2, 2, 0, 0), C_VISIBLE_DWALL);
+        assert_eq!(tile_color(&map, 3, 3, 0, 0), C_VISIBLE_RUBBLE);
+
+        // 탐험만 된 상태
+        map.tiles[d_idx].visible = false;
+        map.tiles[r_idx].visible = false;
+        map.tiles[d_idx].revealed = true;
+        map.tiles[r_idx].revealed = true;
+        assert_eq!(tile_color(&map, 2, 2, 0, 0), C_REVEALED_DWALL);
+        assert_eq!(tile_color(&map, 3, 3, 0, 0), C_REVEALED_RUBBLE);
+
+        // 다른 지형색과 구분돼야 한다.
+        assert_ne!(C_VISIBLE_DWALL, C_VISIBLE_RUBBLE);
+        assert_ne!(C_VISIBLE_DWALL, C_VISIBLE_WALL);
+        assert_ne!(C_VISIBLE_RUBBLE, C_VISIBLE_FLOOR);
+    }
+
+    #[test]
     fn 생성기_힌트_폰트크기는_미니맵보다_작다() {
         let name_font_size: f32 = 13.0;
         let hint_font_size: f32 = 11.0;
@@ -966,6 +1006,25 @@ mod tests {
         for &(x, y, _, expected) in &kinds {
             assert_eq!(full_map_tile_color(&map, x as i32, y as i32, 0, 0), expected);
         }
+    }
+
+    #[test]
+    fn 전체맵에서_파괴가능벽과_잔해는_보임과_탐험_각각의_색을_가진다() {
+        let mut map = Map::new(10, 10);
+        map.set_tile(2, 2, TileKind::DestructibleWall);
+        map.set_tile(3, 3, TileKind::Rubble);
+        let di = map.index(2, 2);
+        let ri = map.index(3, 3);
+        // 보임 (revealed + visible)
+        map.tiles[di].revealed = true; map.tiles[di].visible = true;
+        map.tiles[ri].revealed = true; map.tiles[ri].visible = true;
+        assert_eq!(full_map_tile_color(&map, 2, 2, 0, 0), C_VISIBLE_DWALL);
+        assert_eq!(full_map_tile_color(&map, 3, 3, 0, 0), C_VISIBLE_RUBBLE);
+        // 탐험만 (revealed, not visible)
+        map.tiles[di].visible = false;
+        map.tiles[ri].visible = false;
+        assert_eq!(full_map_tile_color(&map, 2, 2, 0, 0), C_REVEALED_DWALL);
+        assert_eq!(full_map_tile_color(&map, 3, 3, 0, 0), C_REVEALED_RUBBLE);
     }
 
     #[test]

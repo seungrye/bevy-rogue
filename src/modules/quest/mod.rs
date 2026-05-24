@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use serde::Deserialize;
 use crate::modules::{
     item::{PlayerInventory, ItemKind, QuestItemKind, InventoryItem, Item, ItemSystemSet},
-    map::{MapResource, TILE_SIZE, tile_to_world_coords, UsedSpawnTiles, random_floor_tile_anywhere},
+    map::{MapResource, TILE_SIZE, tile_to_world_coords, UsedSpawnTiles, random_floor_tile_anywhere, ExplosionEvent},
     ui::minimap::{DiscoveredMarkers, MarkerKind},
     zone::{ZoneId, SpawnQuestPortalEvent, CloseQuestPortalEvent},
     monster::{PlayerDetectedEvent, SpawnGuardEvent},
@@ -115,6 +115,9 @@ pub enum QuestAction {
     /// 현재 맵에 가드를 `count` 마리 스폰한다 (잠입 구역 경비).
     /// monster 모듈의 `SpawnGuardEvent` 를 발행해 실제 스폰을 위임한다.
     SpawnGuards { count: u32 },
+    /// 트리거 위치(플레이어/NPC 좌표) 기준으로 폭발을 일으킨다.
+    /// map 모듈의 `ExplosionEvent` 를 발행해 지형 파괴·엔티티 피해를 위임한다.
+    Explode { radius: i32, terrain: bool, entity_damage: i32 },
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -606,6 +609,7 @@ fn check_auto_advance(
 pub fn execute_actions(
     actions: &[QuestAction],
     quest_id: &str,
+    trigger_pos: (usize, usize),
     state: &mut QuestState,
     inventory: &mut PlayerInventory,
     log: &mut EventWriter<crate::modules::ui::LogMessage>,
@@ -614,6 +618,7 @@ pub fn execute_actions(
     close_portal: &mut EventWriter<CloseQuestPortalEvent>,
     despawn_item: &mut EventWriter<DespawnWorldItemEvent>,
     spawn_guards: &mut EventWriter<SpawnGuardEvent>,
+    explode: &mut EventWriter<ExplosionEvent>,
     quest_items: &crate::modules::item::QuestItemRegistry,
 ) {
     for action in actions {
@@ -688,6 +693,18 @@ pub fn execute_actions(
             QuestAction::SpawnGuards { count } => {
                 spawn_guards.send(SpawnGuardEvent { count: *count });
                 info!("가드 스폰 요청: {}마리", count);
+            }
+            QuestAction::Explode { radius, terrain, entity_damage } => {
+                explode.send(ExplosionEvent {
+                    center: trigger_pos,
+                    radius: *radius,
+                    terrain: *terrain,
+                    entity_damage: *entity_damage,
+                });
+                info!(
+                    "폭발 발생: 중심 {:?} 반경 {} (지형 {}, 피해 {})",
+                    trigger_pos, radius, terrain, entity_damage
+                );
             }
         }
     }
@@ -1811,6 +1828,7 @@ mod tests {
     struct ActionInput {
         actions: Vec<QuestAction>,
         quest_id: String,
+        trigger_pos: (usize, usize),
     }
 
     fn run_execute_actions_system(
@@ -1823,12 +1841,13 @@ mod tests {
         mut close_portal: EventWriter<CloseQuestPortalEvent>,
         mut despawn_item: EventWriter<DespawnWorldItemEvent>,
         mut spawn_guards: EventWriter<SpawnGuardEvent>,
+        mut explode: EventWriter<ExplosionEvent>,
         quest_items: Res<crate::modules::item::QuestItemRegistry>,
     ) {
         execute_actions(
-            &input.actions, &input.quest_id, &mut state, &mut inventory,
+            &input.actions, &input.quest_id, input.trigger_pos, &mut state, &mut inventory,
             &mut log, &mut kill_npc, &mut open_portal, &mut close_portal,
-            &mut despawn_item, &mut spawn_guards, &quest_items,
+            &mut despawn_item, &mut spawn_guards, &mut explode, &quest_items,
         );
     }
 
@@ -1838,13 +1857,14 @@ mod tests {
         app.insert_resource(crate::modules::item::build_test_registry())
             .insert_resource(QuestState::default())
             .insert_resource(PlayerInventory::default())
-            .insert_resource(ActionInput { actions, quest_id: "q".into() })
+            .insert_resource(ActionInput { actions, quest_id: "q".into(), trigger_pos: (5, 5) })
             .add_event::<crate::modules::ui::LogMessage>()
             .add_event::<KillNpcEvent>()
             .add_event::<SpawnQuestPortalEvent>()
             .add_event::<CloseQuestPortalEvent>()
             .add_event::<DespawnWorldItemEvent>()
             .add_event::<SpawnGuardEvent>()
+            .add_event::<ExplosionEvent>()
             .add_systems(Update, run_execute_actions_system);
         app
     }
@@ -1989,6 +2009,23 @@ mod tests {
         let mut cursor = events.get_reader();
         let counts: Vec<u32> = cursor.read(events).map(|e| e.count).collect();
         assert_eq!(counts, vec![3], "한 번의 SpawnGuardEvent 에 count=3");
+    }
+
+    #[test]
+    fn Explode액션은_트리거위치를_중심으로_폭발이벤트를_발행한다() {
+        // execute_actions_app 의 trigger_pos 는 (5,5).
+        let mut app = execute_actions_app(vec![QuestAction::Explode {
+            radius: 3, terrain: true, entity_damage: 6,
+        }]);
+        app.update();
+        let events = app.world.resource::<Events<ExplosionEvent>>();
+        let mut cursor = events.get_reader();
+        let evs: Vec<&ExplosionEvent> = cursor.read(events).collect();
+        assert_eq!(evs.len(), 1, "폭발 이벤트 한 번");
+        assert_eq!(evs[0].center, (5, 5), "트리거 위치가 폭발 중심");
+        assert_eq!(evs[0].radius, 3);
+        assert!(evs[0].terrain);
+        assert_eq!(evs[0].entity_damage, 6);
     }
 
     // ── check_auto_advance (App 하네스) — 상태머신 주요 경로 ───────────────────
@@ -2461,6 +2498,34 @@ mod tests {
         reg.quests.insert(def.id.clone(), def);
         let errors = collect_quest_item_ref_errors(&reg, qi());
         assert!(errors.is_empty(), "SpawnGuards 는 item-ref 검증을 통과해야 한다");
+    }
+
+    #[test]
+    fn 액션아이템ID검사는_Explode처럼_아이템을_안쓰는_액션을_통과시킨다() {
+        // check_action_item_ids 의 `_ => {}` arm — Explode 는 item id 를 참조하지 않는다.
+        let action = QuestAction::Explode { radius: 3, terrain: true, entity_damage: 6 };
+        let mut errors = Vec::new();
+        check_action_item_ids(&action, "test_quest", "phase1", qi(), &mut errors);
+        assert!(errors.is_empty(), "Explode 는 item-ref 검증을 통과해야 한다");
+    }
+
+    #[test]
+    fn 시맨틱검증은_Explode를_거부하지_않는다() {
+        // validate_quest_def → collect_action_errors 의 Explode `_ => {}` arm.
+        let def: QuestDef = ron::de::from_str(r#"
+            QuestDef(
+                id: "boom", title: "폭발", giver_npc: "장로", initial_phase: "start",
+                phases: {
+                    "start": QuestPhaseDef(dialog: []),
+                    "wrecked": QuestPhaseDef(dialog: []),
+                },
+                transitions: [
+                    Transition(from: "start", trigger: Interact, actions: [Explode(radius: 3, terrain: true, entity_damage: 0)], to: "wrecked"),
+                ],
+            )
+        "#).expect("RON 파싱 성공");
+        let errors = validate_quest_def(&def, qi());
+        assert!(errors.is_empty(), "Explode 는 검증 오류를 내지 않아야 한다: {:?}", errors);
     }
 
     // ── infiltration_quest (잠입 퀘스트) 콘텐츠 검증 ──────────────────────────
