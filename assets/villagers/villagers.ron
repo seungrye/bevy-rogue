@@ -65,6 +65,10 @@
         id: "merchant",
         name: "상인",
         color: (0.3, 0.9, 0.3),
+        // 고정 상점 NPC — 가판대(Counter) 뒤에 고정 배치되어 이동하지 않으며,
+        // 상호작용 시 상점이 열린다.
+        stationary: true,
+        vendor: true,
         dialogs: [
             "좋은 물건 있소이다!",
             "오늘만 특가라네, 어서 보시게.",

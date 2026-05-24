@@ -5,7 +5,7 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use crate::modules::{
     map::{
-        draw_map, Map, MapType, OccupiedTiles, Rect,
+        draw_map, Map, MapType, OccupiedTiles, Rect, TileKind,
         tile_to_world_coords, world_to_tile_coords,
         MAP_HEIGHT, MAP_WIDTH, TILE_SIZE,
         MapSystemSet, VillagerRespawnEvent, PlayerActedEvent, BumpTileEvent, ExplosionEvent,
@@ -48,6 +48,16 @@ pub struct VillagerDef {
     pub color: [f32; 3],
     pub dialogs: Vec<String>,
     pub speed: f32,
+    /// 정지(stationary) 주민 — true 면 `villager_turn` 이 이동을 스킵해 제자리를
+    /// 유지한다. 가판대 뒤 상인처럼 고정된 NPC 에 사용한다.
+    /// `#[serde(default)]` 로 기존 RON(이 필드 없는 정의)과 호환된다(기본 false).
+    #[serde(default)]
+    pub stationary: bool,
+    /// 상인(vendor) — true 면 상호작용 시 상점이 열린다(기존 ui/shop.rs 흐름).
+    /// 가판대 뒤에 고정 배치되어 카운터 너머로 거래한다.
+    /// `#[serde(default)]` 로 기존 RON 과 호환된다(기본 false).
+    #[serde(default)]
+    pub vendor: bool,
 }
 
 /// 게임 시작 시 RON 에서 불러온 villager 정의 모음
@@ -78,15 +88,64 @@ pub struct Villager {
     pub base_color: Color,
     /// 퀘스트 NPC의 이동 구역 제한. Some이면 해당 Rect 안에서만 이동한다.
     pub home_room: Option<Rect>,
+    /// 정지 주민 여부 — true 면 매 턴 제자리(가판대 뒤 상인 등). VillagerDef.stationary 복사.
+    pub stationary: bool,
+    /// 상인 여부 — true 면 상호작용 시 상점이 열린다. VillagerDef.vendor 복사.
+    pub vendor: bool,
 }
 
-// 이번 턴에 주민이 이동해야 하는지 판단하고 플래그를 초기화한다
+// 이번 턴에 주민이 이동해야 하는지 판단하고 플래그를 초기화한다.
+// stationary 주민(가판대 뒤 상인 등)은 충돌 플래그와 무관하게 항상 제자리.
 pub fn take_turn(villager: &mut Villager) -> bool {
-    if villager.just_bumped {
-        villager.just_bumped = false;
-        return false;
+    // 충돌 직후 플래그는 어느 경우든 한 번 소모한다(다음 턴부터 정상).
+    let was_bumped = villager.just_bumped;
+    villager.just_bumped = false;
+    !should_skip_villager_move(villager.stationary, was_bumped)
+}
+
+/// vendor/정지 주민의 이동 스킵 판정 (순수 함수).
+/// stationary 면 충돌 여부와 무관하게 이번 턴 이동을 건너뛴다.
+pub fn should_skip_villager_move(stationary: bool, just_bumped: bool) -> bool {
+    stationary || just_bumped
+}
+
+/// 어떤 타일을 향해 상호작용(범프)할 때 상점을 열어줄 vendor 를 찾는다 (순수 함수).
+///
+/// - 범프 타일 자체가 vendor 위치면 그 vendor (직접 인접).
+/// - 범프 타일이 가판대(`Counter`)면 그 카운터에 직교(상하좌우)로 인접한
+///   vendor (카운터 너머 보정) — 카운터 앞 타일에서 interact 해도 열리게 한다.
+/// - 그 외에는 `None`.
+///
+/// `vendor_at(x, y)` 는 해당 타일에 vendor 가 있으면 그 식별 좌표를 돌려주는 클로저.
+/// (테스트·시스템 양쪽에서 vendor 위치 집합을 주입할 수 있게 클로저로 분리.)
+pub fn vendor_for_interaction<F>(
+    bx: usize,
+    by: usize,
+    map: &Map,
+    is_vendor_at: F,
+) -> Option<(usize, usize)>
+where
+    F: Fn(usize, usize) -> bool,
+{
+    // 1) 범프 타일에 직접 vendor 가 있으면 그 vendor.
+    if is_vendor_at(bx, by) {
+        return Some((bx, by));
     }
-    true
+    // 2) 범프 타일이 카운터면 그 너머(직교 인접)의 vendor 를 찾는다.
+    if map.get_tile(bx, by) == TileKind::Counter {
+        let neighbors = [
+            (bx.wrapping_sub(1), by),
+            (bx + 1, by),
+            (bx, by.wrapping_sub(1)),
+            (bx, by + 1),
+        ];
+        for (nx, ny) in neighbors {
+            if nx < map.width && ny < map.height && is_vendor_at(nx, ny) {
+                return Some((nx, ny));
+            }
+        }
+    }
+    None
 }
 
 pub struct VillagerPlugin;
@@ -266,7 +325,7 @@ fn spawn_on_startup(
 ) {
     let map = map_res.map();
     if map.map_type == MapType::Village {
-        do_spawn(&mut commands, &map.rooms.clone(), &asset_server, &quest_registry, &villager_registry);
+        do_spawn(&mut commands, &map.rooms.clone(), map.shop_vendor, &asset_server, &quest_registry, &villager_registry);
     }
 }
 
@@ -277,20 +336,78 @@ fn respawn_on_regen(
     asset_server: Res<AssetServer>,
     quest_registry: Res<QuestRegistry>,
     villager_registry: Res<VillagerRegistry>,
+    map_res: Res<crate::modules::map::MapResource>,
 ) {
     for event in events.read() {
         for entity in villager_query.iter() {
             commands.entity(entity).despawn();
         }
         if event.map_type == MapType::Village {
-            do_spawn(&mut commands, &event.rooms, &asset_server, &quest_registry, &villager_registry);
+            do_spawn(&mut commands, &event.rooms, map_res.map().shop_vendor, &asset_server, &quest_registry, &villager_registry);
         }
     }
+}
+
+/// VillagerDef + 위치 + 표시 정보로 주민 엔티티 하나를 스폰한다(중복 제거용 헬퍼).
+/// vendor/일반/퀘스트 NPC 가 같은 경로로 스폰되어 일관성을 유지한다.
+fn spawn_villager_entity(
+    commands: &mut Commands,
+    font: &Handle<Font>,
+    data: &VillagerDef,
+    tile: (usize, usize),
+    quest_registry: &QuestRegistry,
+    home_room: Option<Rect>,
+) {
+    let (cx, cy) = tile;
+    let coord = tile_to_world_coords(cx, cy);
+    let dialogues: Vec<String> = data.dialogs.iter()
+        .map(|s| format!("{}: {}", data.name, s))
+        .collect();
+    let base_color = Color::rgb(data.color[0], data.color[1], data.color[2]);
+    let is_quest_npc = quest_registry.quest_for_giver(&data.id).is_some();
+    // 표시 글리프: 퀘스트 NPC 는 노란 '?', 상인(vendor)은 고유 '$', 그 외 'v'.
+    // (퀘스트 NPC 글리프는 이후 update_villager_glyph 가 상태에 따라 갱신한다.)
+    let (glyph, display_color) = if is_quest_npc {
+        ("?", Color::rgb(1.0, 0.9, 0.1))
+    } else if data.vendor {
+        ("$", Color::rgb(1.0, 0.85, 0.2))
+    } else {
+        ("v", base_color)
+    };
+
+    commands.spawn((
+        Text2dBundle {
+            text: Text::from_section(glyph, TextStyle {
+                font: font.clone(),
+                font_size: TILE_SIZE,
+                color: display_color,
+            }),
+            transform: Transform::from_xyz(coord.x, coord.y, Z_VILLAGER),
+            ..default()
+        },
+        Villager {
+            id: data.id.clone(),
+            name: data.name.clone(),
+            dialogues,
+            dialogue_idx: 0,
+            tile_x: cx,
+            tile_y: cy,
+            just_bumped: false,
+            quest_dialogue_idx: 0,
+            base_color,
+            home_room,
+            stationary: data.stationary,
+            vendor: data.vendor,
+        },
+        Speed::new(data.speed),
+        MoveQueue::default(),
+    ));
 }
 
 fn do_spawn(
     commands: &mut Commands,
     rooms: &[Rect],
+    shop_vendor: Option<(usize, usize)>,
     asset_server: &AssetServer,
     quest_registry: &QuestRegistry,
     villager_registry: &VillagerRegistry,
@@ -298,12 +415,24 @@ fn do_spawn(
     if rooms.is_empty() { return; }
     let font = asset_server.load("fonts/FiraMono-Medium.ttf");
 
+    // 상점이 있으면 vendor 주민을 가판대 뒤 고정 위치에 먼저 스폰한다.
+    // 이 vendor 는 방 배치 루프에서 제외해 중복 스폰을 막는다.
+    let mut vendor_id: Option<String> = None;
+    if let Some(tile) = shop_vendor {
+        if let Some(vdef) = villager_registry.villagers.iter().find(|d| d.vendor) {
+            vendor_id = Some(vdef.id.clone());
+            spawn_villager_entity(commands, &font, vdef, tile, quest_registry, None);
+        }
+    }
+
     // 퀘스트 NPC와 일반 NPC 를 분리: 퀘스트 NPC 는 활성 퀘스트인 것만 스폰.
-    // VillagerDef.quest_id 를 두지 않고 quest_registry 에서 giver_npc 매칭으로 판정.
+    // 이미 가판대에 스폰한 vendor 는 양쪽 후보에서 제외한다(일관 적용).
     let quest_npcs: Vec<&VillagerDef> = villager_registry.villagers.iter()
+        .filter(|d| Some(&d.id) != vendor_id.as_ref())
         .filter(|d| quest_registry.active_quest_for_giver(&d.id).is_some())
         .collect();
     let regular_npcs: Vec<&VillagerDef> = villager_registry.villagers.iter()
+        .filter(|d| Some(&d.id) != vendor_id.as_ref())
         .filter(|d| quest_registry.quest_for_giver(&d.id).is_none())
         .collect();
 
@@ -324,51 +453,13 @@ fn do_spawn(
         } else {
             continue;
         };
-        let (cx, cy) = room.center();
-        let coord = tile_to_world_coords(cx, cy);
-
-        let dialogues: Vec<String> = data.dialogs.iter()
-            .map(|s| format!("{}: {}", data.name, s))
-            .collect();
-
-        let base_color = Color::rgb(data.color[0], data.color[1], data.color[2]);
         let is_quest_npc = quest_registry.quest_for_giver(&data.id).is_some();
-        // 퀘스트 NPC 는 항상 노란 '?' 로 시작 — 수락·진행 시 update_villager_glyph 가 갱신
-        let (glyph, display_color) = if is_quest_npc {
-            ("?", Color::rgb(1.0, 0.9, 0.1))
-        } else {
-            ("v", base_color)
-        };
-
-        commands.spawn((
-            Text2dBundle {
-                text: Text::from_section(glyph, TextStyle {
-                    font: font.clone(),
-                    font_size: TILE_SIZE,
-                    color: display_color,
-                }),
-                transform: Transform::from_xyz(coord.x, coord.y, Z_VILLAGER),
-                ..default()
-            },
-            Villager {
-                id: data.id.clone(),
-                name: data.name.clone(),
-                dialogues,
-                dialogue_idx: 0,
-                tile_x: cx,
-                tile_y: cy,
-                just_bumped: false,
-                quest_dialogue_idx: 0,
-                base_color,
-                home_room: if is_quest_npc { Some(*room) } else { None },
-            },
-            Speed::new(data.speed),
-            MoveQueue::default(),
-        ));
+        let home_room = if is_quest_npc { Some(*room) } else { None };
+        spawn_villager_entity(commands, &font, data, room.center(), quest_registry, home_room);
     }
 }
 
-// 플레이어가 주민 타일을 밀어 넣었을 때 대사를 출력한다
+// 플레이어가 주민 타일(또는 가판대)을 밀어 넣었을 때 대사 출력/상점 열기를 처리한다
 fn handle_bump(
     mut events: EventReader<BumpTileEvent>,
     mut villager_query: Query<&mut Villager>,
@@ -380,12 +471,22 @@ fn handle_bump(
     mut writers: QuestActionWriters,
     mut shop_open: EventWriter<crate::modules::ui::shop::ShopOpenEvent>,
     quest_items: Res<crate::modules::item::QuestItemRegistry>,
+    map_res: Res<crate::modules::map::MapResource>,
 ) {
+    let map = map_res.map();
+    // vendor 들의 현재 타일 집합 — 카운터 너머 보정에 사용.
+    let vendor_tiles: HashSet<(usize, usize)> = villager_query.iter()
+        .filter(|v| v.vendor)
+        .map(|v| (v.tile_x, v.tile_y))
+        .collect();
+
     for BumpTileEvent(bx, by) in events.read() {
+        // 1) 범프 타일 자체에 있는 주민과 상호작용 (직접 인접).
+        let mut handled_villager = false;
         for mut villager in villager_query.iter_mut() {
             if villager.tile_x != *bx || villager.tile_y != *by { continue; }
 
-            if villager.id == "merchant" {
+            if villager.vendor {
                 shop_open.send(crate::modules::ui::shop::ShopOpenEvent);
             } else if let Some(quest_id) = registry.quest_for_giver(&villager.id).map(|(qid, _)| qid.to_string()) {
                 show_quest_dialog(&mut villager, &quest_id, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut writers, &quest_items);
@@ -396,7 +497,14 @@ fn handle_bump(
                 villager.dialogue_idx = next_dialogue_idx(villager.dialogue_idx, villager.dialogues.len());
             }
             villager.just_bumped = true;
+            handled_villager = true;
             break;
+        }
+        if handled_villager { continue; }
+
+        // 2) 범프 타일이 가판대면 그 너머의 vendor 상점을 연다 (카운터 막힘 보정).
+        if vendor_for_interaction(*bx, *by, map, |x, y| vendor_tiles.contains(&(x, y))).is_some() {
+            shop_open.send(crate::modules::ui::shop::ShopOpenEvent);
         }
     }
 }
@@ -839,6 +947,8 @@ mod tests {
             quest_dialogue_idx: 0,
             base_color: Color::WHITE,
             home_room: None,
+            stationary: false,
+            vendor: false,
         }
     }
 
@@ -856,6 +966,84 @@ mod tests {
     }
 
     #[test]
+    fn 정지주민은_충돌이_없어도_이동턴을_갖지_않는다() {
+        // stationary 주민(가판대 뒤 상인 등)은 take_turn 이 항상 false.
+        let mut v = make_villager(false);
+        v.stationary = true;
+        assert!(!take_turn(&mut v), "정지 주민은 이동 턴을 갖지 않는다");
+    }
+
+    #[test]
+    fn 정지주민은_충돌직후에도_제자리이고_플래그를_소모한다() {
+        // just_bumped 가 먼저 소모되는 분기 + stationary 둘 다 false 반환.
+        let mut v = make_villager(true);
+        v.stationary = true;
+        assert!(!take_turn(&mut v), "충돌 직후엔 어차피 제자리");
+        assert!(!v.just_bumped, "충돌 플래그는 소모된다");
+    }
+
+    #[test]
+    fn 이동스킵_판정은_정지거나_충돌직후면_참이다() {
+        assert!(should_skip_villager_move(true, false), "정지 주민은 스킵");
+        assert!(should_skip_villager_move(false, true), "충돌 직후도 스킵");
+        assert!(should_skip_villager_move(true, true), "둘 다여도 스킵");
+        assert!(!should_skip_villager_move(false, false), "정지도 충돌도 아니면 이동");
+    }
+
+    // --- vendor_for_interaction (카운터 너머 상호작용 판정) ---
+
+    /// 카운터 한 줄 + 그 뒤 상인 자리를 둔 작은 맵을 만든다.
+    /// 레이아웃(세로): vendor(5,5) / counter(5,6) / customer(5,7).
+    fn shop_map() -> Map {
+        let mut m = Map::new(10, 10);
+        for x in 0..10 { for y in 0..10 { m.set_tile(x, y, TileKind::Floor); } }
+        m.set_tile(5, 6, TileKind::Counter);
+        m
+    }
+
+    #[test]
+    fn 상인_타일에_직접_범프하면_그_상인이_반환된다() {
+        let m = shop_map();
+        // 상인이 (5,5) 에 있다고 가정.
+        let got = vendor_for_interaction(5, 5, &m, |x, y| (x, y) == (5, 5));
+        assert_eq!(got, Some((5, 5)), "상인 타일 직접 범프 → 그 상인");
+    }
+
+    #[test]
+    fn 카운터에_범프하면_그_너머_상인이_반환된다() {
+        let m = shop_map();
+        // 손님이 (5,7) 에서 위(카운터 5,6)로 범프 → 카운터 너머 (5,5) 상인.
+        let got = vendor_for_interaction(5, 6, &m, |x, y| (x, y) == (5, 5));
+        assert_eq!(got, Some((5, 5)), "카운터 너머 상인 보정");
+    }
+
+    #[test]
+    fn 상인없는_카운터에_범프하면_아무도_반환되지_않는다() {
+        let m = shop_map();
+        // 카운터에 인접한 vendor 가 없으면 None.
+        let got = vendor_for_interaction(5, 6, &m, |_, _| false);
+        assert_eq!(got, None, "카운터 너머에 상인 없으면 None");
+    }
+
+    #[test]
+    fn 카운터도_상인도_아닌_타일은_상호작용_상인이_없다() {
+        let m = shop_map();
+        // 일반 바닥 (1,1) 범프 — 카운터도 vendor 도 아님 → None.
+        let got = vendor_for_interaction(1, 1, &m, |_, _| false);
+        assert_eq!(got, None, "일반 타일은 상점 상호작용 대상 아님");
+    }
+
+    #[test]
+    fn 맵_가장자리_카운터는_범위밖_이웃을_상인으로_보지_않는다() {
+        // 카운터를 (0,0) 에 두면 wrapping_sub 로 거대 좌표가 생긴다 — 범위 검사로 걸러야 한다.
+        let mut m = Map::new(10, 10);
+        m.set_tile(0, 0, TileKind::Counter);
+        // 항상 vendor 라고 답하는 클로저라도, 유효 범위 이웃 (1,0)/(0,1) 만 검사돼야 한다.
+        let got = vendor_for_interaction(0, 0, &m, |x, y| (x, y) == (1, 0));
+        assert_eq!(got, Some((1, 0)), "유효 범위 이웃만 상인으로 인정");
+    }
+
+    #[test]
     fn 퀘스트_주민_필드는_기본값으로_초기화된다() {
         let v = Villager {
             id: "elder".to_string(),
@@ -868,6 +1056,8 @@ mod tests {
             quest_dialogue_idx: 0,
             base_color: Color::WHITE,
             home_room: None,
+            stationary: false,
+            vendor: false,
         };
         assert_eq!(v.id, "elder");
         assert_eq!(v.quest_dialogue_idx, 0);
@@ -1300,6 +1490,7 @@ mod tests {
         vreg.villagers.push(VillagerDef {
             id: "elder".to_string(), name: "장로".to_string(),
             color: [1.0, 1.0, 1.0], dialogs: vec![], speed: 1.0,
+            stationary: false, vendor: false,
         });
         assert!(collect_missing_giver_refs(&qreg, &vreg).is_empty());
     }
@@ -1377,6 +1568,18 @@ mod tests {
             color: [0.5, 0.6, 0.7],
             dialogs: vec!["안녕".to_string(), "또 봐".to_string()],
             speed: 1.0,
+            stationary: false, vendor: false,
+        }
+    }
+
+    /// vendor/stationary 플래그를 지정한 VillagerDef (상점 테스트용).
+    fn vendor_def(id: &str, name: &str) -> VillagerDef {
+        VillagerDef {
+            id: id.to_string(), name: name.to_string(),
+            color: [0.3, 0.9, 0.3],
+            dialogs: vec!["좋은 물건 있소".to_string()],
+            speed: 1.0,
+            stationary: true, vendor: true,
         }
     }
 
@@ -1390,6 +1593,7 @@ mod tests {
                 dialogue_idx: 0, tile_x: tile.0, tile_y: tile.1,
                 just_bumped: false, quest_dialogue_idx: 0,
                 base_color: Color::WHITE, home_room: None,
+                stationary: false, vendor: false,
             },
             Speed::new(1.0),
             MoveQueue::default(),
@@ -1508,6 +1712,7 @@ mod tests {
                 id: "m".into(), name: "이동".into(), dialogues: vec![],
                 dialogue_idx: 0, tile_x: 0, tile_y: 0, just_bumped: false,
                 quest_dialogue_idx: 0, base_color: Color::WHITE, home_room: None,
+                stationary: false, vendor: false,
             },
         )).id();
         app.world.resource_mut::<Time>().advance_by(Duration::from_secs_f32(0.016));
@@ -1533,6 +1738,7 @@ mod tests {
                 id: "m".into(), name: "이동".into(), dialogues: vec![],
                 dialogue_idx: 0, tile_x: 0, tile_y: 0, just_bumped: false,
                 quest_dialogue_idx: 0, base_color: Color::WHITE, home_room: None,
+                stationary: false, vendor: false,
             },
         )).id();
         app.world.resource_mut::<Time>().advance_by(Duration::from_secs_f32(0.5));
@@ -1588,6 +1794,7 @@ mod tests {
                 id: "a".into(), name: "갑".into(), dialogues: vec![],
                 dialogue_idx: 0, tile_x: 10, tile_y: 10, just_bumped: true, // 충돌 플래그 on
                 quest_dialogue_idx: 0, base_color: Color::WHITE, home_room: None,
+                stationary: false, vendor: false,
             },
             Speed::new(1.0),
             MoveQueue::default(),
@@ -1597,6 +1804,46 @@ mod tests {
         let q = app.world.get::<MoveQueue>(e).unwrap();
         assert!(q.0.is_empty(), "충돌 직후 턴에는 이동하지 않아야 한다 (take_turn=false 분기)");
         assert!(!app.world.get::<Villager>(e).unwrap().just_bumped, "플래그 소모");
+    }
+
+    #[test]
+    fn vendor_주민은_턴이_여러번_지나도_제자리에_있는다() {
+        // 정지 vendor 는 villager_turn 이 매 턴 스킵해 좌표가 변하지 않는다.
+        let mut app = turn_app();
+        let e = app.world.spawn((
+            Text::from_section("$", TextStyle::default()),
+            Transform::from_translation(tile_to_world_coords(10, 10).extend(Z_VILLAGER)),
+            Villager {
+                id: "merchant".into(), name: "상인".into(), dialogues: vec![],
+                dialogue_idx: 0, tile_x: 10, tile_y: 10, just_bumped: false,
+                quest_dialogue_idx: 0, base_color: Color::WHITE, home_room: None,
+                stationary: true, vendor: true,
+            },
+            Speed::new(1.0),
+            MoveQueue::default(),
+        )).id();
+        for _ in 0..20 {
+            app.world.send_event(PlayerActedEvent);
+            app.update();
+        }
+        let v = app.world.get::<Villager>(e).unwrap();
+        assert_eq!((v.tile_x, v.tile_y), (10, 10), "정지 vendor 는 제자리 유지");
+        assert!(app.world.get::<MoveQueue>(e).unwrap().0.is_empty(), "이동 큐가 비어 있어야 한다");
+    }
+
+    #[test]
+    fn 일반주민은_턴이_지나면_언젠가_이동한다() {
+        // 대조군: 정지 아님 → 충분히 많은 턴 동안 한 번은 이동한다.
+        let mut app = turn_app();
+        let e = spawn_villager(&mut app, "farmer", "농부", (10, 10));
+        let mut moved = false;
+        for _ in 0..200 {
+            app.world.send_event(PlayerActedEvent);
+            app.update();
+            let v = app.world.get::<Villager>(e).unwrap();
+            if (v.tile_x, v.tile_y) != (10, 10) { moved = true; break; }
+        }
+        assert!(moved, "일반 주민은 언젠가 이동해야 한다(정지와 대조)");
     }
 
     #[test]
@@ -1752,6 +1999,98 @@ mod tests {
         assert_eq!(app.world.query::<&Villager>().iter(&app.world).count(), 0);
     }
 
+    #[test]
+    fn 상점이_있으면_vendor가_가판대뒤_고정위치에_정지로_스폰된다() {
+        let mut app = asset_app();
+        let mut map = full_floor_map();
+        map.map_type = MapType::Village;
+        map.rooms = rooms_with(2);
+        map.shop_vendor = Some((30, 25)); // 가판대 뒤 상인 자리
+        app.insert_resource(MapResource(map));
+        app.insert_resource(QuestRegistry::default());
+        let mut vreg = VillagerRegistry::default();
+        vreg.villagers.push(vendor_def("merchant", "상인"));
+        vreg.villagers.push(vdef("farmer", "농부"));
+        app.insert_resource(vreg);
+        app.add_systems(Update, spawn_on_startup);
+        app.update();
+        // merchant 는 (30,25) 에 정지·vendor 로 스폰.
+        let merchant = app.world.query::<&Villager>().iter(&app.world)
+            .find(|v| v.id == "merchant").expect("vendor 가 스폰돼야 한다");
+        assert_eq!((merchant.tile_x, merchant.tile_y), (30, 25), "가판대 뒤 고정 위치");
+        assert!(merchant.stationary, "vendor 는 정지 주민");
+        assert!(merchant.vendor, "vendor 플래그 유지");
+    }
+
+    #[test]
+    fn vendor는_가판대에_스폰되면_방에_중복_스폰되지_않는다() {
+        // shop_vendor 가 있으면 vendor 는 카운터에만 1명, 방 배치에서 제외된다.
+        let mut app = asset_app();
+        let mut map = full_floor_map();
+        map.map_type = MapType::Village;
+        map.rooms = rooms_with(3); // 더미1 + 방3
+        map.shop_vendor = Some((30, 25));
+        app.insert_resource(MapResource(map));
+        app.insert_resource(QuestRegistry::default());
+        let mut vreg = VillagerRegistry::default();
+        vreg.villagers.push(vendor_def("merchant", "상인"));
+        app.insert_resource(vreg);
+        app.add_systems(Update, spawn_on_startup);
+        app.update();
+        // vendor 만 등록돼 있고 가판대에 1명 스폰 — 방 3개에 추가 vendor 가 없어야 한다.
+        let merchant_count = app.world.query::<&Villager>().iter(&app.world)
+            .filter(|v| v.id == "merchant").count();
+        assert_eq!(merchant_count, 1, "vendor 는 가판대에 1명만 스폰");
+    }
+
+    #[test]
+    fn vendor_글리프는_달러기호로_표시된다() {
+        let mut app = asset_app();
+        let mut map = full_floor_map();
+        map.map_type = MapType::Village;
+        map.rooms = rooms_with(1);
+        map.shop_vendor = Some((30, 25));
+        app.insert_resource(MapResource(map));
+        app.insert_resource(QuestRegistry::default());
+        let mut vreg = VillagerRegistry::default();
+        vreg.villagers.push(vendor_def("merchant", "상인"));
+        app.insert_resource(vreg);
+        app.add_systems(Update, spawn_on_startup);
+        app.update();
+        // vendor 엔티티의 Text 글리프가 '$' 여야 한다.
+        let mut found = false;
+        let mut q = app.world.query::<(&Villager, &Text)>();
+        for (v, text) in q.iter(&app.world) {
+            if v.id == "merchant" {
+                assert_eq!(text.sections[0].value, "$", "vendor 글리프는 '$'");
+                found = true;
+            }
+        }
+        assert!(found, "vendor 엔티티를 찾아야 한다");
+    }
+
+    #[test]
+    fn 상점_위치가_없으면_vendor도_가판대에_스폰되지_않는다() {
+        // shop_vendor 가 None 이면 do_spawn 의 vendor 분기를 타지 않는다(false 측 커버).
+        let mut app = asset_app();
+        let mut map = full_floor_map();
+        map.map_type = MapType::Village;
+        map.rooms = rooms_with(2);
+        map.shop_vendor = None;
+        app.insert_resource(MapResource(map));
+        app.insert_resource(QuestRegistry::default());
+        let mut vreg = VillagerRegistry::default();
+        // vendor 는 일반 퀘스트 giver 가 아니므로 방 배치에서 regular 로 들어간다.
+        vreg.villagers.push(vendor_def("merchant", "상인"));
+        app.insert_resource(vreg);
+        app.add_systems(Update, spawn_on_startup);
+        app.update();
+        // 가판대 고정 스폰은 없지만, 일반 주민 풀에 들어가 방에 스폰될 수 있다(고정 위치 아님).
+        let at_fixed = app.world.query::<&Villager>().iter(&app.world)
+            .any(|v| v.id == "merchant" && (v.tile_x, v.tile_y) == (30, 25));
+        assert!(!at_fixed, "shop_vendor 가 없으면 고정 위치 스폰은 없다");
+    }
+
     fn regen_app() -> App {
         let mut app = asset_app();
         app.add_event::<VillagerRespawnEvent>();
@@ -1759,6 +2098,8 @@ mod tests {
         let mut vreg = VillagerRegistry::default();
         vreg.villagers.push(vdef("farmer", "농부"));
         app.insert_resource(vreg);
+        // respawn_on_regen 은 shop_vendor 를 읽으려 MapResource 가 필요하다.
+        app.insert_resource(MapResource(full_floor_map()));
         app.add_systems(Update, respawn_on_regen);
         app
     }
@@ -1813,17 +2154,67 @@ mod tests {
             .insert_resource(PlayerInventory::default())
             .insert_resource(WorldState::default())
             .insert_resource(crate::modules::item::build_test_registry())
+            .insert_resource(MapResource(full_floor_map()))
             .add_systems(Update, handle_bump);
         app
+    }
+
+    /// vendor 주민 엔티티를 스폰한다(상점 상호작용 테스트용).
+    fn spawn_vendor(app: &mut App, id: &str, name: &str, tile: (usize, usize)) -> Entity {
+        app.world.spawn((
+            Text::from_section("$", TextStyle::default()),
+            Transform::from_translation(tile_to_world_coords(tile.0, tile.1).extend(Z_VILLAGER)),
+            Villager {
+                id: id.to_string(), name: name.to_string(),
+                dialogues: vec![], dialogue_idx: 0, tile_x: tile.0, tile_y: tile.1,
+                just_bumped: false, quest_dialogue_idx: 0,
+                base_color: Color::WHITE, home_room: None,
+                stationary: true, vendor: true,
+            },
+            Speed::new(1.0), MoveQueue::default(),
+        )).id()
     }
 
     #[test]
     fn 상인을_밀면_상점_열기_이벤트가_발생한다() {
         let mut app = bump_app(QuestRegistry::default());
-        spawn_villager(&mut app, "merchant", "상인", (5, 5));
+        spawn_vendor(&mut app, "merchant", "상인", (5, 5));
         app.world.send_event(BumpTileEvent(5, 5));
         app.update();
         assert_eq!(app.world.resource::<Events<ShopOpenEvent>>().len(), 1);
+    }
+
+    #[test]
+    fn 카운터앞_타일에서_범프하면_상점이_열린다() {
+        // 카운터 너머 보정: 손님이 카운터(5,6)를 범프하면 그 뒤 상인(5,5) 상점이 열린다.
+        let mut app = bump_app(QuestRegistry::default());
+        app.world.resource_mut::<MapResource>().map_mut().set_tile(5, 6, TileKind::Counter);
+        spawn_vendor(&mut app, "merchant", "상인", (5, 5)); // 카운터 뒤 상인
+        app.world.send_event(BumpTileEvent(5, 6)); // 카운터를 범프
+        app.update();
+        assert_eq!(app.world.resource::<Events<ShopOpenEvent>>().len(), 1,
+            "카운터 너머 상인의 상점이 열려야 한다");
+    }
+
+    #[test]
+    fn 상인없는_카운터를_범프하면_상점이_열리지_않는다() {
+        let mut app = bump_app(QuestRegistry::default());
+        app.world.resource_mut::<MapResource>().map_mut().set_tile(5, 6, TileKind::Counter);
+        // 카운터 뒤에 상인이 없다.
+        app.world.send_event(BumpTileEvent(5, 6));
+        app.update();
+        assert_eq!(app.world.resource::<Events<ShopOpenEvent>>().len(), 0,
+            "카운터 뒤 상인 없으면 상점이 열리지 않는다");
+    }
+
+    #[test]
+    fn 정지vendor도_범프시_충돌플래그가_설정된다() {
+        // vendor 직접 범프 시 just_bumped 플래그가 설정되는지(직접 인접 경로).
+        let mut app = bump_app(QuestRegistry::default());
+        let e = spawn_vendor(&mut app, "merchant", "상인", (5, 5));
+        app.world.send_event(BumpTileEvent(5, 5));
+        app.update();
+        assert!(app.world.get::<Villager>(e).unwrap().just_bumped, "vendor 범프 시 플래그 설정");
     }
 
     #[test]
@@ -1870,6 +2261,7 @@ mod tests {
                 id: "mute".into(), name: "벙어리".into(), dialogues: vec![], // 대사 없음
                 dialogue_idx: 0, tile_x: 5, tile_y: 5, just_bumped: false,
                 quest_dialogue_idx: 0, base_color: Color::WHITE, home_room: None,
+                stationary: false, vendor: false,
             },
             Speed::new(1.0), MoveQueue::default(),
         )).id();
@@ -1966,6 +2358,7 @@ mod tests {
             id: "elder".into(), name: "장로".into(), dialogues: vec![],
             dialogue_idx: 0, tile_x: 0, tile_y: 0, just_bumped: false,
             quest_dialogue_idx: 0, base_color: Color::WHITE, home_room: None,
+            stationary: false, vendor: false,
         }
     }
 
@@ -2118,6 +2511,7 @@ mod tests {
                 id: id.to_string(), name: id.to_string(), dialogues: vec![],
                 dialogue_idx: 0, tile_x: 0, tile_y: 0, just_bumped: false,
                 quest_dialogue_idx: 0, base_color: Color::rgb(0.2, 0.3, 0.4), home_room: None,
+                stationary: false, vendor: false,
             },
             Speed::new(1.0), MoveQueue::default(),
         )).id()

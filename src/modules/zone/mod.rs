@@ -1922,6 +1922,8 @@ mod tests {
                 quest_dialogue_idx: 0,
                 base_color: Color::WHITE,
                 home_room: None,
+                stationary: false,
+                vendor: false,
             },
         ));
         app.add_systems(Update, handle_spawn_quest_portal);
@@ -1978,6 +1980,7 @@ mod tests {
                 dialogues: vec![], dialogue_idx: 0, tile_x: 1, tile_y: 1,
                 just_bumped: false, quest_dialogue_idx: 0,
                 base_color: Color::WHITE, home_room: None,
+                stationary: false, vendor: false,
             },
         ));
         app.add_systems(Update, handle_spawn_quest_portal);
@@ -2025,6 +2028,7 @@ mod tests {
                 dialogues: vec![], dialogue_idx: 0, tile_x: 10, tile_y: 10,
                 just_bumped: false, quest_dialogue_idx: 0,
                 base_color: Color::WHITE, home_room: None,
+                stationary: false, vendor: false,
             },
         ));
         app.add_systems(Update, handle_spawn_quest_portal);
@@ -2076,6 +2080,7 @@ mod tests {
                 dialogues: vec![], dialogue_idx: 0, tile_x: w - 1, tile_y: h - 1,
                 just_bumped: false, quest_dialogue_idx: 0,
                 base_color: Color::WHITE, home_room: None,
+                stationary: false, vendor: false,
             },
         ));
         app.add_systems(Update, handle_spawn_quest_portal);

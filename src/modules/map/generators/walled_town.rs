@@ -2,6 +2,7 @@ use rand::prelude::*;
 use crate::modules::map::{Map, TileKind, MapType, Rect};
 use super::super::MapGenerator;
 use super::add_rooms_from_floor;
+use super::grid_village::carve_shop_counter;
 
 /// 성벽으로 둘러싸인 마을 생성기.
 ///
@@ -62,6 +63,13 @@ impl MapGenerator for WalledTownGenerator {
                 let bh = (block - 3).min(height - 2 - by - 1);
                 let building = Rect::new(bx, by, bw, bh);
                 carve_building(&mut map, &building, &mut rng);
+                // 두 번째 건물을 상점으로 — 카운터 한 줄 + 그 뒤 상인 자리.
+                // (rooms[0] 은 플레이어 스폰 방이므로 그 다음 건물에 둔다.)
+                if map.shop_vendor.is_none() && !rooms.is_empty() {
+                    if let Some(vendor) = carve_shop_counter(&mut map, &building) {
+                        map.shop_vendor = Some(vendor);
+                    }
+                }
                 rooms.push(building);
                 bx += block;
             }
@@ -184,5 +192,15 @@ mod tests {
             assert_eq!(map.get_tile(0, y), TileKind::Wall, "좌측 테두리는 일반 벽");
             assert_eq!(map.get_tile(40 - 1, y), TileKind::Wall, "우측 테두리는 일반 벽");
         }
+    }
+
+    #[test]
+    fn 성벽마을도_상점건물에_카운터와_상인위치를_둔다() {
+        let gen = WalledTownGenerator;
+        let map = gen.generate(40, 30, 7);
+        let vendor = map.shop_vendor.expect("성벽 마을에도 상점 vendor 위치가 있어야 한다");
+        assert_eq!(map.get_tile(vendor.0, vendor.1), TileKind::Floor, "상인 자리는 바닥");
+        let counters = map.tiles.iter().filter(|t| t.kind == TileKind::Counter).count();
+        assert!(counters > 0, "상점에는 카운터 타일이 있어야 한다");
     }
 }

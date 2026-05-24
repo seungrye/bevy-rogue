@@ -32,17 +32,20 @@ pub enum TileKind {
     DestructibleWall,
     /// 부서진 잔해. 통행 가능하고 시야가 통과한다.
     Rubble,
+    /// 상점 가판대(카운터). 통행은 불가하지만 시야는 통과한다 — 플레이어가
+    /// 카운터 앞에 서서 그 너머의 상인(vendor)을 보고 거래한다.
+    Counter,
 }
 
 impl TileKind {
-    /// 이동 가능 여부. `Floor`/`Sand`/`Rubble` 은 통과, `Wall`/`Water`/`DestructibleWall` 은 막힌다.
+    /// 이동 가능 여부. `Floor`/`Sand`/`Rubble` 은 통과, `Wall`/`Water`/`DestructibleWall`/`Counter` 는 막힌다.
     /// 플레이어·몬스터·주민 이동과 경로탐색이 이 술어를 사용한다.
     pub fn is_walkable(self) -> bool {
         matches!(self, TileKind::Floor | TileKind::Sand | TileKind::Rubble)
     }
 
     /// 시야 차단 여부. `Wall`/`DestructibleWall` 이 시야를 막고, 나머지는 시야가 통과한다.
-    /// FOV/시선(LoS) 계산이 이 술어를 사용한다(물·잔해 너머가 보인다).
+    /// FOV/시선(LoS) 계산이 이 술어를 사용한다(물·잔해·카운터 너머가 보인다).
     pub fn blocks_sight(self) -> bool {
         matches!(self, TileKind::Wall | TileKind::DestructibleWall)
     }
@@ -52,6 +55,17 @@ impl TileKind {
     pub fn is_destructible(self) -> bool {
         matches!(self, TileKind::DestructibleWall)
     }
+
+    /// 상호작용 가능 여부. `Counter`(가판대)는 통행 불가지만 향해 이동하면
+    /// 범프로 상점이 열린다. 그 외 타일은 상호작용 대상이 아니다.
+    pub fn is_interactable(self) -> bool {
+        matches!(self, TileKind::Counter)
+    }
+}
+
+/// `TileKind::is_interactable` 의 자유 함수 형태(호출부 가독성용 thin wrapper).
+pub fn is_interactable_tile(kind: TileKind) -> bool {
+    kind.is_interactable()
 }
 
 /// `(x, y)` 가 `DestructibleWall` 이고 맵 테두리가 아니면 `Rubble` 로 바꾸고 `true`.
@@ -158,6 +172,11 @@ pub struct Map {
     pub seed: u64,
     #[serde(default)]
     pub algorithm: String,
+    /// 마을 상점의 상인(vendor) 고정 위치 — 가판대(Counter) 뒤 바닥 타일.
+    /// `Some` 이면 마을 생성기가 한 건물을 상점으로 만들어 여기에 상인을 배치한다.
+    /// `#[serde(default)]` 로 기존 세이브(이 필드 없는 데이터)와 호환된다.
+    #[serde(default)]
+    pub shop_vendor: Option<(usize, usize)>,
 }
 
 impl Map {
@@ -170,6 +189,7 @@ impl Map {
             map_type: MapType::Dungeon,
             seed: 0,
             algorithm: String::new(),
+            shop_vendor: None,
         }
     }
     pub fn index(&self, x: usize, y: usize) -> usize { y * self.width + x }
@@ -691,6 +711,7 @@ pub fn tile_glyph(kind: TileKind) -> &'static str {
         TileKind::Sand => ",",
         TileKind::DestructibleWall => "▒",
         TileKind::Rubble => "%",
+        TileKind::Counter => "=",
     }
 }
 
@@ -707,6 +728,8 @@ pub fn tile_base_color(kind: TileKind) -> Color {
         TileKind::Sand => Color::rgb(0.85, 0.78, 0.5),
         TileKind::DestructibleWall => Color::rgb(0.75, 0.75, 0.78),
         TileKind::Rubble => Color::rgb(0.5, 0.45, 0.4),
+        // 카운터는 따뜻한 나무색으로 — 상점임을 시각적으로 구분.
+        TileKind::Counter => Color::rgb(0.72, 0.52, 0.28),
     }
 }
 
@@ -1054,6 +1077,65 @@ mod tests {
     fn 잔해는_통행가능하고_시야가_통과한다() {
         assert!(TileKind::Rubble.is_walkable(), "Rubble 은 통행 가능해야 한다");
         assert!(!TileKind::Rubble.blocks_sight(), "Rubble 은 시야가 통과해야 한다");
+    }
+
+    // --- 상점 가판대(Counter) 술어 ---
+
+    #[test]
+    fn 카운터는_통행불가지만_시야는_통과한다() {
+        // 플레이어가 카운터 앞에 서서 그 너머 상인을 볼 수 있어야 한다.
+        assert!(!TileKind::Counter.is_walkable(), "카운터는 통행 불가여야 한다");
+        assert!(!TileKind::Counter.blocks_sight(), "카운터 너머가 보여야 한다(시야 통과)");
+    }
+
+    #[test]
+    fn 카운터는_파괴불가이고_상호작용_가능하다() {
+        assert!(!TileKind::Counter.is_destructible(), "카운터는 폭발로 부술 수 없다");
+        assert!(TileKind::Counter.is_interactable(), "카운터는 향해 이동하면 상호작용한다");
+        assert!(is_interactable_tile(TileKind::Counter), "자유 함수도 동일하게 판정");
+    }
+
+    #[test]
+    fn 카운터를_제외한_타일은_상호작용_대상이_아니다() {
+        for k in [TileKind::Wall, TileKind::Floor, TileKind::Water,
+                  TileKind::Sand, TileKind::DestructibleWall, TileKind::Rubble] {
+            assert!(!k.is_interactable(), "{:?} 는 상호작용 대상이 아니어야 한다", k);
+            assert!(!is_interactable_tile(k));
+        }
+    }
+
+    #[test]
+    fn 카운터는_고유한_글리프와_색을_가진다() {
+        assert_eq!(tile_glyph(TileKind::Counter), "=", "카운터 글리프는 '='");
+        let c = tile_base_color(TileKind::Counter);
+        // 다른 지형색과 구분돼야 한다.
+        assert_ne!(c, tile_base_color(TileKind::Floor));
+        assert_ne!(c, tile_base_color(TileKind::Wall));
+        assert_ne!(c, tile_base_color(TileKind::DestructibleWall));
+    }
+
+    #[test]
+    fn 새_맵은_상점없음으로_초기화된다() {
+        let m = Map::new(10, 10);
+        assert!(m.shop_vendor.is_none(), "기본 맵은 상점 vendor 위치가 없어야 한다");
+    }
+
+    #[test]
+    fn 상점위치는_직렬화_왕복으로_보존된다() {
+        let mut m = Map::new(3, 3);
+        m.shop_vendor = Some((1, 2));
+        let s = ron::ser::to_string(&m).expect("직렬화 성공");
+        let parsed: Map = ron::de::from_str(&s).expect("역직렬화 성공");
+        assert_eq!(parsed.shop_vendor, Some((1, 2)), "상점 위치가 왕복으로 보존된다");
+    }
+
+    #[test]
+    fn shop_vendor_필드가_없는_기존_맵_RON도_None으로_파싱된다() {
+        // 과거 세이브(이 필드 없는 데이터)는 #[serde(default)] 로 None 이 된다.
+        // 필드를 일부러 뺀 RON 을 직접 구성한다.
+        let ron_text = "(width:1,height:1,tiles:[(kind:Floor,revealed:false,visible:false)],rooms:[],map_type:Dungeon)";
+        let parsed: Map = ron::de::from_str(ron_text).expect("과거 형식 파싱 성공");
+        assert!(parsed.shop_vendor.is_none(), "필드 없으면 None 기본값");
     }
 
     #[test]

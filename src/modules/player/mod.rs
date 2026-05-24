@@ -1,7 +1,7 @@
 use crate::modules::{
     map::{
         draw_map, Map, MapResource, OccupiedTiles, MonsterTiles,
-        tile_to_world_coords, world_to_tile_coords, is_in_view, FOV_FRONT, FOV_BACK,
+        tile_to_world_coords, world_to_tile_coords, is_in_view, is_interactable_tile, FOV_FRONT, FOV_BACK,
         MAP_HEIGHT, MAP_WIDTH, TILE_SIZE,
         MapSystemSet, PlayerRespawnEvent, PlayerActedEvent, BumpTileEvent, AttackMonsterEvent,
     },
@@ -324,7 +324,15 @@ fn player_movement(
     let (cx, cy) = world_to_tile_coords(transform.translation);
     let Some((tx, ty)) = offset_tile_in_bounds(map, cx, cy, delta) else { return; };
 
-    if !map.get_tile(tx, ty).is_walkable() { return; }
+    if !map.get_tile(tx, ty).is_walkable() {
+        // 통행 불가 타일이라도 상호작용 가능(가판대 등)이면 범프로 상호작용한다.
+        // (handle_bump 가 카운터 너머 vendor 상점을 연다.)
+        if is_interactable_tile(map.get_tile(tx, ty)) {
+            bump.send(BumpTileEvent(tx, ty));
+            acted.send(PlayerActedEvent);
+        }
+        return;
+    }
 
     if monster_tiles.0.contains(&(tx, ty)) {
         attack.send(AttackMonsterEvent(tx, ty));
@@ -1033,6 +1041,30 @@ mod tests {
         assert!(!h.moving());
         assert_eq!(h.bump_targets(), vec![(6, 5)]);
         assert_eq!(h.acted_count(), 1);
+    }
+
+    #[test]
+    fn 카운터로_이동하면_이동대신_범프로_상호작용한다() {
+        // 가판대(Counter)는 통행 불가지만 향해 이동하면 BumpTileEvent 로 상점을 연다.
+        let mut h = MoveHarness::new(20, 20);
+        h.set_tile(6, 5, TileKind::Counter);
+        h.press(KeyCode::ArrowRight);
+        h.update();
+        assert!(!h.moving(), "카운터로는 이동하지 않는다");
+        assert_eq!(h.bump_targets(), vec![(6, 5)], "카운터를 향한 이동은 범프 이벤트");
+        assert_eq!(h.acted_count(), 1, "카운터 상호작용도 턴을 소비한다");
+    }
+
+    #[test]
+    fn 일반_벽으로_이동하면_범프도_이동도_없다() {
+        // 상호작용 불가 통행불가 타일(Wall)은 범프도 이동도 만들지 않는다(기존 동작 회귀).
+        let mut h = MoveHarness::new(20, 20);
+        h.set_tile(6, 5, TileKind::Wall);
+        h.press(KeyCode::ArrowRight);
+        h.update();
+        assert!(!h.moving());
+        assert!(h.bump_targets().is_empty(), "벽은 범프 이벤트를 만들지 않는다");
+        assert_eq!(h.acted_count(), 0, "벽으로의 이동은 턴을 소비하지 않는다");
     }
 
     #[test]

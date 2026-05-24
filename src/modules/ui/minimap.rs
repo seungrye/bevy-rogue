@@ -364,6 +364,7 @@ pub(crate) fn full_map_tile_color(map: &Map, x: i32, y: i32, player_x: usize, pl
             TileKind::Sand => C_VISIBLE_SAND,
             TileKind::DestructibleWall => C_VISIBLE_DWALL,
             TileKind::Rubble => C_VISIBLE_RUBBLE,
+            TileKind::Counter => C_VISIBLE_COUNTER,
         }
     } else {
         match map.tiles[idx].kind {
@@ -373,6 +374,7 @@ pub(crate) fn full_map_tile_color(map: &Map, x: i32, y: i32, player_x: usize, pl
             TileKind::Sand => C_REVEALED_SAND,
             TileKind::DestructibleWall => C_REVEALED_DWALL,
             TileKind::Rubble => C_REVEALED_RUBBLE,
+            TileKind::Counter => C_REVEALED_COUNTER,
         }
     }
 }
@@ -415,6 +417,9 @@ const C_REVEALED_WATER: [u8; 4] = [26, 51, 92, 255];
 const C_REVEALED_SAND: [u8; 4] = [86, 80, 51, 255];
 const C_REVEALED_DWALL: [u8; 4] = [72, 60, 60, 255];
 const C_REVEALED_RUBBLE: [u8; 4] = [52, 47, 42, 255];
+// 상점 카운터 — 따뜻한 나무색 계열로 다른 지형과 구분(미니맵 상점 마커 역할).
+const C_VISIBLE_COUNTER: [u8; 4] = [200, 150, 90, 255];
+const C_REVEALED_COUNTER: [u8; 4] = [90, 66, 40, 255];
 const C_PLAYER: [u8; 4] = [255, 228, 64, 255];
 
 /// 미니맵 픽셀 하나가 대표할 월드 타일 좌표를 반환한다.
@@ -453,6 +458,7 @@ pub(crate) fn tile_color(map: &Map, x: i32, y: i32, player_x: usize, player_y: u
             TileKind::Sand => C_VISIBLE_SAND,
             TileKind::DestructibleWall => C_VISIBLE_DWALL,
             TileKind::Rubble => C_VISIBLE_RUBBLE,
+            TileKind::Counter => C_VISIBLE_COUNTER,
         }
     } else if map.tiles[idx].revealed {
         match map.tiles[idx].kind {
@@ -462,6 +468,7 @@ pub(crate) fn tile_color(map: &Map, x: i32, y: i32, player_x: usize, player_y: u
             TileKind::Sand => C_REVEALED_SAND,
             TileKind::DestructibleWall => C_REVEALED_DWALL,
             TileKind::Rubble => C_REVEALED_RUBBLE,
+            TileKind::Counter => C_REVEALED_COUNTER,
         }
     } else {
         C_UNEXPLORED
@@ -811,6 +818,41 @@ mod tests {
         assert_ne!(C_VISIBLE_DWALL, C_VISIBLE_RUBBLE);
         assert_ne!(C_VISIBLE_DWALL, C_VISIBLE_WALL);
         assert_ne!(C_VISIBLE_RUBBLE, C_VISIBLE_FLOOR);
+    }
+
+    #[test]
+    fn 미니맵은_상점_카운터에_고유한_색을_매핑한다() {
+        // 상점 카운터는 미니맵에서 상점 마커 역할을 하므로 다른 지형과 구분돼야 한다.
+        let mut map = Map::new(10, 10);
+        map.set_tile(4, 4, TileKind::Counter);
+        let idx = map.index(4, 4);
+
+        // 보이는 상태
+        map.tiles[idx].visible = true;
+        assert_eq!(tile_color(&map, 4, 4, 0, 0), C_VISIBLE_COUNTER);
+        // 탐험만 된 상태
+        map.tiles[idx].visible = false;
+        map.tiles[idx].revealed = true;
+        assert_eq!(tile_color(&map, 4, 4, 0, 0), C_REVEALED_COUNTER);
+
+        // 다른 지형색과 구분돼야 한다.
+        assert_ne!(C_VISIBLE_COUNTER, C_VISIBLE_FLOOR);
+        assert_ne!(C_VISIBLE_COUNTER, C_VISIBLE_WALL);
+        assert_ne!(C_VISIBLE_COUNTER, C_VISIBLE_DWALL);
+    }
+
+    #[test]
+    fn 전체맵도_상점_카운터에_고유한_색을_매핑한다() {
+        let mut map = Map::new(10, 10);
+        map.set_tile(2, 2, TileKind::Counter);
+        let idx = map.index(2, 2);
+        // 보임 (revealed + visible)
+        map.tiles[idx].revealed = true;
+        map.tiles[idx].visible = true;
+        assert_eq!(full_map_tile_color(&map, 2, 2, 0, 0), C_VISIBLE_COUNTER);
+        // 탐험만 (revealed, not visible)
+        map.tiles[idx].visible = false;
+        assert_eq!(full_map_tile_color(&map, 2, 2, 0, 0), C_REVEALED_COUNTER);
     }
 
     #[test]

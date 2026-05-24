@@ -11,6 +11,23 @@
 | `map_type` | `MapType` | `Dungeon` 또는 `Village` |
 | `seed` | `u64` | 이 맵을 생성한 시드 |
 | `algorithm` | `String` | 사용된 생성기 이름 (예: `"bsp"`, `"organic_village"`) |
+| `shop_vendor` | `Option<(usize, usize)>` | 마을 상점의 상인(vendor) 고정 위치(가판대 뒤 바닥). 마을 생성기가 한 건물을 상점으로 만들면 설정된다. |
+
+## 타일 종류 (TileKind)
+
+| 종류 | 글리프 | 통행 | 시야 차단 | 비고 |
+|------|--------|------|-----------|------|
+| `Wall` | `#` | ✕ | ○ | 테두리·자연 암벽(파괴 불가) |
+| `Floor` | `.` | ○ | ✕ | 일반 바닥 |
+| `Water` | `~` | ✕ | ✕ | 물(통행 불가, 시야는 통과) |
+| `Sand` | `,` | ○ | ✕ | 모래(해변) |
+| `DestructibleWall` | `▒` | ✕ | ○ | 건물 벽(폭발로 파괴 가능 → `Rubble`) |
+| `Rubble` | `%` | ○ | ✕ | 부서진 잔해 |
+| `Counter` | `=` | ✕ | ✕ | **상점 가판대.** 통행 불가지만 시야는 통과해 카운터 앞에서 그 너머 상인과 거래한다. |
+
+`is_walkable`/`blocks_sight`/`is_destructible`/`is_interactable` 술어가 종류별 동작을
+결정하며, 렌더·이동·FOV·경로탐색·미니맵이 모두 이 술어를 사용한다.
+`Counter` 는 `is_interactable` 이 참이라 향해 이동하면 상점이 열린다(카운터 앞 보정).
 
 ## 생성 알고리즘
 

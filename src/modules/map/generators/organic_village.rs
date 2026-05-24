@@ -1,6 +1,7 @@
 use rand::prelude::*;
 use crate::modules::map::{Map, TileKind, MapType, Rect};
 use super::super::MapGenerator;
+use super::grid_village::carve_shop_counter;
 
 pub struct OrganicVillageGenerator;
 
@@ -51,6 +52,14 @@ impl MapGenerator for OrganicVillageGenerator {
             let door_x = (building.x1 + building.x2) / 2;
             map.set_tile(door_x, building.y2 - 1, TileKind::Floor);
 
+            // 두 번째 이후 건물 중 충분히 큰 것 하나를 상점으로 — 카운터 + 그 뒤 상인 자리.
+            // (rooms[0] 은 플레이어 스폰 방이므로 제외.)
+            if map.shop_vendor.is_none() && !rooms.is_empty() {
+                if let Some(vendor) = carve_shop_counter(&mut map, &building) {
+                    map.shop_vendor = Some(vendor);
+                }
+            }
+
             rooms.push(building);
         }
 
@@ -72,4 +81,29 @@ impl MapGenerator for OrganicVillageGenerator {
         map
     }
     fn name(&self) -> &str { "organic_village" }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(non_snake_case)]
+    use super::*;
+    use crate::modules::map::MapGenerator;
+
+    #[test]
+    fn 유기마을은_마을타입이고_상점건물을_둔다() {
+        let gen = OrganicVillageGenerator;
+        // 여러 시드를 시도해 충분히 큰 상점 건물이 생기는 시드를 찾는다(건물 크기 랜덤).
+        let mut found = false;
+        for seed in 0..30u64 {
+            let map = gen.generate(60, 60, seed);
+            assert_eq!(map.map_type, MapType::Village);
+            if let Some(vendor) = map.shop_vendor {
+                assert_eq!(map.get_tile(vendor.0, vendor.1), TileKind::Floor, "상인 자리는 바닥");
+                assert!(map.tiles.iter().any(|t| t.kind == TileKind::Counter), "카운터 존재");
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "여러 시드 중 하나는 상점 건물을 둬야 한다");
+    }
 }
