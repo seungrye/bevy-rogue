@@ -9,7 +9,9 @@ use crate::modules::{
     item::EquipmentPanelOpen,
     ui::{help::HelpPanelOpen, shop::ShopPanelOpen, guide_panel::GuidePanelOpen},
     elemental::ElementalStatus,
+    villager::{Villager, VillagerSystemSet},
 };
+use bevy::input::touch::Touches;
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
 use std::collections::VecDeque;
@@ -129,6 +131,155 @@ pub struct MoveHoldState {
 
 #[derive(Resource, Default)]
 pub struct PlayerPath(pub VecDeque<(usize, usize)>);
+
+/// 마우스 좌클릭으로 시작된 자동 상호작용 대상.
+///
+/// - `Npc(entity)`: 클릭 타일에 villager 가 있을 때. 매 턴 그 villager 의 현재
+///   위치로 경로를 재계산하다가 체비쇼프 거리 1 이내가 되면 자동으로 범프해
+///   기존 `handle_bump` 흐름(말 걸기/상점/대화)으로 연결한다. villager 가
+///   despawn 되면 follow 가 안전하게 종료된다.
+/// - `Tile(x, y)`: 클릭 타일이 카운터 같은 interactable 비-walkable 타일일 때.
+///   인접한 walkable 타일 중 가장 가까운 곳으로 경로를 깐 뒤, 도착(또는 인접
+///   체비쇼프 1) 시 자동으로 `BumpTileEvent(클릭타일)` 를 발행한다. 카운터는
+///   움직이지 않으므로 단발 — 재계산 불필요.
+/// - `None`: 평범한 walkable 빈 타일 클릭(=기존 단순 이동) 또는 follow 비활성.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InteractTarget {
+    Npc(Entity),
+    Tile(usize, usize),
+}
+
+#[derive(Resource, Default)]
+pub struct MouseInteractTarget(pub Option<InteractTarget>);
+
+/// 두 타일 사이 체비쇼프(8방향) 거리.
+///
+/// 인접 판정에 사용 — 거리 1 이면 카디널·대각 8방향 중 하나에 닿아 있어
+/// 범프(말 걸기/카운터 상호작용)가 가능한 거리다.
+pub fn chebyshev_distance(a: (usize, usize), b: (usize, usize)) -> i32 {
+    let (ax, ay) = (a.0 as i32, a.1 as i32);
+    let (bx, by) = (b.0 as i32, b.1 as i32);
+    (ax - bx).abs().max((ay - by).abs())
+}
+
+/// 비-walkable 타일(`target_tile`, 예: 카운터)에 인접한 walkable 8-이웃 중
+/// `from_tile` 에서 BFS 가장 짧은 경로로 도달 가능한 타일 하나를 돌려준다.
+///
+/// 후보가 없거나 모두 도달 불가면 `None`. 두 후보의 BFS 거리가 같으면
+/// `find_path` 가 먼저 발견하는 쪽(`deltas` 순서대로 평가)을 고른다.
+pub fn nearest_adjacent_walkable(
+    map: &Map,
+    target_tile: (usize, usize),
+    from_tile: (usize, usize),
+) -> Option<(usize, usize)> {
+    let (tx, ty) = target_tile;
+    let deltas: [(i32, i32); 8] = [
+        (-1, 0), (1, 0), (0, -1), (0, 1),
+        (-1, -1), (1, -1), (-1, 1), (1, 1),
+    ];
+    let mut best: Option<((usize, usize), usize)> = None;
+    for (dx, dy) in deltas {
+        let nx = tx as i32 + dx;
+        let ny = ty as i32 + dy;
+        if nx < 0 || ny < 0 { continue; }
+        let (nx, ny) = (nx as usize, ny as usize);
+        if nx >= map.width || ny >= map.height { continue; }
+        if !map.get_tile(nx, ny).is_walkable() { continue; }
+        // 같은 자리면 이미 도착 — 거리 0.
+        if (nx, ny) == from_tile {
+            return Some((nx, ny));
+        }
+        let path = pathfinding::find_path(map, from_tile, (nx, ny));
+        if path.is_empty() { continue; }
+        let len = path.len();
+        match best {
+            Some((_, blen)) if blen <= len => {}
+            _ => best = Some(((nx, ny), len)),
+        }
+    }
+    best.map(|(t, _)| t)
+}
+
+/// 마우스 클릭 한 번이 어떤 결정으로 이어질지 분류한 결과.
+///
+/// `on_mouse_click` 시스템은 viewport 변환과 ECS 쿼리를 거친 뒤,
+/// 이 결정만큼은 순수 함수로 분리해 단위 테스트로 모든 분기를 커버한다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClickDecision {
+    /// 클릭 타일이 viewport 변환 실패·맵 밖 등으로 처리 불가 — 아무것도 하지 않는다.
+    Ignore,
+    /// 클릭 타일에 villager 가 있다 → 그 엔티티를 추적. 동봉된 경로로 접근.
+    FollowNpc { entity: Entity, path: VecDeque<(usize, usize)> },
+    /// 클릭 타일이 interactable 비-walkable(카운터 등) → 인접 walkable 까지
+    /// 이동하면서 도착 시 `(tx, ty)` 로 자동 범프.
+    InteractTile { tile: (usize, usize), path: VecDeque<(usize, usize)> },
+    /// 평범한 walkable 빈 타일 → 단순 이동.
+    Walk { path: VecDeque<(usize, usize)> },
+    /// 이미 인접한 villager 클릭 → 즉시 `BumpTileEvent(tile)` (follow 불필요).
+    /// `tile` 은 villager 의 현재 좌표. PlayerActedEvent 가 안 와도 즉시 처리되어야
+    /// 사용자가 "한 박자 늦게 말 거는" 체감을 받지 않게 한다.
+    ImmediateBump { tile: (usize, usize) },
+}
+
+/// 클릭 한 번이 만들 동작을 결정한다 (순수 함수, 헤드리스 단위 테스트로 커버).
+///
+/// `villager_at` 클로저는 해당 타일에 있는 villager 엔티티(있으면)를 반환한다.
+/// `target_tile` 이 `None` 이면(=viewport 변환 실패) `Ignore`. 경계 밖이면 `Ignore`.
+///
+/// "이미 인접" 케이스(체비쇼프 ≤ 1)는 `ImmediateBump` 로 분류해 `on_mouse_click`
+/// 이 PlayerActedEvent 대기 없이 즉시 BumpTileEvent 를 보내게 한다.
+pub fn classify_click(
+    target_tile: Option<(usize, usize)>,
+    map: &Map,
+    player_tile: (usize, usize),
+    villager_at: impl Fn(usize, usize) -> Option<Entity>,
+) -> ClickDecision {
+    let Some((tx, ty)) = target_tile else { return ClickDecision::Ignore; };
+    if tx >= map.width || ty >= map.height { return ClickDecision::Ignore; }
+
+    // 1) NPC 추적 — 타일 walkable 여부와 무관(villager 는 Floor 위에 있으니
+    //    일반적으로는 walkable 이지만, 우선순위는 NPC).
+    if villager_at(tx, ty).is_some() {
+        // 이미 인접하면 follow 불필요 — 즉시 범프.
+        if chebyshev_distance(player_tile, (tx, ty)) <= 1 {
+            return ClickDecision::ImmediateBump { tile: (tx, ty) };
+        }
+        let entity = villager_at(tx, ty).unwrap();
+        let path = pathfinding::find_path(map, player_tile, (tx, ty));
+        return ClickDecision::FollowNpc { entity, path: VecDeque::from(path) };
+    }
+
+    let tile = map.get_tile(tx, ty);
+    let walkable = tile.is_walkable();
+
+    if !walkable {
+        // 2) 카운터 등 interactable 비-walkable — 인접 walkable 로 가서 자동 범프.
+        if is_interactable_tile(tile) {
+            // 이미 카운터 인접이면 즉시 범프 — turn 소비 없이.
+            if chebyshev_distance(player_tile, (tx, ty)) <= 1 {
+                return ClickDecision::ImmediateBump { tile: (tx, ty) };
+            }
+            if let Some(adj) = nearest_adjacent_walkable(map, (tx, ty), player_tile) {
+                // adj == player_tile 케이스는 위 chebyshev≤1 가드에서 ImmediateBump
+                // 으로 이미 처리됨 — 여기 도달했으면 player_tile != adj.
+                let path = VecDeque::from(pathfinding::find_path(map, player_tile, adj));
+                if path.is_empty() {
+                    return ClickDecision::Ignore;
+                }
+                return ClickDecision::InteractTile { tile: (tx, ty), path };
+            }
+        }
+        return ClickDecision::Ignore;
+    }
+
+    // 3) 평범한 walkable 빈 타일.
+    let path = pathfinding::find_path(map, player_tile, (tx, ty));
+    if path.is_empty() {
+        ClickDecision::Ignore
+    } else {
+        ClickDecision::Walk { path: VecDeque::from(path) }
+    }
+}
 
 pub fn tick_hold(state: &mut MoveHoldState, dir: IVec2, just_pressed: bool, dt: f32) -> bool {
     if dir == IVec2::ZERO {
@@ -262,6 +413,7 @@ fn player_movement(
     time: Res<Time>,
     mut hold_state: ResMut<MoveHoldState>,
     mut player_path: ResMut<PlayerPath>,
+    mut interact_target: ResMut<MouseInteractTarget>,
     player_query: Query<(Entity, &Transform), (With<Player>, Without<MovingTo>, Without<Defeated>)>,
     map_res: Res<MapResource>,
     occupied: Res<OccupiedTiles>,
@@ -281,6 +433,7 @@ fn player_movement(
         hold_state.dir = IVec2::ZERO;
         hold_state.elapsed = 0.0;
         player_path.0.clear();
+        interact_target.0 = None;
         acted.send(PlayerActedEvent);
         return;
     }
@@ -296,9 +449,10 @@ fn player_movement(
         || keyboard_input.just_pressed(KeyCode::ArrowUp) || keyboard_input.just_pressed(KeyCode::KeyW)
         || keyboard_input.just_pressed(KeyCode::ArrowDown) || keyboard_input.just_pressed(KeyCode::KeyS);
 
-    // 키 입력이 있으면 자동 이동 경로 취소
+    // 키 입력이 있으면 자동 이동 경로 + follow 취소
     if dir != IVec2::ZERO || just_pressed {
         player_path.0.clear();
+        interact_target.0 = None;
     }
 
     // 자동 이동 경로 소비 (키 입력 없을 때)
@@ -309,10 +463,12 @@ fn player_movement(
 
         if monster_tiles.0.contains(&(tx, ty)) {
             player_path.0.clear();
+            interact_target.0 = None;
             attack.send(AttackMonsterEvent(tx, ty));
             acted.send(PlayerActedEvent);
         } else if occupied.0.contains(&(tx, ty)) {
             player_path.0.clear();
+            interact_target.0 = None;
             bump.send(BumpTileEvent(tx, ty));
             acted.send(PlayerActedEvent);
         } else {
@@ -381,42 +537,87 @@ fn smooth_player_lerp(
     }
 }
 
-/// 클릭한 화면 좌표(`target_world`)에서 자동 이동 경로를 계산하는 순수 결정 로직.
+/// 플레이어 위치에서 클릭 위치(타일 좌표)까지 새 경로/상호작용 대상을 적용하는 순수 결정 로직.
 ///
 /// 윈도우/카메라 viewport 변환은 헤드리스 테스트로 재현하기 어려워 시스템 쪽에 남기고,
-/// 변환 결과(`target_world: Option<Vec2>`)만 받아 분기를 모두 여기서 다룬다.
-/// 목적지가 이동 불가(`Wall`/`Water`)거나 viewport 변환이 실패하면 `None` 을 돌려
-/// 호출자가 경로를 건드리지 않게 한다.
+/// 변환 결과(`target_world: Option<Vec2>`)만 받아 모든 분기를 `classify_click` 으로 위임한다.
 fn plan_click_path(
     target_world: Option<Vec2>,
     map: &Map,
     player_world: Vec3,
-) -> Option<VecDeque<(usize, usize)>> {
-    let world_pos = target_world?;
+    villager_at: impl Fn(usize, usize) -> Option<Entity>,
+) -> ClickDecision {
+    let Some(world_pos) = target_world else { return ClickDecision::Ignore; };
     let world_vec3 = Vec3::new(world_pos.x, world_pos.y, 0.0);
-    let (tx, ty) = world_to_tile_coords(world_vec3);
-    if !map.get_tile(tx, ty).is_walkable() { return None; }
-
-    let (px, py) = world_to_tile_coords(player_world);
-    let path = pathfinding::find_path(map, (px, py), (tx, ty));
-    Some(VecDeque::from(path))
+    let target_tile = world_to_tile_coords(world_vec3);
+    let player_tile = world_to_tile_coords(player_world);
+    classify_click(Some(target_tile), map, player_tile, villager_at)
 }
 
-/// 플레이어 위치에서 클릭한 바닥 타일까지 자동 이동 경로를 만든다.
+/// 마우스/터치 클릭 한 번이 만든 `ClickDecision` 을 실제 상태(`PlayerPath`,
+/// `MouseInteractTarget`)와 즉시 범프 이벤트로 변환한다.
+///
+/// 마우스 좌클릭과 터치 탭은 입력 채널만 다르고 결정 적용 흐름은 동일해야 하므로
+/// 이 분기 처리를 한 곳에 모아둔다. 두 시스템(`on_mouse_click`/`on_touch_tap`)이
+/// viewport 변환·플레이어/맵 조회 끝에 이 헬퍼를 호출한다.
+fn apply_click_decision(
+    decision: ClickDecision,
+    player_path: &mut PlayerPath,
+    target: &mut MouseInteractTarget,
+    bump: &mut EventWriter<BumpTileEvent>,
+) {
+    match decision {
+        ClickDecision::Ignore => {
+            // 새 클릭이 무시되어도 기존 follow/path 는 정리한다(전형적인 cancel).
+            target.0 = None;
+            player_path.0.clear();
+        }
+        ClickDecision::FollowNpc { entity, path } => {
+            target.0 = Some(InteractTarget::Npc(entity));
+            player_path.0 = path;
+        }
+        ClickDecision::InteractTile { tile, path } => {
+            target.0 = Some(InteractTarget::Tile(tile.0, tile.1));
+            player_path.0 = path;
+        }
+        ClickDecision::Walk { path } => {
+            target.0 = None;
+            player_path.0 = path;
+        }
+        ClickDecision::ImmediateBump { tile } => {
+            // 이미 인접 — turn 소비 없이 즉시 범프.
+            bump.send(BumpTileEvent(tile.0, tile.1));
+            target.0 = None;
+            player_path.0.clear();
+        }
+    }
+}
+
+/// 플레이어 위치에서 클릭한 타일까지 자동 이동 경로 + (필요 시) 추적 대상을 정한다.
 ///
 /// 모달 패널이 열려 있을 때는 마우스 경로 이동도 무시한다. 키보드 이동과 같은
 /// 기준을 적용해 오버레이가 단순한 투명 UI가 아니라 상호작용 경계로 동작하게 한다.
+///
+/// 모바일 브라우저는 터치 후 합성(synthetic) `mousedown` 을 보낼 수 있다.
+/// 같은 프레임에 `Touches::any_just_pressed()` 가 참이면 `on_touch_tap` 이 이미
+/// 같은 위치를 처리했으므로 마우스 분기를 SKIP 한다 — 동일 입력의 중복 적용 방지.
 fn on_mouse_click(
     mouse_input: Res<ButtonInput<MouseButton>>,
+    touches: Res<Touches>,
     windows: Query<&Window>,
     camera_q: Query<(&Camera, &GlobalTransform), With<Camera>>,
     player_query: Query<&Transform, (With<Player>, Without<Defeated>)>,
     map_res: Res<MapResource>,
     mut player_path: ResMut<PlayerPath>,
+    mut target: ResMut<MouseInteractTarget>,
+    villager_query: Query<(Entity, &Villager)>,
+    mut bump: EventWriter<BumpTileEvent>,
     panels: PanelGuards,
     ranged: Res<crate::modules::ranged::RangedTargeting>,
 ) {
     if !mouse_input.just_pressed(MouseButton::Left) { return; }
+    // 같은 프레임 터치가 있었다면 on_touch_tap 이 이미 같은 위치를 처리 — 중복 방지.
+    if touches.any_just_pressed() { return; }
     if panels.any_open() { return; }
     if ranged.active { return; }  // 원격 모드 중에는 ranged 시스템이 마우스 처리
 
@@ -427,11 +628,132 @@ fn on_mouse_click(
     let Some(cursor_pos) = window.cursor_position() else { return };
     let world_pos = camera.viewport_to_world_2d(cam_transform, cursor_pos);
 
+    // 새 클릭 입력은 무조건 이전 follow/path 를 정리하고 새 결정을 적용한다.
+    let villagers: Vec<(Entity, usize, usize)> = villager_query.iter()
+        .map(|(e, v)| (e, v.tile_x, v.tile_y)).collect();
+    let villager_at = |x: usize, y: usize| -> Option<Entity> {
+        villagers.iter().find(|(_, vx, vy)| *vx == x && *vy == y).map(|(e, _, _)| *e)
+    };
+
     // viewport 변환 성공 시에만 Some — 헤드리스 테스트는 viewport_to_world_2d 가
-    // 항상 None 이라 이 if 의 Some 분기는 직접 검증 불가(plan_click_path 를 순수
+    // 항상 None 이라 이 분기의 Some 쪽은 직접 검증 불가(classify_click 을 순수
     // 함수로 분리해 결정 분기는 단위 테스트로 모두 커버). // 도달 불가 방어코드
-    if let Some(path) = plan_click_path(world_pos, map_res.map(), player_transform.translation) {
-        player_path.0 = path;
+    let decision = plan_click_path(
+        world_pos, map_res.map(), player_transform.translation, villager_at,
+    );
+    apply_click_decision(decision, &mut player_path, &mut target, &mut bump);
+}
+
+/// 모바일 터치 탭을 마우스 좌클릭과 동일한 흐름으로 처리한다.
+///
+/// `Touches::iter_just_pressed()` 의 첫 항목 위치를 cursor_pos 대신 사용해
+/// `viewport_to_world_2d` → `plan_click_path` → `apply_click_decision` 의 같은
+/// 결정 파이프라인을 탄다. 마우스 분기와의 유일한 차이는 입력 채널(터치 좌표)뿐.
+///
+/// 이 시스템은 `on_mouse_click` 보다 먼저 돌고, 같은 프레임에 합성 마우스 클릭이
+/// 함께 와도 `on_mouse_click` 이 `Touches::any_just_pressed` 가드로 SKIP 한다.
+fn on_touch_tap(
+    touches: Res<Touches>,
+    windows: Query<&Window>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<Camera>>,
+    player_query: Query<&Transform, (With<Player>, Without<Defeated>)>,
+    map_res: Res<MapResource>,
+    mut player_path: ResMut<PlayerPath>,
+    mut target: ResMut<MouseInteractTarget>,
+    villager_query: Query<(Entity, &Villager)>,
+    mut bump: EventWriter<BumpTileEvent>,
+    panels: PanelGuards,
+    ranged: Res<crate::modules::ranged::RangedTargeting>,
+) {
+    // 이번 프레임에 막 시작된 터치 하나만 처리(멀티터치는 무시 — 게임 자체가 단일 포인터 모델).
+    let Some(touch) = touches.iter_just_pressed().next() else { return };
+    if panels.any_open() { return; }
+    if ranged.active { return; }
+
+    let Ok(window) = windows.get_single() else { return };
+    let Ok((camera, cam_transform)) = camera_q.get_single() else { return };
+    let Ok(player_transform) = player_query.get_single() else { return };
+
+    let touch_pos = touch.position();
+    // window 가 살아 있는지 확인 — get_single 이 Ok 인 시점에서 보장되지만,
+    // viewport_to_world_2d 는 cursor_position 와 같은 좌표계(픽셀)를 요구하므로
+    // 그대로 넘긴다. 헤드리스에서는 변환이 None → Ignore 로 흘러간다.
+    let _ = window;
+    let world_pos = camera.viewport_to_world_2d(cam_transform, touch_pos);
+
+    let villagers: Vec<(Entity, usize, usize)> = villager_query.iter()
+        .map(|(e, v)| (e, v.tile_x, v.tile_y)).collect();
+    let villager_at = |x: usize, y: usize| -> Option<Entity> {
+        villagers.iter().find(|(_, vx, vy)| *vx == x && *vy == y).map(|(e, _, _)| *e)
+    };
+
+    let decision = plan_click_path(
+        world_pos, map_res.map(), player_transform.translation, villager_at,
+    );
+    apply_click_decision(decision, &mut player_path, &mut target, &mut bump);
+}
+
+/// 매 턴(`PlayerActedEvent`) villager 의 새 위치로 follow 경로를 재계산한다.
+///
+/// - `MouseInteractTarget::Npc(e)`:
+///   - villager 엔티티가 despawn 됐으면 follow 안전 종료.
+///   - 플레이어와의 체비쇼프 거리 ≤ 1 이면 `BumpTileEvent(villager.tile)` 발행 +
+///     follow/path 정리(말 걸기/상점/대화는 다음 프레임 `handle_bump` 가 처리).
+///   - 아니면 `find_path` 로 경로 갱신.
+/// - `MouseInteractTarget::Tile(x, y)`(카운터 등 고정 좌표):
+///   - 체비쇼프 ≤ 1 이면 `BumpTileEvent(x, y)` 발행 + follow/path 정리.
+///   - 아니면 그대로 — 카운터는 움직이지 않으므로 path 는 그대로 두면 된다.
+///
+/// PlayerActedEvent 는 발행하지 않는다 — 플레이어가 직전 이동으로 이미 턴을
+/// 소비했기 때문이다(중복 발행 시 villager_turn 이 한 턴 더 돌아 NPC 가 두 번
+/// 움직이는 회귀). bump 는 다음 프레임 handle_bump 가 단순히 추가 처리만 한다.
+fn refresh_follow_path(
+    mut events: EventReader<PlayerActedEvent>,
+    mut target: ResMut<MouseInteractTarget>,
+    mut player_path: ResMut<PlayerPath>,
+    player_query: Query<&Transform, (With<Player>, Without<Defeated>)>,
+    map_res: Res<MapResource>,
+    villager_query: Query<&Villager>,
+    mut bump: EventWriter<BumpTileEvent>,
+) {
+    if events.read().next().is_none() { return; }
+    let Some(t) = target.0 else { return; };
+    let Ok(transform) = player_query.get_single() else {
+        // 플레이어가 사라졌으면 follow 도 함께 정리.
+        target.0 = None;
+        player_path.0.clear();
+        return;
+    };
+    let player_tile = world_to_tile_coords(transform.translation);
+
+    match t {
+        InteractTarget::Npc(entity) => {
+            let Ok(villager) = villager_query.get(entity) else {
+                // villager 가 despawn 됐으면 follow 안전 종료.
+                target.0 = None;
+                player_path.0.clear();
+                return;
+            };
+            let v_tile = (villager.tile_x, villager.tile_y);
+            if chebyshev_distance(player_tile, v_tile) <= 1 {
+                bump.send(BumpTileEvent(v_tile.0, v_tile.1));
+                target.0 = None;
+                player_path.0.clear();
+            } else {
+                let path = pathfinding::find_path(map_res.map(), player_tile, v_tile);
+                player_path.0 = VecDeque::from(path);
+                // 경로가 비면 (도달 불가) 다음 턴에도 못 가니 path 는 비어도 follow 는 유지 —
+                // 다음 턴 villager 가 다시 walkable 위치로 오면 재경로가 잡힌다.
+            }
+        }
+        InteractTarget::Tile(tx, ty) => {
+            if chebyshev_distance(player_tile, (tx, ty)) <= 1 {
+                bump.send(BumpTileEvent(tx, ty));
+                target.0 = None;
+                player_path.0.clear();
+            }
+            // 그 외엔 path 그대로 — 카운터는 움직이지 않으므로 처음 깐 경로가 유효.
+        }
     }
 }
 
@@ -440,6 +762,7 @@ fn respawn_player_on_regen(
     mut events: EventReader<PlayerRespawnEvent>,
     mut player_query: Query<(Entity, &mut Transform), With<Player>>,
     mut player_path: ResMut<PlayerPath>,
+    mut interact_target: ResMut<MouseInteractTarget>,
 ) {
     for PlayerRespawnEvent(x, y) in events.read() {
         if let Ok((entity, mut transform)) = player_query.get_single_mut() {
@@ -447,6 +770,7 @@ fn respawn_player_on_regen(
             transform.translation = Vec3::new(wp.x, wp.y, 1.0);
             commands.entity(entity).remove::<MovingTo>();
             player_path.0.clear();
+            interact_target.0 = None;
         }
     }
 }
@@ -657,6 +981,7 @@ mod tests {
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.init_resource::<MoveHoldState>();
         app.init_resource::<PlayerPath>();
+        app.init_resource::<MouseInteractTarget>();
         app.init_resource::<OccupiedTiles>();
         app.init_resource::<MonsterTiles>();
         app.insert_resource(EquipmentPanelOpen(false));
@@ -806,6 +1131,7 @@ mod tests {
             app.insert_resource(ButtonInput::<KeyCode>::default());
             app.init_resource::<MoveHoldState>();
             app.init_resource::<PlayerPath>();
+            app.init_resource::<MouseInteractTarget>();
             app.init_resource::<OccupiedTiles>();
             app.init_resource::<MonsterTiles>();
             app.insert_resource(EquipmentPanelOpen(false));
@@ -1261,6 +1587,7 @@ mod tests {
         let mut app = App::new();
         app.add_event::<PlayerRespawnEvent>();
         app.init_resource::<PlayerPath>();
+        app.init_resource::<MouseInteractTarget>();
         app.add_systems(Update, respawn_player_on_regen);
         let e = app.world.spawn((
             Player,
@@ -1268,6 +1595,7 @@ mod tests {
             MovingTo { target: Vec3::ZERO },
         )).id();
         app.world.resource_mut::<PlayerPath>().0.push_back((1, 1));
+        app.world.resource_mut::<MouseInteractTarget>().0 = Some(InteractTarget::Tile(3, 3));
         app.world.send_event(PlayerRespawnEvent(7, 8));
         app.update();
         let expected = tile_to_world_coords(7, 8);
@@ -1275,6 +1603,8 @@ mod tests {
         assert_eq!(t, Vec3::new(expected.x, expected.y, 1.0), "리스폰 위치로 이동");
         assert!(!app.world.entity(e).contains::<MovingTo>(), "MovingTo 제거");
         assert_eq!(app.world.resource::<PlayerPath>().0.len(), 0, "자동 경로 정리");
+        assert!(app.world.resource::<MouseInteractTarget>().0.is_none(),
+            "리스폰 시 follow 도 함께 정리되어야 한다");
     }
 
     #[test]
@@ -1282,6 +1612,7 @@ mod tests {
         let mut app = App::new();
         app.add_event::<PlayerRespawnEvent>();
         app.init_resource::<PlayerPath>();
+        app.init_resource::<MouseInteractTarget>();
         app.add_systems(Update, respawn_player_on_regen);
         let e = app.world.spawn((Player, Transform::from_xyz(3.0, 4.0, 1.0))).id();
         app.update();
@@ -1294,6 +1625,7 @@ mod tests {
         let mut app = App::new();
         app.add_event::<PlayerRespawnEvent>();
         app.init_resource::<PlayerPath>();
+        app.init_resource::<MouseInteractTarget>();
         app.add_systems(Update, respawn_player_on_regen);
         app.world.send_event(PlayerRespawnEvent(1, 1));
         app.update(); // 패닉하지 않으면 통과
@@ -1603,7 +1935,7 @@ mod tests {
         app.update(); // mp_query.get_single_mut() 이 Err 인 경로
     }
 
-    // --- plan_click_path (마우스 결정 로직 순수 함수) ---
+    // --- plan_click_path / classify_click (마우스 결정 로직 순수 함수) ---
 
     fn click_map() -> Map {
         let mut map = Map::new(20, 20);
@@ -1611,51 +1943,67 @@ mod tests {
         map
     }
 
+    /// villager 없는 빈 클로저 — 헬퍼로 분리해 가독성↑.
+    fn no_villager(_x: usize, _y: usize) -> Option<Entity> { None }
+
     #[test]
-    fn 클릭경로계산은_viewport_변환_실패시_경로를_만들지_않는다() {
+    fn 클릭경로계산은_viewport_변환_실패시_무시한다() {
         let map = click_map();
         let player_world = tile_to_world_coords(5, 5).extend(1.0);
-        assert!(plan_click_path(None, &map, player_world).is_none(),
-            "viewport 변환 실패(None)면 경로를 만들지 않아야 한다");
+        assert!(matches!(
+            plan_click_path(None, &map, player_world, no_villager),
+            ClickDecision::Ignore
+        ));
     }
 
     #[test]
-    fn 클릭경로계산은_목적지가_바닥이면_경로를_반환한다() {
+    fn 클릭경로계산은_목적지가_바닥이면_단순이동_경로를_반환한다() {
         let map = click_map();
         let player_world = tile_to_world_coords(5, 5).extend(1.0);
         let target = tile_to_world_coords(7, 5); // Floor
-        let path = plan_click_path(Some(target), &map, player_world).expect("바닥 클릭은 경로를 만든다");
-        assert!(!path.is_empty(), "바닥 클릭이면 경로가 비어있지 않아야 한다");
-        assert_eq!(*path.back().unwrap(), (7, 5), "경로 끝은 클릭한 타일");
+        let d = plan_click_path(Some(target), &map, player_world, no_villager);
+        match d {
+            ClickDecision::Walk { path } => {
+                assert!(!path.is_empty(), "바닥 클릭이면 경로가 비어있지 않아야 한다");
+                assert_eq!(*path.back().unwrap(), (7, 5), "경로 끝은 클릭한 타일");
+            }
+            _ => panic!("바닥 클릭은 Walk 분기여야 한다: {:?}", d),
+        }
     }
 
     #[test]
-    fn 클릭경로계산은_목적지가_벽이면_경로를_만들지_않는다() {
+    fn 클릭경로계산은_목적지가_벽이면_무시한다() {
         let map = click_map(); // (0,0) 등은 기본 Wall
         let player_world = tile_to_world_coords(5, 5).extend(1.0);
         let target = tile_to_world_coords(0, 0); // Wall
-        assert!(plan_click_path(Some(target), &map, player_world).is_none(),
-            "벽 클릭은 경로를 만들지 않아야 한다");
+        assert!(matches!(
+            plan_click_path(Some(target), &map, player_world, no_villager),
+            ClickDecision::Ignore
+        ), "벽 클릭은 무시되어야 한다");
     }
 
     #[test]
-    fn 클릭경로계산은_목적지가_물이면_경로를_만들지_않는다() {
+    fn 클릭경로계산은_목적지가_물이면_무시한다() {
         let mut map = click_map();
         map.set_tile(7, 5, TileKind::Water);
         let player_world = tile_to_world_coords(5, 5).extend(1.0);
         let target = tile_to_world_coords(7, 5); // Water
-        assert!(plan_click_path(Some(target), &map, player_world).is_none(),
-            "물 클릭은 이동 불가라 경로를 만들지 않아야 한다");
+        assert!(matches!(
+            plan_click_path(Some(target), &map, player_world, no_villager),
+            ClickDecision::Ignore
+        ), "물 클릭은 이동 불가라 무시되어야 한다");
     }
 
     #[test]
-    fn 클릭경로계산은_목적지가_모래면_경로를_반환한다() {
+    fn 클릭경로계산은_목적지가_모래면_단순이동_경로를_반환한다() {
         let mut map = click_map();
         map.set_tile(7, 5, TileKind::Sand);
         let player_world = tile_to_world_coords(5, 5).extend(1.0);
         let target = tile_to_world_coords(7, 5); // Sand
-        let path = plan_click_path(Some(target), &map, player_world).expect("모래 클릭은 경로를 만든다");
-        assert_eq!(*path.back().unwrap(), (7, 5));
+        match plan_click_path(Some(target), &map, player_world, no_villager) {
+            ClickDecision::Walk { path } => assert_eq!(*path.back().unwrap(), (7, 5)),
+            other => panic!("모래 클릭은 Walk 분기여야 한다: {:?}", other),
+        }
     }
 
     // --- on_mouse_click 시스템: 가드 분기 (App 하네스) ---
@@ -1668,13 +2016,16 @@ mod tests {
         fn new() -> Self {
             let mut app = App::new();
             app.insert_resource(ButtonInput::<MouseButton>::default());
+            app.init_resource::<Touches>();
             app.insert_resource(MapResource(click_map()));
             app.init_resource::<PlayerPath>();
+            app.init_resource::<MouseInteractTarget>();
             app.insert_resource(EquipmentPanelOpen(false));
             app.insert_resource(ShopPanelOpen(false));
             app.insert_resource(HelpPanelOpen(false));
             app.insert_resource(GuidePanelOpen(false));
             app.init_resource::<RangedTargeting>();
+            app.add_event::<BumpTileEvent>();
             app.add_systems(Update, on_mouse_click);
             Self { app }
         }
@@ -1809,7 +2160,668 @@ mod tests {
         h.click();
         h.update();
         assert_eq!(h.app.world.resource::<PlayerPath>().0.len(), 0,
-            "헤드리스에서는 viewport 변환이 실패해 경로가 비어 있다");
+            "헤드리스에서는 viewport 변환이_실패해 경로가 비어 있다");
+    }
+
+    // --- on_touch_tap 시스템: 모바일 터치 입력은 마우스 좌클릭과 동일 흐름 ---
+
+    /// 터치 탭 하네스. 마우스와 같이 윈도우/카메라/플레이어를 두고,
+    /// `Touches` 리소스에 just_pressed 터치를 시드한 뒤 `on_touch_tap` 을 돌린다.
+    ///
+    /// 헤드리스라 viewport_to_world_2d 가 항상 None — 결정 분기 자체는 순수
+    /// `classify_click` 테스트가 커버하고, 여기서는 시스템의 가드/경로(터치 시드의
+    /// 유무, 패널/원격/엔티티 누락 등)와 마우스 가드와의 상호 작용을 검증한다.
+    struct TouchHarness { app: App }
+    impl TouchHarness {
+        fn new() -> Self {
+            let mut app = App::new();
+            app.insert_resource(ButtonInput::<MouseButton>::default());
+            app.init_resource::<Touches>();
+            app.add_event::<bevy::input::touch::TouchInput>();
+            app.insert_resource(MapResource(click_map()));
+            app.init_resource::<PlayerPath>();
+            app.init_resource::<MouseInteractTarget>();
+            app.insert_resource(EquipmentPanelOpen(false));
+            app.insert_resource(ShopPanelOpen(false));
+            app.insert_resource(HelpPanelOpen(false));
+            app.insert_resource(GuidePanelOpen(false));
+            app.init_resource::<RangedTargeting>();
+            app.add_event::<BumpTileEvent>();
+            // touch_screen_input_system 이 먼저 돌아 Touches 리소스에 just_pressed 가
+            // 채워진 뒤 on_touch_tap → on_mouse_click 순으로 실행된다 — 실제 PlayerPlugin
+            // 의 순서(on_touch_tap.before(on_mouse_click))와 동일하게 배치한다.
+            app.add_systems(Update, (
+                bevy::input::touch::touch_screen_input_system,
+                on_touch_tap,
+                on_mouse_click,
+            ).chain());
+            Self { app }
+        }
+        fn spawn_window(&mut self) -> Entity {
+            let mut window = Window::default();
+            window.resolution.set(800.0, 600.0);
+            self.app.world.spawn(window).id()
+        }
+        fn spawn_camera(&mut self) {
+            self.app.world.spawn((Camera::default(), GlobalTransform::default()));
+        }
+        fn spawn_player(&mut self) {
+            let pos = tile_to_world_coords(5, 5);
+            self.app.world.spawn((Player, Transform::from_xyz(pos.x, pos.y, 1.0)));
+        }
+        /// 시작(`Started`) 상태의 터치 이벤트를 큐에 넣는다. 다음 `update()` 에서
+        /// `touch_screen_input_system` 이 이를 소비해 `Touches` 의 just_pressed 에 등록한다.
+        fn tap(&mut self, window: Entity, pos: Vec2) {
+            self.app.world.send_event(bevy::input::touch::TouchInput {
+                phase: bevy::input::touch::TouchPhase::Started,
+                position: pos,
+                window,
+                force: None,
+                id: 1,
+            });
+        }
+        fn update(&mut self) { self.app.update(); }
+        fn path_len(&self) -> usize { self.app.world.resource::<PlayerPath>().0.len() }
+    }
+
+    #[test]
+    fn 터치_이벤트가_없으면_터치탭은_경로처리를_하지_않는다() {
+        let mut h = TouchHarness::new();
+        h.spawn_window();
+        h.spawn_camera();
+        h.spawn_player();
+        h.update(); // 터치 시드 안 함
+        assert_eq!(h.path_len(), 0);
+    }
+
+    #[test]
+    fn 터치탭은_장비패널이_열려있으면_무시된다() {
+        let mut h = TouchHarness::new();
+        let w = h.spawn_window();
+        h.spawn_camera();
+        h.spawn_player();
+        h.app.world.resource_mut::<EquipmentPanelOpen>().0 = true;
+        h.tap(w, Vec2::new(400.0, 300.0));
+        h.update();
+        assert_eq!(h.path_len(), 0);
+    }
+
+    #[test]
+    fn 터치탭은_상점패널이_열려있으면_무시된다() {
+        let mut h = TouchHarness::new();
+        let w = h.spawn_window();
+        h.spawn_camera();
+        h.spawn_player();
+        h.app.world.resource_mut::<ShopPanelOpen>().0 = true;
+        h.tap(w, Vec2::new(400.0, 300.0));
+        h.update();
+        assert_eq!(h.path_len(), 0);
+    }
+
+    #[test]
+    fn 터치탭은_도움말패널이_열려있으면_무시된다() {
+        let mut h = TouchHarness::new();
+        let w = h.spawn_window();
+        h.spawn_camera();
+        h.spawn_player();
+        h.app.world.resource_mut::<HelpPanelOpen>().0 = true;
+        h.tap(w, Vec2::new(400.0, 300.0));
+        h.update();
+        assert_eq!(h.path_len(), 0);
+    }
+
+    #[test]
+    fn 터치탭은_원격모드_활성중이면_무시된다() {
+        // ranged 모드는 ranged 시스템이 터치/마우스를 처리하므로 여기서는 무시.
+        let mut h = TouchHarness::new();
+        let w = h.spawn_window();
+        h.spawn_camera();
+        h.spawn_player();
+        h.app.world.resource_mut::<RangedTargeting>().active = true;
+        h.tap(w, Vec2::new(400.0, 300.0));
+        h.update();
+        assert_eq!(h.path_len(), 0);
+    }
+
+    #[test]
+    fn 터치탭은_윈도우가_없으면_무시된다() {
+        let mut h = TouchHarness::new();
+        h.spawn_camera();
+        h.spawn_player();
+        // window 이벤트의 `window` 필드는 Entity 값만 있으면 되므로 더미를 만든다.
+        let dummy_window = h.app.world.spawn_empty().id();
+        h.tap(dummy_window, Vec2::new(400.0, 300.0));
+        h.update();
+        assert_eq!(h.path_len(), 0);
+    }
+
+    #[test]
+    fn 터치탭은_카메라가_없으면_무시된다() {
+        let mut h = TouchHarness::new();
+        let w = h.spawn_window();
+        h.spawn_player();
+        h.tap(w, Vec2::new(400.0, 300.0));
+        h.update();
+        assert_eq!(h.path_len(), 0);
+    }
+
+    #[test]
+    fn 터치탭은_플레이어가_없으면_무시된다() {
+        let mut h = TouchHarness::new();
+        let w = h.spawn_window();
+        h.spawn_camera();
+        h.tap(w, Vec2::new(400.0, 300.0));
+        h.update();
+        assert_eq!(h.path_len(), 0);
+    }
+
+    #[test]
+    fn 터치탭은_모든_가드를_통과해도_헤드리스에서는_viewport변환이_실패한다() {
+        // 윈도우/카메라/플레이어/터치 좌표가 모두 있어 가드를 통과하지만,
+        // viewport_to_world_2d 는 헤드리스에서 None 이라 경로가 채워지지 않는다.
+        // 헤드리스에서는 마우스 클릭과 동일하게 viewport 변환만 실패할 뿐, 같은
+        // 결정 파이프라인(plan_click_path → apply_click_decision)을 탄다.
+        let mut h = TouchHarness::new();
+        let w = h.spawn_window();
+        h.spawn_camera();
+        h.spawn_player();
+        h.tap(w, Vec2::new(400.0, 300.0));
+        h.update();
+        assert_eq!(h.path_len(), 0);
+    }
+
+    #[test]
+    fn 같은_프레임에_터치가_있으면_synthetic_마우스_클릭은_무시된다() {
+        // 모바일 브라우저의 합성(synthetic) mousedown 중복 방지 가드 검증:
+        // 같은 프레임에 Touches::any_just_pressed() 가 true 이면 on_mouse_click 은
+        // 어떤 부수효과도 만들지 않아야 한다 (viewport_to_world_2d 도 호출 안 함).
+        //
+        // 마우스 클릭의 부수효과 중 가장 관측이 쉬운 것: 미리 채워둔 follow 가
+        // Ignore 분기에서 비워지는 동작. 가드가 있으면 그 비우기조차 일어나지 않는다.
+        //
+        // 따라서 on_touch_tap 은 빼고 on_mouse_click 만 등록한 별도 App 로
+        // 가드의 효과를 단독으로 검증한다.
+        let mut app = App::new();
+        app.insert_resource(ButtonInput::<MouseButton>::default());
+        app.init_resource::<Touches>();
+        app.add_event::<bevy::input::touch::TouchInput>();
+        app.insert_resource(MapResource(click_map()));
+        app.init_resource::<PlayerPath>();
+        app.init_resource::<MouseInteractTarget>();
+        app.insert_resource(EquipmentPanelOpen(false));
+        app.insert_resource(ShopPanelOpen(false));
+        app.insert_resource(HelpPanelOpen(false));
+        app.insert_resource(GuidePanelOpen(false));
+        app.init_resource::<RangedTargeting>();
+        app.add_event::<BumpTileEvent>();
+        // 합성 마우스만 도는 시나리오 — touch_screen_input_system 이 먼저 도는 건
+        // 실제 PlayerPlugin 스케줄과 동일하게 두지만, on_touch_tap 은 빼서
+        // 가드가 막은 효과가 마우스 시스템 단독으로 관측되게 한다.
+        app.add_systems(Update, (
+            bevy::input::touch::touch_screen_input_system,
+            on_mouse_click,
+        ).chain());
+
+        let mut window = Window::default();
+        window.resolution.set(800.0, 600.0);
+        window.set_physical_cursor_position(Some(bevy::math::DVec2::new(400.0, 300.0)));
+        let w = app.world.spawn(window).id();
+        app.world.spawn((Camera::default(), GlobalTransform::default()));
+        let pos = tile_to_world_coords(5, 5);
+        app.world.spawn((Player, Transform::from_xyz(pos.x, pos.y, 1.0)));
+
+        // 미리 채워둔 follow — 마우스 가드가 작동하지 않으면 Ignore 분기로 비워질 것이다.
+        app.world.resource_mut::<PlayerPath>().0.push_back((6, 5));
+        app.world.resource_mut::<MouseInteractTarget>().0 = Some(InteractTarget::Tile(7, 5));
+
+        // 같은 프레임에 터치와 마우스가 모두 들어온다 — touch_screen_input_system
+        // 이 just_pressed 를 채우고, 그다음 on_mouse_click 이 그 플래그를 보고 SKIP.
+        app.world.send_event(bevy::input::touch::TouchInput {
+            phase: bevy::input::touch::TouchPhase::Started,
+            position: Vec2::new(400.0, 300.0),
+            window: w,
+            force: None,
+            id: 7,
+        });
+        app.world.resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+
+        app.update();
+
+        // 가드가 동작했다면 마우스 분기 자체가 SKIP 되어 follow 가 그대로 유지된다.
+        assert_eq!(app.world.resource::<PlayerPath>().0.len(), 1,
+            "터치가 같은 프레임에 있으면 마우스 분기가 SKIP 되어 path 가 비워지지 않는다");
+        assert_eq!(app.world.resource::<MouseInteractTarget>().0, Some(InteractTarget::Tile(7, 5)),
+            "터치가 같은 프레임에 있으면 마우스 분기가 SKIP 되어 follow 도 유지된다");
+    }
+
+    #[test]
+    fn 터치가_없는_마우스_클릭은_가드를_지나_Ignore_분기로_follow를_비운다() {
+        // 위 테스트의 음성 회귀(negative control):
+        // 똑같은 조건에서 터치만 빼면 가드가 작동하지 않아 follow 가 비워지는 게 정상.
+        // 헤드리스 viewport 변환이 None → Ignore → follow/path 비움.
+        let mut h = ClickHarness::new();
+        h.spawn_window_with_cursor(Some(Vec2::new(400.0, 300.0)));
+        h.spawn_camera();
+        h.spawn_player();
+        h.app.world.resource_mut::<PlayerPath>().0.push_back((6, 5));
+        h.app.world.resource_mut::<MouseInteractTarget>().0 = Some(InteractTarget::Tile(7, 5));
+        h.click();
+        h.update();
+        assert_eq!(h.app.world.resource::<PlayerPath>().0.len(), 0,
+            "터치가 없는 일반 마우스 클릭은 Ignore 분기에서 path 를 비운다");
+        assert!(h.app.world.resource::<MouseInteractTarget>().0.is_none(),
+            "터치가 없는 일반 마우스 클릭은 Ignore 분기에서 follow 도 비운다");
+    }
+
+    // --- apply_click_decision (마우스/터치 공통 적용 헬퍼) ---
+
+    /// apply_click_decision 헬퍼 테스트용 — EventWriter 만 따로 떼어내 채워 본다.
+    fn run_apply(decision: ClickDecision) -> (PlayerPath, MouseInteractTarget, Vec<(usize, usize)>) {
+        let mut app = App::new();
+        app.add_event::<BumpTileEvent>();
+        app.init_resource::<PlayerPath>();
+        app.init_resource::<MouseInteractTarget>();
+        // 이미 follow/path 가 차 있는 상태에서 결정이 어떻게 덮어쓰는지 검증.
+        app.world.resource_mut::<PlayerPath>().0.push_back((9, 9));
+        app.world.resource_mut::<MouseInteractTarget>().0 = Some(InteractTarget::Tile(9, 9));
+        app.add_systems(Update, move |
+            mut path: ResMut<PlayerPath>,
+            mut target: ResMut<MouseInteractTarget>,
+            mut bump: EventWriter<BumpTileEvent>,
+        | {
+            apply_click_decision(decision.clone(), &mut path, &mut target, &mut bump);
+        });
+        app.update();
+        let path = std::mem::take(&mut *app.world.resource_mut::<PlayerPath>());
+        let target = std::mem::take(&mut *app.world.resource_mut::<MouseInteractTarget>());
+        let events = app.world.resource::<Events<BumpTileEvent>>();
+        let bumps: Vec<(usize, usize)> = events.get_reader().read(events).map(|e| (e.0, e.1)).collect();
+        (path, target, bumps)
+    }
+
+    #[test]
+    fn 결정적용은_Ignore면_follow와_path를_정리한다() {
+        let (path, target, bumps) = run_apply(ClickDecision::Ignore);
+        assert_eq!(path.0.len(), 0);
+        assert!(target.0.is_none());
+        assert!(bumps.is_empty());
+    }
+
+    #[test]
+    fn 결정적용은_Walk면_follow를_비우고_path를_채운다() {
+        let (path, target, bumps) = run_apply(ClickDecision::Walk {
+            path: VecDeque::from(vec![(6, 5), (7, 5)]),
+        });
+        assert_eq!(path.0.len(), 2);
+        assert!(target.0.is_none(), "Walk 는 follow 가 없다");
+        assert!(bumps.is_empty());
+    }
+
+    #[test]
+    fn 결정적용은_InteractTile면_path와_Tile타겟을_세팅한다() {
+        let (path, target, bumps) = run_apply(ClickDecision::InteractTile {
+            tile: (7, 7),
+            path: VecDeque::from(vec![(6, 6)]),
+        });
+        assert_eq!(path.0.len(), 1);
+        assert_eq!(target.0, Some(InteractTarget::Tile(7, 7)));
+        assert!(bumps.is_empty());
+    }
+
+    #[test]
+    fn 결정적용은_FollowNpc면_path와_NPC타겟을_세팅한다() {
+        let mut world = World::new();
+        let npc = dummy_entity(&mut world);
+        let (path, target, bumps) = run_apply(ClickDecision::FollowNpc {
+            entity: npc,
+            path: VecDeque::from(vec![(6, 6), (7, 7)]),
+        });
+        assert_eq!(path.0.len(), 2);
+        assert_eq!(target.0, Some(InteractTarget::Npc(npc)));
+        assert!(bumps.is_empty());
+    }
+
+    #[test]
+    fn 결정적용은_ImmediateBump면_즉시_BumpTileEvent를_보내고_follow를_정리한다() {
+        let (path, target, bumps) = run_apply(ClickDecision::ImmediateBump { tile: (6, 5) });
+        assert_eq!(path.0.len(), 0, "즉시 범프는 path 를 비운다");
+        assert!(target.0.is_none(), "즉시 범프는 follow 를 비운다");
+        assert_eq!(bumps, vec![(6, 5)], "즉시 BumpTileEvent 발행");
+    }
+
+    // --- classify_click (NPC 추적 / 카운터 인접 / 평범 walkable 분기) ---
+
+    /// villager 검색 클로저용 — 더미 entity 를 발급하기 위해 spawn 으로 만든다.
+    fn dummy_entity(world: &mut World) -> Entity {
+        world.spawn_empty().id()
+    }
+
+    #[test]
+    fn 클릭타일에_villager가_있으면_그_NPC를_추적_결정한다() {
+        // 빈 World 에서 Entity 만 만든다 — 비교용.
+        let mut world = World::new();
+        let npc = dummy_entity(&mut world);
+        let map = click_map();
+        let d = classify_click(Some((7, 5)), &map, (5, 5),
+            |x, y| if (x, y) == (7, 5) { Some(npc) } else { None });
+        match d {
+            ClickDecision::FollowNpc { entity, path } => {
+                assert_eq!(entity, npc, "클릭 타일의 villager 엔티티");
+                assert!(!path.is_empty(), "추적용 초기 경로가 존재");
+                assert_eq!(*path.back().unwrap(), (7, 5), "초기 경로 끝은 villager 타일");
+            }
+            other => panic!("villager 클릭은 FollowNpc 분기여야 한다: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn 클릭타일이_카운터면_인접_walkable로_가는_경로와_타일타겟을_낸다() {
+        // 멀리 떨어진 카운터(7,7) 를 (5,5) 에서 클릭 — 인접 walkable 까지 path + InteractTile.
+        let mut map = click_map();
+        map.set_tile(7, 7, TileKind::Counter);
+        // (7,7) 인접 walkable: (6,6),(6,7),(7,6) 등. (5,5)~(7,7) chebyshev=2.
+        let d = classify_click(Some((7, 7)), &map, (5, 5), no_villager);
+        match d {
+            ClickDecision::InteractTile { tile, path } => {
+                assert_eq!(tile, (7, 7), "InteractTile 의 좌표는 클릭한 카운터");
+                assert!(!path.is_empty(), "멀리 떨어진 카운터는 경로가 비어있지 않다");
+            }
+            other => panic!("카운터 클릭은 InteractTile 분기여야 한다: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn 이미_인접한_카운터를_클릭하면_즉시_범프_결정이다() {
+        // (6,6) 카운터, (5,5) 플레이어 → chebyshev=1 → ImmediateBump.
+        let mut map = click_map();
+        map.set_tile(6, 6, TileKind::Counter);
+        match classify_click(Some((6, 6)), &map, (5, 5), no_villager) {
+            ClickDecision::ImmediateBump { tile } => assert_eq!(tile, (6, 6)),
+            other => panic!("인접 카운터는 ImmediateBump 분기여야 한다: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn 이미_인접한_NPC를_클릭하면_즉시_범프_결정이다() {
+        // (6,5) villager, (5,5) 플레이어 → chebyshev=1 → ImmediateBump.
+        let mut world = World::new();
+        let npc = dummy_entity(&mut world);
+        let map = click_map();
+        match classify_click(Some((6, 5)), &map, (5, 5),
+            |x, y| if (x, y) == (6, 5) { Some(npc) } else { None })
+        {
+            ClickDecision::ImmediateBump { tile } => assert_eq!(tile, (6, 5)),
+            other => panic!("인접 NPC 는 ImmediateBump 분기여야 한다: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn 클릭타일이_카운터이고_인접_walkable이_없으면_무시한다() {
+        // (0,0) 카운터 — 주변이 모두 Wall(맵 기본) 이고 경계 밖.
+        let mut map = Map::new(20, 20);
+        map.set_tile(0, 0, TileKind::Counter);
+        // 플레이어 위치도 도달 불가한 위치.
+        let d = classify_click(Some((0, 0)), &map, (10, 10), no_villager);
+        assert!(matches!(d, ClickDecision::Ignore), "인접 walkable 이 없으면 Ignore");
+    }
+
+    #[test]
+    fn 클릭타일이_경계_밖이면_무시한다() {
+        let map = click_map();
+        let d = classify_click(Some((9999, 9999)), &map, (5, 5), no_villager);
+        assert!(matches!(d, ClickDecision::Ignore));
+    }
+
+    #[test]
+    fn 클릭타일이_도달_불가한_walkable이면_무시한다() {
+        // (5,5) 와 (10,10) 둘 다 Floor 지만 연결되지 않은 섬 → path 가 비어 Ignore.
+        let mut map = Map::new(20, 20);
+        map.set_tile(5, 5, TileKind::Floor);
+        map.set_tile(10, 10, TileKind::Floor);
+        let d = classify_click(Some((10, 10)), &map, (5, 5), no_villager);
+        assert!(matches!(d, ClickDecision::Ignore),
+            "도달 불가 walkable 은 Ignore");
+    }
+
+    // --- chebyshev_distance / nearest_adjacent_walkable ---
+
+    #[test]
+    fn 체비쇼프거리는_8방향_최댓값을_쓴다() {
+        assert_eq!(chebyshev_distance((5, 5), (5, 5)), 0);
+        assert_eq!(chebyshev_distance((5, 5), (6, 5)), 1, "카디널 인접");
+        assert_eq!(chebyshev_distance((5, 5), (6, 6)), 1, "대각 인접");
+        assert_eq!(chebyshev_distance((5, 5), (7, 5)), 2);
+        assert_eq!(chebyshev_distance((0, 0), (3, 5)), 5);
+    }
+
+    #[test]
+    fn 인접_walkable탐색은_플레이어와_가장_가까운_타일을_고른다() {
+        // (5,5)~(7,7) Floor + (6,6) Counter. 플레이어 (5,5) 의 인접 walkable
+        // 후보(카운터 주변) 중 (5,5) 자신이 거리 0 으로 최적.
+        let mut map = click_map();
+        map.set_tile(6, 6, TileKind::Counter);
+        let adj = nearest_adjacent_walkable(&map, (6, 6), (5, 5));
+        assert_eq!(adj, Some((5, 5)), "플레이어 자신이 카운터 인접 walkable 중 거리 0");
+    }
+
+    #[test]
+    fn 인접_walkable이_없으면_None을_반환한다() {
+        // (0,0) Counter, 주변 모두 맵 밖이거나 Wall.
+        let mut map = Map::new(20, 20);
+        map.set_tile(0, 0, TileKind::Counter);
+        assert!(nearest_adjacent_walkable(&map, (0, 0), (10, 10)).is_none());
+    }
+
+    // --- refresh_follow_path 시스템 (NPC 추적 / 카운터 / despawn / 취소) ---
+
+    /// refresh_follow_path 하네스 — Player, Villager, 모든 이벤트/리소스를 둔다.
+    struct FollowHarness {
+        app: App,
+        player: Entity,
+    }
+
+    impl FollowHarness {
+        fn new(player_tile: (usize, usize)) -> Self {
+            let mut app = App::new();
+            app.add_event::<PlayerActedEvent>();
+            app.add_event::<BumpTileEvent>();
+            app.init_resource::<PlayerPath>();
+            app.init_resource::<MouseInteractTarget>();
+            let mut map = Map::new(20, 20);
+            for y in 0..20 { for x in 0..20 { map.set_tile(x, y, TileKind::Floor); } }
+            app.insert_resource(MapResource(map));
+            let pos = tile_to_world_coords(player_tile.0, player_tile.1);
+            let player = app.world.spawn((
+                Player,
+                Transform::from_xyz(pos.x, pos.y, 1.0),
+            )).id();
+            app.add_systems(Update, refresh_follow_path);
+            Self { app, player }
+        }
+        fn spawn_villager_at(&mut self, tile: (usize, usize)) -> Entity {
+            self.app.world.spawn((
+                Villager {
+                    id: "v".into(), name: "촌부".into(),
+                    dialogues: vec![], dialogue_idx: 0,
+                    tile_x: tile.0, tile_y: tile.1,
+                    just_bumped: false, quest_dialogue_idx: 0,
+                    base_color: Color::WHITE, home_room: None,
+                    stationary: false, vendor: false,
+                },
+            )).id()
+        }
+        fn set_target(&mut self, t: InteractTarget) {
+            self.app.world.resource_mut::<MouseInteractTarget>().0 = Some(t);
+        }
+        fn fire_acted(&mut self) {
+            self.app.world.send_event(PlayerActedEvent);
+        }
+        fn update(&mut self) { self.app.update(); }
+        fn bump_targets(&mut self) -> Vec<(usize, usize)> {
+            let events = self.app.world.resource::<Events<BumpTileEvent>>();
+            let mut r = events.get_reader();
+            r.read(events).map(|e| (e.0, e.1)).collect()
+        }
+        fn target(&self) -> Option<InteractTarget> {
+            self.app.world.resource::<MouseInteractTarget>().0
+        }
+        fn path_len(&self) -> usize { self.app.world.resource::<PlayerPath>().0.len() }
+    }
+
+    #[test]
+    fn 마우스로_NPC를_클릭하면_그_NPC를_추적해_인접에_도달하면_자동으로_말을_건다() {
+        // 플레이어 (5,5), villager 인접 (6,5) → chebyshev=1 → 즉시 BumpTileEvent.
+        let mut h = FollowHarness::new((5, 5));
+        let npc = h.spawn_villager_at((6, 5));
+        h.set_target(InteractTarget::Npc(npc));
+        h.fire_acted();
+        h.update();
+        assert_eq!(h.bump_targets(), vec![(6, 5)], "인접 villager 자동 범프");
+        assert!(h.target().is_none(), "범프 후 follow 종료");
+        assert_eq!(h.path_len(), 0, "범프 후 path 정리");
+    }
+
+    #[test]
+    fn NPC가_움직이면_경로가_갱신된다() {
+        // 플레이어 (5,5), villager 멀리 (12,12) → 경로 재계산. 범프 없음.
+        let mut h = FollowHarness::new((5, 5));
+        let npc = h.spawn_villager_at((12, 12));
+        h.set_target(InteractTarget::Npc(npc));
+        h.fire_acted();
+        h.update();
+        assert!(h.bump_targets().is_empty(), "거리 멀면 범프 안 함");
+        assert!(matches!(h.target(), Some(InteractTarget::Npc(_))), "follow 유지");
+        assert!(h.path_len() > 0, "재계산된 경로가 채워져야 한다");
+        // villager 위치를 옮긴 뒤 다시 acted → 경로 다시 계산
+        h.app.world.get_mut::<Villager>(npc).unwrap().tile_x = 10;
+        h.app.world.get_mut::<Villager>(npc).unwrap().tile_y = 10;
+        h.fire_acted();
+        h.update();
+        let path = &h.app.world.resource::<PlayerPath>().0;
+        assert_eq!(*path.back().unwrap(), (10, 10), "갱신된 경로의 끝이 새 villager 타일");
+    }
+
+    #[test]
+    fn 추적하던_villager가_despawn되면_follow가_안전하게_종료된다() {
+        let mut h = FollowHarness::new((5, 5));
+        let npc = h.spawn_villager_at((12, 12));
+        h.set_target(InteractTarget::Npc(npc));
+        // villager 를 미리 despawn
+        h.app.world.despawn(npc);
+        h.fire_acted();
+        h.update(); // 패닉하지 않으면 통과
+        assert!(h.target().is_none(), "despawn 시 follow 종료");
+        assert_eq!(h.path_len(), 0, "despawn 시 path 정리");
+    }
+
+    #[test]
+    fn 카운터타일을_타겟으로_두고_인접하면_자동으로_범프한다() {
+        // 플레이어 (5,5), 카운터 (6,5) → chebyshev=1 → 즉시 BumpTileEvent((6,5)).
+        let mut h = FollowHarness::new((5, 5));
+        h.set_target(InteractTarget::Tile(6, 5));
+        h.fire_acted();
+        h.update();
+        assert_eq!(h.bump_targets(), vec![(6, 5)], "인접 시 카운터 자동 범프");
+        assert!(h.target().is_none(), "범프 후 target 정리");
+    }
+
+    #[test]
+    fn 카운터타일_타겟은_멀면_그대로_둔다() {
+        let mut h = FollowHarness::new((5, 5));
+        h.set_target(InteractTarget::Tile(15, 15));
+        h.fire_acted();
+        h.update();
+        assert!(h.bump_targets().is_empty(), "거리 멀면 범프 안 함");
+        assert!(matches!(h.target(), Some(InteractTarget::Tile(15, 15))), "follow 유지");
+    }
+
+    #[test]
+    fn refresh는_PlayerActedEvent가_없으면_아무것도_안한다() {
+        let mut h = FollowHarness::new((5, 5));
+        let npc = h.spawn_villager_at((6, 5));
+        h.set_target(InteractTarget::Npc(npc));
+        h.update(); // acted 안 보냄
+        assert!(h.bump_targets().is_empty(), "acted 없으면 범프 없음");
+        assert!(matches!(h.target(), Some(InteractTarget::Npc(_))), "target 유지");
+    }
+
+    #[test]
+    fn refresh는_target이_없으면_아무것도_안한다() {
+        let mut h = FollowHarness::new((5, 5));
+        h.fire_acted();
+        h.update();
+        assert!(h.bump_targets().is_empty());
+        assert!(h.target().is_none());
+    }
+
+    #[test]
+    fn refresh는_플레이어가_없으면_target과_path를_정리한다() {
+        let mut h = FollowHarness::new((5, 5));
+        let npc = h.spawn_villager_at((6, 5));
+        h.set_target(InteractTarget::Npc(npc));
+        // Player 컴포넌트 제거(=쿼리 실패)
+        h.app.world.entity_mut(h.player).remove::<Player>();
+        h.fire_acted();
+        h.update();
+        assert!(h.target().is_none(), "플레이어 없음 → follow 정리");
+        assert_eq!(h.path_len(), 0);
+    }
+
+    // --- follow 취소: 키보드 이동 / 스페이스 / 새 클릭 / 리스폰 ---
+
+    #[test]
+    fn 키보드_이동이_들어오면_follow가_취소된다() {
+        let mut h = MoveHarness::new(20, 20);
+        h.set_tile(6, 5, TileKind::Floor);
+        // follow 와 path 를 미리 채워둔다
+        h.app.world.resource_mut::<MouseInteractTarget>().0
+            = Some(InteractTarget::Tile(10, 10));
+        h.app.world.resource_mut::<PlayerPath>().0.push_back((6, 5));
+        h.press(KeyCode::ArrowRight);
+        h.update();
+        assert!(h.app.world.resource::<MouseInteractTarget>().0.is_none(),
+            "키 입력 시 follow 가 취소되어야 한다");
+        assert_eq!(h.path_len(), 0, "키 입력 시 path 도 취소");
+    }
+
+    #[test]
+    fn 스페이스로_대기하면_follow가_취소된다() {
+        let mut h = MoveHarness::new(20, 20);
+        h.app.world.resource_mut::<MouseInteractTarget>().0
+            = Some(InteractTarget::Tile(10, 10));
+        h.app.world.resource_mut::<PlayerPath>().0.push_back((10, 10));
+        h.press(KeyCode::Space);
+        h.update();
+        assert!(h.app.world.resource::<MouseInteractTarget>().0.is_none());
+        assert_eq!(h.path_len(), 0);
+    }
+
+    #[test]
+    fn 자동경로상_장애물_범프시_follow도_함께_정리된다() {
+        let mut h = run_path_step(|h| {
+            h.set_tile(6, 5, TileKind::Floor);
+            h.app.world.resource_mut::<OccupiedTiles>().0.insert((6, 5));
+            h.app.world.resource_mut::<PlayerPath>().0.push_back((6, 5));
+            h.app.world.resource_mut::<MouseInteractTarget>().0
+                = Some(InteractTarget::Npc(Entity::from_raw(123)));
+        });
+        assert!(h.app.world.resource::<MouseInteractTarget>().0.is_none(),
+            "장애물 범프 시 follow 도 정리");
+        assert_eq!(h.bump_targets(), vec![(6, 5)]);
+    }
+
+    #[test]
+    fn 자동경로상_몬스터_공격시_follow도_함께_정리된다() {
+        let mut h = run_path_step(|h| {
+            h.set_tile(6, 5, TileKind::Floor);
+            h.app.world.resource_mut::<MonsterTiles>().0.insert((6, 5));
+            h.app.world.resource_mut::<PlayerPath>().0.push_back((6, 5));
+            h.app.world.resource_mut::<MouseInteractTarget>().0
+                = Some(InteractTarget::Npc(Entity::from_raw(123)));
+        });
+        assert!(h.app.world.resource::<MouseInteractTarget>().0.is_none(),
+            "몬스터 공격 시 follow 도 정리");
+        assert_eq!(h.attack_targets(), vec![(6, 5)]);
     }
 
     // --- spawn_player ---
@@ -1894,13 +2906,26 @@ impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MoveHoldState>()
             .init_resource::<PlayerPath>()
+            .init_resource::<MouseInteractTarget>()
             .init_resource::<PlayerProgress>()
             .configure_sets(Update, PlayerSystemSet::MovementComplete.after(PlayerSystemSet::Movement))
             .add_systems(Startup, spawn_player.after(draw_map))
             .add_systems(Update, (
+                // 터치 탭은 마우스 좌클릭과 동일 흐름이지만 입력 채널만 다르다.
+                // on_mouse_click 보다 먼저 돌려, 같은 프레임 합성 마우스 클릭이 와도
+                // on_mouse_click 의 Touches 가드가 SKIP 하게 한다 — 중복 적용 방지.
+                on_touch_tap.before(on_mouse_click),
                 on_mouse_click.before(PlayerSystemSet::Movement),
                 player_movement.in_set(PlayerSystemSet::Movement),
                 smooth_player_lerp.in_set(PlayerSystemSet::MovementComplete),
+                // 추적 갱신은 villager_turn 직후(VillagerSystemSet::Turn 뒤) 돌려, NPC 의
+                // 이번 턴 이동 결과(tile_x/tile_y 갱신본) 위에서 경로/인접 판정을 한다.
+                // 이렇게 해야 "플레이어가 NPC 쫓아가지만 NPC 가 옆 칸으로 떠나 빈자리에 도착"
+                // 하는 회귀가 발생하지 않고, 인접 시 즉시 BumpTileEvent 가 다음 프레임
+                // handle_bump 로 연결된다.
+                refresh_follow_path
+                    .after(PlayerSystemSet::MovementComplete)
+                    .after(VillagerSystemSet::Turn),
                 update_fov.after(PlayerSystemSet::MovementComplete),
                 camera_follow_player.after(update_fov),
                 update_player_bars,

@@ -66,10 +66,16 @@ pub struct VillagerRegistry {
     pub villagers: Vec<VillagerDef>,
 }
 
-/// villager 시스템의 Startup 단계 실행 순서
+/// villager 시스템의 단계별 실행 순서.
+///
+/// - `Load`: startup 단계 — RON 적재 → 퀘스트 참조 검증 → 스폰.
+/// - `Turn`: update 단계 — `handle_bump` + `villager_turn` 의 합 — 이 세트 이후
+///   에서 보는 villager 의 `tile_x/tile_y` 는 "이번 턴 이동 결과 반영" 후의 값이다.
+///   `player::refresh_follow_path` 가 이 보장에 의존(NPC 추적 경로 재계산).
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum VillagerSystemSet {
     Load,
+    Turn,
 }
 
 
@@ -168,6 +174,7 @@ impl Plugin for VillagerPlugin {
                 respawn_on_regen.after(MapSystemSet::ExecuteRegen),
                 (handle_bump, villager_turn)
                     .chain()
+                    .in_set(VillagerSystemSet::Turn)
                     .after(PlayerSystemSet::MovementComplete),
                 update_villager_glyph.after(handle_bump),
                 smooth_villager_move,
