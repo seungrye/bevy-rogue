@@ -51,17 +51,35 @@ pub fn monsters_ron() -> Option<&'static str> {
 }
 
 /// `assets/quests/*.ron` 전체 목록을 `(파일명, RON)` iterator 로 반환한다.
-/// REMOTE 가 set 돼 있으면 그 목록 우선, 아니면 빌드 임베드 슬라이스.
 ///
-/// 반환 타입을 `Box<dyn Iterator<...>>` 로 둔 이유: REMOTE 경로는 `Vec` 슬라이스
-/// (`&[(String, String)]`) 이고 임베드 경로는 `&[(&str, &str)]` 이라 두 소스의
-/// 아이템 타입이 달라 정적 합집합 iterator 로 표현하기 어렵다. 호출자는
-/// `(&str, &str)` 쌍만 보면 되므로 dyn 박싱 비용은 무시 가능(시작 1회만).
+/// **머지 시맨틱 (id 별 override)**: REMOTE 에 있는 퀘스트는 같은 파일명의 임베드
+/// 퀘스트를 덮어쓰고, REMOTE 에 없는 임베드 퀘스트는 그대로 유지된다. site DB 가
+/// 부분만 import 된 상태에서도 게임이 임베드된 퀘스트 전체를 잃지 않게 보호한다.
+///
+/// REMOTE 가 비어 있으면(set 안 됨 또는 빈 vec) 임베드 슬라이스를 그대로 반환.
 pub fn all_quests() -> Box<dyn Iterator<Item = (&'static str, &'static str)>> {
-    if let Some(remote) = crate::modules::remote_content::remote_quests() {
-        return Box::new(remote.iter().map(|(n, r)| (n.as_str(), r.as_str())));
+    let remote = crate::modules::remote_content::remote_quests();
+    Box::new(merge_quests(EMBEDDED_QUESTS, remote).into_iter())
+}
+
+/// `all_quests` 의 머지 로직을 테스트 가능하게 분리한 순수 함수.
+///
+/// `embedded` 를 기본으로 두고, `remote` 에 있는 항목은 같은 파일명의 임베드를
+/// override 한다. remote 가 None 이면 embedded 를 그대로 복사. embedded 와 remote
+/// 의 문자열 lifetime 은 모두 `'static` (REMOTE 는 OnceLock 로 영구 저장).
+pub fn merge_quests(
+    embedded: &'static [(&'static str, &'static str)],
+    remote: Option<&'static [(String, String)]>,
+) -> Vec<(&'static str, &'static str)> {
+    use std::collections::HashMap;
+    let mut map: HashMap<&'static str, &'static str> =
+        embedded.iter().map(|(n, r)| (*n, *r)).collect();
+    if let Some(remote) = remote {
+        for (n, r) in remote.iter() {
+            map.insert(n.as_str(), r.as_str());
+        }
     }
-    Box::new(EMBEDDED_QUESTS.iter().map(|(n, r)| (*n, *r)))
+    map.into_iter().collect()
 }
 
 #[cfg(test)]
@@ -156,6 +174,48 @@ mod tests {
         let got = monsters_ron();
         let direct = find_embedded(EMBEDDED_MONSTERS, "monsters.ron").unwrap();
         assert_eq!(got.unwrap(), direct);
+    }
+
+    #[test]
+    fn merge_quests_는_remote_없으면_embedded를_그대로_반환한다() {
+        let embedded: &'static [(&'static str, &'static str)] = &[
+            ("a.ron", "QuestDef(id:\"a\")"),
+            ("b.ron", "QuestDef(id:\"b\")"),
+        ];
+        let merged = merge_quests(embedded, None);
+        let names: std::collections::HashSet<&str> = merged.iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, ["a.ron", "b.ron"].into_iter().collect());
+    }
+
+    #[test]
+    fn merge_quests_는_remote가_같은_id를_override한다() {
+        let embedded: &'static [(&'static str, &'static str)] = &[
+            ("a.ron", "EMBEDDED_A"),
+            ("b.ron", "EMBEDDED_B"),
+        ];
+        // REMOTE 가 a.ron 만 override. b.ron 은 임베드 그대로 살아 있어야 함.
+        let remote_owned: Vec<(String, String)> = vec![
+            ("a.ron".to_string(), "REMOTE_A".to_string()),
+        ];
+        let remote_static: &'static [(String, String)] = Box::leak(remote_owned.into_boxed_slice());
+        let merged = merge_quests(embedded, Some(remote_static));
+        let map: std::collections::HashMap<&str, &str> = merged.into_iter().collect();
+        assert_eq!(map.get("a.ron"), Some(&"REMOTE_A"), "REMOTE 가 같은 id 를 override");
+        assert_eq!(map.get("b.ron"), Some(&"EMBEDDED_B"), "임베드 only 는 그대로 유지");
+    }
+
+    #[test]
+    fn merge_quests_는_remote에만_있는_새_퀘스트도_포함한다() {
+        let embedded: &'static [(&'static str, &'static str)] = &[("a.ron", "EMBEDDED_A")];
+        let remote_owned: Vec<(String, String)> = vec![
+            ("new_quest.ron".to_string(), "REMOTE_NEW".to_string()),
+        ];
+        let remote_static: &'static [(String, String)] = Box::leak(remote_owned.into_boxed_slice());
+        let merged = merge_quests(embedded, Some(remote_static));
+        let map: std::collections::HashMap<&str, &str> = merged.into_iter().collect();
+        assert_eq!(map.len(), 2);
+        assert!(map.contains_key("a.ron"));
+        assert!(map.contains_key("new_quest.ron"));
     }
 
     #[test]

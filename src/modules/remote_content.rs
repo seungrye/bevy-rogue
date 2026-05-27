@@ -108,24 +108,39 @@ pub fn install_from_json(json: &str) -> Result<(), String> {
 
 // ── 조회 헬퍼(읽기 전용, 'static) ───────────────────────────────────────────────
 
+/// site DB 가 아직 미import (`[]` 만 들어옴) 인 경우 REMOTE 가 콘텐츠를 모두 덮어쓰면
+/// 게임 콘텐츠가 통째 사라지는 사고가 난다. trivially-empty(공백·빈 RON 배열) RON
+/// 은 REMOTE 가 아닌 것으로 취급해 임베드 폴백으로 돌린다.
+pub fn is_trivial_empty(s: &str) -> bool {
+    let t = s.trim();
+    t.is_empty() || t == "[]" || t == "()"
+}
+
 /// REMOTE 에 quest 가 들어 있으면 `[(파일명, RON)]` 슬라이스를 반환.
 pub fn remote_quests() -> Option<&'static [(String, String)]> {
     REMOTE.get().and_then(|c| if c.quests.is_empty() { None } else { Some(c.quests.as_slice()) })
 }
 
-/// REMOTE 에 해당 item 파일이 있으면 RON 문자열 반환. 예: `"quest_items.ron"`.
+/// REMOTE 에 해당 item 파일이 있고 trivially empty 가 아니면 RON 문자열 반환.
+/// 예: `"quest_items.ron"`. 빈 `[]` 만 들어오면 None → 임베드 폴백.
 pub fn remote_item(filename: &str) -> Option<&'static str> {
-    REMOTE.get().and_then(|c| c.items.get(filename).map(|s| s.as_str()))
+    REMOTE.get()
+        .and_then(|c| c.items.get(filename).map(|s| s.as_str()))
+        .filter(|s| !is_trivial_empty(s))
 }
 
-/// REMOTE 에 villagers.ron RON 문자열이 있으면 반환.
+/// REMOTE 에 villagers.ron RON 이 있고 trivially empty 가 아니면 반환. 빈 `[]` → None.
 pub fn remote_villagers() -> Option<&'static str> {
-    REMOTE.get().and_then(|c| c.villagers.as_deref())
+    REMOTE.get()
+        .and_then(|c| c.villagers.as_deref())
+        .filter(|s| !is_trivial_empty(s))
 }
 
-/// REMOTE 에 monsters.ron RON 문자열이 있으면 반환.
+/// REMOTE 에 monsters.ron RON 이 있고 trivially empty 가 아니면 반환. 빈 `[]` → None.
 pub fn remote_monsters() -> Option<&'static str> {
-    REMOTE.get().and_then(|c| c.monsters.as_deref())
+    REMOTE.get()
+        .and_then(|c| c.monsters.as_deref())
+        .filter(|s| !is_trivial_empty(s))
 }
 
 // ── 테스트 ────────────────────────────────────────────────────────────────────
@@ -215,6 +230,18 @@ mod tests {
         let json = r#"{ "quests": [] }"#;
         let c = parse_only(json).expect("빈 quests 도 정상");
         assert!(c.quests.is_empty());
+    }
+
+    #[test]
+    fn 빈_RON_배열은_trivial_empty로_판정한다() {
+        assert!(is_trivial_empty(""));
+        assert!(is_trivial_empty("[]"));
+        assert!(is_trivial_empty("[]\n"));
+        assert!(is_trivial_empty("  []  "));
+        assert!(is_trivial_empty("()"));
+        // 콘텐츠가 있는 RON 은 trivial 이 아님.
+        assert!(!is_trivial_empty("[VillagerDef(id:\"a\")]"));
+        assert!(!is_trivial_empty("[\n  Monster(...)\n]"));
     }
 
     #[test]
