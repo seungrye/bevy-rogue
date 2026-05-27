@@ -61,6 +61,12 @@ const benignErrorRegexes = [
   /Refused to connect because it violates the document's Content Security Policy/,
   /Fetch API cannot load https:\/\/www\.google\.com\/g\/collect/,
   /ERR_CERT_COMMON_NAME_INVALID/,
+  // chromium swiftshader 한정 GL driver 알림 — 실제 렌더에는 영향 없음(스크린샷이 증명).
+  /GL Driver Message.*GL_CLOSE_PATH_NV/,
+  /GPU stall due to ReadPixels/,
+  // wasm-bindgen 의 init 사용법 deprecation — 이미 새 시그니처로 교정했지만
+  // 캐시·CDN 지연으로 한 번 더 떠도 무해. 실제 init 은 성공.
+  /using deprecated parameters for the initialization function/,
 ];
 const isBenign = (text) => benignErrorRegexes.some((r) => r.test(text));
 
