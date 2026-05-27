@@ -12,3 +12,9 @@ rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
 # (nightly 한정) 단일 크레이트 프런트엔드 병렬: RUSTFLAGS="-Z threads=7" cargo +nightly ...
 #   stable rustflags 에 넣으면 빌드가 깨지므로 전역 설정 금지(nightly 명령에서만).
+
+# wasm32: mold/clang 비적용 + getrandom 0.3 의 wasm_js 백엔드 활성 cfg.
+#   getrandom 0.3 은 wasm32-unknown-unknown 에서 명시적 cfg 없이는 컴파일 거부한다.
+#   uuid v1 (bevy_reflect → uuid) 가 getrandom 0.3 을 끌어옴.
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

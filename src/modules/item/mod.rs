@@ -204,6 +204,11 @@ pub enum ItemSystemSet {
 /// RON 에서 quest item 정의를 읽어 Resource 에 적재한다
 fn load_quest_items_system(mut registry: ResMut<QuestItemRegistry>) {
     let path = "assets/items/quest_items.ron";
+    // wasm32: 브라우저 런타임은 std::fs 가 없으므로 컴파일 시 RON 을 임베드한다.
+    // 네이티브는 기존 동작(파일 시스템 읽기) 그대로.
+    #[cfg(target_arch = "wasm32")]
+    let text: String = include_str!("../../../assets/items/quest_items.ron").to_string();
+    #[cfg(not(target_arch = "wasm32"))]
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
     let defs: Vec<QuestItemDef> = ron::de::from_str(&text)
@@ -574,6 +579,9 @@ fn apply_loadout_unless_save(
 // ── 로드 시스템 ────────────────────────────────────────────────────────────
 fn load_weapons_system(mut registry: ResMut<ItemRegistry>) {
     let path = "assets/items/weapons.ron";
+    #[cfg(target_arch = "wasm32")]
+    let text: String = include_str!("../../../assets/items/weapons.ron").to_string();
+    #[cfg(not(target_arch = "wasm32"))]
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
     let defs: Vec<WeaponDef> = ron::de::from_str(&text)
@@ -600,6 +608,9 @@ fn load_weapons_system(mut registry: ResMut<ItemRegistry>) {
 
 fn load_armors_system(mut registry: ResMut<ItemRegistry>) {
     let path = "assets/items/armors.ron";
+    #[cfg(target_arch = "wasm32")]
+    let text: String = include_str!("../../../assets/items/armors.ron").to_string();
+    #[cfg(not(target_arch = "wasm32"))]
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
     let defs: Vec<ArmorDef> = ron::de::from_str(&text)
@@ -624,6 +635,9 @@ fn load_armors_system(mut registry: ResMut<ItemRegistry>) {
 
 fn load_consumables_system(mut registry: ResMut<ItemRegistry>) {
     let path = "assets/items/consumables.ron";
+    #[cfg(target_arch = "wasm32")]
+    let text: String = include_str!("../../../assets/items/consumables.ron").to_string();
+    #[cfg(not(target_arch = "wasm32"))]
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
     let defs: Vec<ConsumableDef> = ron::de::from_str(&text)

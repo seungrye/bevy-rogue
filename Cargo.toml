@@ -3,6 +3,15 @@ name = "bevy-rogue"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "bevy_rogue"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "bevy-rogue"
+path = "src/main.rs"
+
 [dependencies]
 rand = "0.8"
 noise = "0.8"
@@ -10,6 +19,16 @@ bevy = { version = "0.13" }
 bevy_rapier2d = "0.26"
 serde = { version = "1", features = ["derive"] }
 ron = "0.8"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+console_error_panic_hook = "0.1"
+# 의존성 그래프의 getrandom 0.2 (rand 0.8 등) 가 wasm 에서 js 백엔드를 쓰도록.
+getrandom = { version = "0.2", features = ["js"] }
+# bevy_reflect → uuid v1 → getrandom 0.3 이 wasm_js 백엔드 사용.
+# .cargo/config.toml 의 RUSTFLAGS 와 함께 두 가지(cfg + feature) 모두 필요.
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+uuid = { version = "1", features = ["js"] }
 
 [features]
 # 개발 반복 가속(opt-in): bevy 를 동적 링크(.so)로 빌드 → 증분 빌드·링크 추가 단축.

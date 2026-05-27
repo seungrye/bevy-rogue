@@ -130,14 +130,19 @@ pub struct SavePlugin;
 
 impl Plugin for SavePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SaveConfig>()
-            .add_systems(PostStartup, load_if_save_exists)
-            .add_systems(Update, auto_save);
+        app.init_resource::<SaveConfig>();
+        // wasm32 PoC: 세이브 자동 로드/저장은 모두 no-op (stage 2 에서 localStorage 백엔드).
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            app.add_systems(PostStartup, load_if_save_exists)
+                .add_systems(Update, auto_save);
+        }
     }
 }
 
 // ── 자동 저장 ─────────────────────────────────────────────────────────────────
 
+#[cfg(not(target_arch = "wasm32"))]
 fn auto_save(
     mut events: EventReader<crate::modules::map::PlayerActedEvent>,
     inventory: Res<PlayerInventory>,
@@ -245,6 +250,7 @@ fn restore_player_stats(stats: &mut CombatStats, save: &SaveData) {
     stats.defense  = save.player_defense;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn write_save_to(save: &SaveData, path: &str, tmp: &str) {
     let content = match ron::ser::to_string_pretty(save, ron::ser::PrettyConfig::default()) {
         Ok(s) => s,
@@ -267,6 +273,12 @@ fn write_save_to(save: &SaveData, path: &str, tmp: &str) {
     }
 }
 
+/// wasm32: PoC 한정 no-op stub. stage 2 에서 localStorage 백엔드로 교체.
+#[cfg(target_arch = "wasm32")]
+fn write_save_to(_save: &SaveData, _path: &str, _tmp: &str) {
+    // intentionally empty — 브라우저 fs 미가용, stage 2 에서 localStorage 백엔드로 교체.
+}
+
 // ── 자동 로드 (PostStartup) ──────────────────────────────────────────────────
 
 fn get_algo(zone_id: &ZoneId, named_config: &NamedZoneConfig) -> String {
@@ -278,6 +290,7 @@ fn get_algo(zone_id: &ZoneId, named_config: &NamedZoneConfig) -> String {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn load_if_save_exists(
     mut inventory: ResMut<PlayerInventory>,
     mut equipment: ResMut<PlayerEquipment>,
@@ -379,7 +392,10 @@ pub fn delete_save() {
 }
 
 fn delete_save_at(path: &str) {
+    #[cfg(not(target_arch = "wasm32"))]
     let _ = std::fs::remove_file(path);
+    #[cfg(target_arch = "wasm32")]
+    let _ = path; // wasm: no-op (stage 2 에서 localStorage 백엔드).
 }
 
 // ── 단위 테스트 ───────────────────────────────────────────────────────────────

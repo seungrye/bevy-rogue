@@ -304,10 +304,15 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_rapier2d",
+ "console_error_panic_hook",
+ "getrandom 0.2.16",
+ "getrandom 0.3.3",
  "noise",
  "rand 0.8.5",
  "ron",
  "serde",
+ "uuid",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1851,9 +1856,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26145e563e54f2cadc477553f1ec5ee650b00862f0a58bcd12cbdc5f0ea2d2f4"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi",
  "wasi 0.14.2+wasi-0.2.4",
+ "wasm-bindgen",
 ]
 
 [[package]]

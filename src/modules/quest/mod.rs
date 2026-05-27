@@ -317,7 +317,10 @@ fn validate_quest_item_refs(
         for msg in &errors {
             error!("[치명적] {}", msg);
         }
+        #[cfg(not(target_arch = "wasm32"))]
         std::process::exit(1);
+        #[cfg(target_arch = "wasm32")]
+        panic!("[치명적] quest item 참조 검증 실패");
     }
 }
 
@@ -375,6 +378,50 @@ fn check_action_item_ids(
 // ── Systems ──────────────────────────────────────────────────────────────────
 
 fn load_quests(mut registry: ResMut<QuestRegistry>, quest_items: Res<crate::modules::item::QuestItemRegistry>) {
+    // wasm32: 디렉터리 스캔 불가 → 컴파일 시 임베드된 RON 파일들을 인메모리로 파싱.
+    // 새 퀘스트 추가 시 아래 EMBEDDED 리스트도 갱신해야 한다(PoC 한정 트레이드오프).
+    #[cfg(target_arch = "wasm32")]
+    let quests = {
+        let embedded: &[(&str, &str)] = &[
+            ("alchemist_quest.ron",      include_str!("../../../assets/quests/alchemist_quest.ron")),
+            ("buried_dungeon_quest.ron", include_str!("../../../assets/quests/buried_dungeon_quest.ron")),
+            ("demonsword_quest.ron",     include_str!("../../../assets/quests/demonsword_quest.ron")),
+            ("dragon_hunt_quest.ron",    include_str!("../../../assets/quests/dragon_hunt_quest.ron")),
+            ("gem_quest.ron",            include_str!("../../../assets/quests/gem_quest.ron")),
+            ("herb_quest.ron",           include_str!("../../../assets/quests/herb_quest.ron")),
+            ("infiltration_quest.ron",   include_str!("../../../assets/quests/infiltration_quest.ron")),
+            ("jon_snow_quest.ron",       include_str!("../../../assets/quests/jon_snow_quest.ron")),
+            ("loot_farming_quest.ron",   include_str!("../../../assets/quests/loot_farming_quest.ron")),
+            ("parry_quest.ron",          include_str!("../../../assets/quests/parry_quest.ron")),
+            ("prologue_fog.ron",         include_str!("../../../assets/quests/prologue_fog.ron")),
+            ("skill_trial_quest.ron",    include_str!("../../../assets/quests/skill_trial_quest.ron")),
+            ("stark_quest.ron",          include_str!("../../../assets/quests/stark_quest.ron")),
+            ("targaryen_quest.ron",      include_str!("../../../assets/quests/targaryen_quest.ron")),
+            ("trap_mine_quest.ron",      include_str!("../../../assets/quests/trap_mine_quest.ron")),
+            ("vault_heist_quest.ron",    include_str!("../../../assets/quests/vault_heist_quest.ron")),
+            ("world_fracture.ron",       include_str!("../../../assets/quests/world_fracture.ron")),
+        ];
+        let mut out: HashMap<String, QuestDef> = HashMap::new();
+        let mut errors: Vec<String> = Vec::new();
+        for (name, text) in embedded {
+            let def = match ron::de::from_str::<QuestDef>(text) {
+                Ok(d) => d,
+                Err(e) => { errors.push(format!("[퀘스트 오류] {} 파싱 실패: {}", name, e)); continue; }
+            };
+            let semantic = validate_quest_def(&def, &quest_items);
+            if !semantic.is_empty() {
+                for m in &semantic { errors.push(format!("[퀘스트 오류] {} — {}", name, m)); }
+                continue;
+            }
+            out.insert(def.id.clone(), def);
+        }
+        if !errors.is_empty() {
+            for e in &errors { error!("{}", e); }
+            panic!("[치명적] 퀘스트 RON 검증 실패 (wasm 임베드)");
+        }
+        out
+    };
+    #[cfg(not(target_arch = "wasm32"))]
     let quests = match read_quest_dir("assets/quests", &quest_items) {
         Ok(q) => q,
         // 도달 불가 방어코드 — read_quest_dir 의 Err 분기는 read_quest_dir 테스트로

@@ -10,3 +10,4 @@ coverage/
 
 # 배포 패키지 산출물
 dist/
+/dist-wasm/

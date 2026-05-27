@@ -179,7 +179,16 @@ impl Plugin for VillagerPlugin {
 
 /// villager RON 파일을 읽어 registry 에 적재한다
 fn load_villagers(mut registry: ResMut<VillagerRegistry>) {
+    // wasm32: 임베드된 RON 으로 파싱 (std::fs 미가용, std::process::exit 미가용).
+    #[cfg(target_arch = "wasm32")]
+    let villagers = {
+        const EMBED: &str = include_str!("../../../assets/villagers/villagers.ron");
+        ron::de::from_str::<Vec<VillagerDef>>(EMBED)
+            .unwrap_or_else(|e| panic!("[치명적] villagers.ron RON 파싱 실패: {}", e))
+    };
+    #[cfg(not(target_arch = "wasm32"))]
     let path = "assets/villagers/villagers.ron";
+    #[cfg(not(target_arch = "wasm32"))]
     let villagers = match read_villager_defs(path) {
         Ok(v) => v,
         // 도달 불가 방어코드: 파일 누락·파싱 실패 시 process::exit 로 테스트 러너를 죽이므로
@@ -214,7 +223,10 @@ fn validate_quest_villager_refs(
         for msg in &errors {
             error!("[치명적] {}", msg);
         }
+        #[cfg(not(target_arch = "wasm32"))]
         std::process::exit(1);
+        #[cfg(target_arch = "wasm32")]
+        panic!("[치명적] villager-quest 참조 검증 실패");
     }
 }
 

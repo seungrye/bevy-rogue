@@ -120,7 +120,16 @@ pub enum MonsterSystemSet {
 
 /// monster RON 파일을 읽어 registry 에 적재한다.
 fn load_monsters(mut registry: ResMut<MonsterRegistry>) {
+    // wasm32: 임베드된 RON 으로 파싱 (std::fs 미가용, std::process::exit 미가용).
+    #[cfg(target_arch = "wasm32")]
+    let monsters = {
+        const EMBED: &str = include_str!("../../../assets/monsters/monsters.ron");
+        ron::de::from_str::<Vec<MonsterDef>>(EMBED)
+            .unwrap_or_else(|e| panic!("[치명적] monsters.ron RON 파싱 실패: {}", e))
+    };
+    #[cfg(not(target_arch = "wasm32"))]
     let path = "assets/monsters/monsters.ron";
+    #[cfg(not(target_arch = "wasm32"))]
     let monsters = match read_monster_defs(path) {
         Ok(m) => m,
         // 도달 불가 방어코드: 파일 누락·파싱 실패 시 process::exit 로 테스트 러너를
