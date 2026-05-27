@@ -186,12 +186,29 @@ pub fn run(initial_algorithm: Option<String>, initial_glyph_style: GlyphStyle) {
         ..default()
     };
 
+    // wasm 한정: 페이지 URL 이 /games/bevy-rogue (트레일링 슬래시 없음) 라 브라우저가
+    // 상대 경로 "assets/..." 를 /games/assets/... 로 잘못 해석해 폰트/RON 등이 404 가 된다.
+    // AssetPlugin.file_path 를 절대 경로로 명시해 페이지 base 와 무관하게 정상 fetch.
+    // 환경변수 BEVY_ROGUE_ASSET_BASE 로 override 가능(기본 /games/bevy-rogue/assets).
+    // native 는 영향 없음 — 기본 "assets" 유지.
+    #[cfg(target_arch = "wasm32")]
+    let asset_plugin = bevy::asset::AssetPlugin {
+        file_path: option_env!("BEVY_ROGUE_ASSET_BASE")
+            .unwrap_or("/games/bevy-rogue/assets")
+            .to_string(),
+        ..Default::default()
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let asset_plugin = bevy::asset::AssetPlugin::default();
+
     App::new()
         .add_systems(Startup, modules::core::systems::spawn_2d_camera)
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(primary_window),
-            ..default()
-        }))
+        .add_plugins(DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(primary_window),
+                ..default()
+            })
+            .set(asset_plugin))
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0))
         .add_plugins(modules::map::MapPlugin { initial_algorithm })
         .add_plugins(modules::player::PlayerPlugin)
