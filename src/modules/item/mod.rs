@@ -205,10 +205,10 @@ pub enum ItemSystemSet {
 fn load_quest_items_system(mut registry: ResMut<QuestItemRegistry>) {
     let path = "assets/items/quest_items.ron";
     // wasm32: 브라우저 런타임은 std::fs 가 없으므로 컴파일 시 RON 을 임베드한다.
-    // 네이티브는 기존 동작(파일 시스템 읽기) 그대로.
+    // 시작 시 site `/api/game/content/v1` 의 REMOTE 콘텐츠가 설치돼 있으면
+    // 그쪽 우선, 없으면 임베드 슬라이스(item_ron 헬퍼가 처리). 네이티브 기존 동작 그대로.
     #[cfg(target_arch = "wasm32")]
-    let text: String = crate::modules::embedded_assets::find_embedded(
-        crate::modules::embedded_assets::EMBEDDED_ITEMS, "quest_items.ron")
+    let text: String = crate::modules::embedded_assets::item_ron("quest_items.ron")
         .expect("quest_items.ron 임베드 누락 (build.rs)").to_string();
     #[cfg(not(target_arch = "wasm32"))]
     let text = std::fs::read_to_string(path)
@@ -507,11 +507,12 @@ fn read_start_loadout(path: &str) -> StartLoadout {
 
 fn load_start_loadout_system(mut registry: ResMut<StartLoadoutRegistry>) {
     // wasm32: 브라우저에 fs 가 없으므로 build.rs 가 임베드한 슬라이스에서 직접 파싱.
+    // 시작 시 site `/api/game/content/v1` 의 REMOTE 콘텐츠가 설치돼 있으면 그쪽 우선,
+    // 없으면 임베드 슬라이스(item_ron 헬퍼가 처리).
     // 실패시 기본 로드아웃으로 폴백(네이티브 read_start_loadout 과 의미 동일).
     #[cfg(target_arch = "wasm32")]
     {
-        let text = crate::modules::embedded_assets::find_embedded(
-            crate::modules::embedded_assets::EMBEDDED_ITEMS, "start_loadout.ron")
+        let text = crate::modules::embedded_assets::item_ron("start_loadout.ron")
             .unwrap_or("");
         registry.0 = match ron::de::from_str::<StartLoadout>(text) {
             Ok(loadout) => {
@@ -607,9 +608,9 @@ fn apply_loadout_unless_save(
 // ── 로드 시스템 ────────────────────────────────────────────────────────────
 fn load_weapons_system(mut registry: ResMut<ItemRegistry>) {
     let path = "assets/items/weapons.ron";
+    // wasm32: REMOTE 우선, 없으면 임베드 슬라이스(item_ron 헬퍼).
     #[cfg(target_arch = "wasm32")]
-    let text: String = crate::modules::embedded_assets::find_embedded(
-        crate::modules::embedded_assets::EMBEDDED_ITEMS, "weapons.ron")
+    let text: String = crate::modules::embedded_assets::item_ron("weapons.ron")
         .expect("weapons.ron 임베드 누락 (build.rs)").to_string();
     #[cfg(not(target_arch = "wasm32"))]
     let text = std::fs::read_to_string(path)
@@ -638,9 +639,9 @@ fn load_weapons_system(mut registry: ResMut<ItemRegistry>) {
 
 fn load_armors_system(mut registry: ResMut<ItemRegistry>) {
     let path = "assets/items/armors.ron";
+    // wasm32: REMOTE 우선, 없으면 임베드 슬라이스(item_ron 헬퍼).
     #[cfg(target_arch = "wasm32")]
-    let text: String = crate::modules::embedded_assets::find_embedded(
-        crate::modules::embedded_assets::EMBEDDED_ITEMS, "armors.ron")
+    let text: String = crate::modules::embedded_assets::item_ron("armors.ron")
         .expect("armors.ron 임베드 누락 (build.rs)").to_string();
     #[cfg(not(target_arch = "wasm32"))]
     let text = std::fs::read_to_string(path)
@@ -667,9 +668,9 @@ fn load_armors_system(mut registry: ResMut<ItemRegistry>) {
 
 fn load_consumables_system(mut registry: ResMut<ItemRegistry>) {
     let path = "assets/items/consumables.ron";
+    // wasm32: REMOTE 우선, 없으면 임베드 슬라이스(item_ron 헬퍼).
     #[cfg(target_arch = "wasm32")]
-    let text: String = crate::modules::embedded_assets::find_embedded(
-        crate::modules::embedded_assets::EMBEDDED_ITEMS, "consumables.ron")
+    let text: String = crate::modules::embedded_assets::item_ron("consumables.ron")
         .expect("consumables.ron 임베드 누락 (build.rs)").to_string();
     #[cfg(not(target_arch = "wasm32"))]
     let text = std::fs::read_to_string(path)

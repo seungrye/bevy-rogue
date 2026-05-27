@@ -311,6 +311,7 @@ dependencies = [
  "rand 0.8.5",
  "ron",
  "serde",
+ "serde_json",
  "uuid",
  "wasm-bindgen",
  "web-sys",

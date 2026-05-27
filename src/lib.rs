@@ -236,15 +236,31 @@ pub fn run(initial_algorithm: Option<String>, initial_glyph_style: GlyphStyle) {
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-/// 브라우저에서 wasm 모듈이 init 되면 호출되는 진입점.
+/// 브라우저에서 JS 가 명시적으로 호출하는 진입점.
+///
+/// 흐름(BevyRogueClient.tsx 가 호출):
+///   1. JS 가 site `/api/game/content/v1` 를 fetch 해서 RON 콘텐츠 JSON 을 받는다.
+///   2. fetch 실패하거나 응답이 비정상이면 `None` 을 넘긴다.
+///   3. 여기서 `content_json` 이 `Some(_)` 이면 REMOTE 에 install,
+///      install 자체가 실패하면 경고만 찍고 임베드 폴백으로 진행.
+///   4. 이후 게임 로드 시스템(quest/item/villager/monster) 은 REMOTE 우선 →
+///      없으면 임베드 폴백 방식으로 자동 처리(embedded_assets 헬퍼들).
 ///
 /// `window.location.search` 를 읽어 `parse_query_string` 으로 처리한다.
 /// 의미는 native CLI(`--algorithm`, `--glyph-style`)와 동일하며 같은
 /// `apply_option` 헬퍼를 공유한다. 파싱 실패/Help 는 콘솔 경고 후 기본값으로 진행.
+///
+/// 이전(`#[wasm_bindgen(start)]`) 자동 시작 방식은 제거 — JS 측이 콘텐츠 fetch 와
+/// 게임 시작 타이밍을 명시적으로 통제하기 위함.
 #[cfg(target_arch = "wasm32")]
-#[wasm_bindgen(start)]
-pub fn start() {
+#[wasm_bindgen]
+pub fn start(content_json: Option<String>) {
     console_error_panic_hook::set_once();
+    if let Some(json) = content_json {
+        if let Err(e) = modules::remote_content::install_from_json(&json) {
+            bevy::log::warn!("원격 콘텐츠 적용 실패 → 임베드 폴백: {}", e);
+        }
+    }
     let query = web_sys::window()
         .and_then(|w| w.location().search().ok())
         .unwrap_or_default();

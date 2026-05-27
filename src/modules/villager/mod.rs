@@ -187,11 +187,11 @@ impl Plugin for VillagerPlugin {
 /// villager RON 파일을 읽어 registry 에 적재한다
 fn load_villagers(mut registry: ResMut<VillagerRegistry>) {
     // wasm32: 임베드된 RON 으로 파싱 (std::fs 미가용, std::process::exit 미가용).
-    // build.rs 가 자동 enumerate 한 EMBEDDED_VILLAGERS 슬라이스에서 가져온다.
+    // 시작 시 site `/api/game/content/v1` 의 REMOTE 콘텐츠가 설치돼 있으면 그쪽 우선,
+    // 없으면 build.rs 가 자동 enumerate 한 EMBEDDED_VILLAGERS 슬라이스로 폴백.
     #[cfg(target_arch = "wasm32")]
     let villagers = {
-        let embed = crate::modules::embedded_assets::find_embedded(
-            crate::modules::embedded_assets::EMBEDDED_VILLAGERS, "villagers.ron")
+        let embed = crate::modules::embedded_assets::villagers_ron()
             .expect("villagers.ron 임베드 누락 (build.rs)");
         ron::de::from_str::<Vec<VillagerDef>>(embed)
             .unwrap_or_else(|e| panic!("[치명적] villagers.ron RON 파싱 실패: {}", e))

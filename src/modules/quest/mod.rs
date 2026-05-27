@@ -381,12 +381,13 @@ fn load_quests(mut registry: ResMut<QuestRegistry>, quest_items: Res<crate::modu
     // wasm32: 디렉터리 스캔 불가 → 컴파일 시 임베드된 RON 파일들을 인메모리로 파싱.
     // 임베드 슬라이스는 build.rs 가 assets/quests/*.ron 을 자동 스캔해 생성한다
     // (EMBEDDED_QUESTS). 새 .ron 추가 시 별도 작업 없이 wasm 에도 잡힌다.
+    // 시작 시 site `/api/game/content/v1` 로부터 받은 REMOTE 콘텐츠가 설치돼
+    // 있으면 그쪽을 우선 사용한다(embedded_assets::all_quests 가 처리).
     #[cfg(target_arch = "wasm32")]
     let quests = {
-        use crate::modules::embedded_assets::EMBEDDED_QUESTS;
         let mut out: HashMap<String, QuestDef> = HashMap::new();
         let mut errors: Vec<String> = Vec::new();
-        for (name, text) in EMBEDDED_QUESTS {
+        for (name, text) in crate::modules::embedded_assets::all_quests() {
             let def = match ron::de::from_str::<QuestDef>(text) {
                 Ok(d) => d,
                 Err(e) => { errors.push(format!("[퀘스트 오류] {} 파싱 실패: {}", name, e)); continue; }

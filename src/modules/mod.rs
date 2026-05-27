@@ -11,6 +11,7 @@ pub mod monster;
 pub mod player;
 pub mod quest;
 pub mod ranged;
+pub mod remote_content;
 pub mod save;
 pub mod skill;
 pub mod trap;
