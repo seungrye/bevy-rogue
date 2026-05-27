@@ -203,18 +203,26 @@ pub enum ItemSystemSet {
 
 /// RON 에서 quest item 정의를 읽어 Resource 에 적재한다
 fn load_quest_items_system(mut registry: ResMut<QuestItemRegistry>) {
-    let path = "assets/items/quest_items.ron";
-    // wasm32: 브라우저 런타임은 std::fs 가 없으므로 컴파일 시 RON 을 임베드한다.
-    // 시작 시 site `/api/game/content/v1` 의 REMOTE 콘텐츠가 설치돼 있으면
-    // 그쪽 우선, 없으면 임베드 슬라이스(item_ron 헬퍼가 처리). 네이티브 기존 동작 그대로.
+    // wasm32: REMOTE 우선 파싱 → 실패 시 빌드 임베드 슬라이스로 폴백.
+    //   site DB 의 quest_items.ron 이 깨져도 이 카테고리만 임베드로 살아남는다.
+    //   native 에서는 REMOTE 가 절대 set 되지 않으므로 항상 fs 경로(기존 동작).
     #[cfg(target_arch = "wasm32")]
-    let text: String = crate::modules::embedded_assets::item_ron("quest_items.ron")
-        .expect("quest_items.ron 임베드 누락 (build.rs)").to_string();
+    let defs: Vec<QuestItemDef> = crate::modules::embedded_assets::parse_remote_or_embedded(
+        "quest_items.ron",
+        crate::modules::remote_content::remote_item("quest_items.ron"),
+        || crate::modules::embedded_assets::find_embedded(
+            crate::modules::embedded_assets::EMBEDDED_ITEMS,
+            "quest_items.ron",
+        ),
+    );
     #[cfg(not(target_arch = "wasm32"))]
-    let text = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
-    let defs: Vec<QuestItemDef> = ron::de::from_str(&text)
-        .unwrap_or_else(|e| panic!("[치명적] {} RON 파싱 실패: {}", path, e));
+    let defs: Vec<QuestItemDef> = {
+        let path = "assets/items/quest_items.ron";
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
+        ron::de::from_str(&text)
+            .unwrap_or_else(|e| panic!("[치명적] {} RON 파싱 실패: {}", path, e))
+    };
 
     let mut map: HashMap<&'static str, QuestItemMeta> = HashMap::new();
     for def in defs {
@@ -506,25 +514,38 @@ fn read_start_loadout(path: &str) -> StartLoadout {
 }
 
 fn load_start_loadout_system(mut registry: ResMut<StartLoadoutRegistry>) {
-    // wasm32: 브라우저에 fs 가 없으므로 build.rs 가 임베드한 슬라이스에서 직접 파싱.
-    // 시작 시 site `/api/game/content/v1` 의 REMOTE 콘텐츠가 설치돼 있으면 그쪽 우선,
-    // 없으면 임베드 슬라이스(item_ron 헬퍼가 처리).
-    // 실패시 기본 로드아웃으로 폴백(네이티브 read_start_loadout 과 의미 동일).
+    // wasm32: REMOTE 우선 → 실패 시 임베드 → 그것도 실패면 기본 로드아웃(gold 50).
+    //   start_loadout 은 카테고리 누락이 치명적이지 않으므로 native 와 동일하게
+    //   "최종 폴백은 default" 의미를 유지한다(다른 로더처럼 panic 하지 않음).
     #[cfg(target_arch = "wasm32")]
     {
-        let text = crate::modules::embedded_assets::item_ron("start_loadout.ron")
-            .unwrap_or("");
-        registry.0 = match ron::de::from_str::<StartLoadout>(text) {
-            Ok(loadout) => {
-                info!("start_loadout 로드 완료 (gold: {}, items: {}, consumables: {}) (wasm 임베드)",
-                    loadout.gold, loadout.items.len(), loadout.consumables.len());
-                loadout
-            }
-            Err(e) => {
-                warn!("start_loadout.ron 파싱 실패, 기본 로드아웃 사용: {}", e);
-                StartLoadout { gold: 50, ..Default::default() }
+        let try_parse = |label: &str, text: &str| -> Option<StartLoadout> {
+            match ron::de::from_str::<StartLoadout>(text) {
+                Ok(l) => Some(l),
+                Err(e) => {
+                    warn!("{} 파싱 실패: {}", label, e);
+                    None
+                }
             }
         };
+        let loadout = crate::modules::remote_content::remote_item("start_loadout.ron")
+            .and_then(|r| try_parse("REMOTE start_loadout.ron", r))
+            .or_else(|| {
+                crate::modules::embedded_assets::find_embedded(
+                    crate::modules::embedded_assets::EMBEDDED_ITEMS,
+                    "start_loadout.ron",
+                )
+                .and_then(|t| try_parse("임베드 start_loadout.ron", t))
+            })
+            .unwrap_or_else(|| {
+                warn!("start_loadout.ron 모두 실패, 기본 로드아웃 사용");
+                StartLoadout { gold: 50, ..Default::default() }
+            });
+        info!(
+            "start_loadout 로드 완료 (gold: {}, items: {}, consumables: {}) (wasm)",
+            loadout.gold, loadout.items.len(), loadout.consumables.len()
+        );
+        registry.0 = loadout;
         return;
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -607,16 +628,24 @@ fn apply_loadout_unless_save(
 
 // ── 로드 시스템 ────────────────────────────────────────────────────────────
 fn load_weapons_system(mut registry: ResMut<ItemRegistry>) {
-    let path = "assets/items/weapons.ron";
-    // wasm32: REMOTE 우선, 없으면 임베드 슬라이스(item_ron 헬퍼).
+    // wasm32: REMOTE 우선 파싱 → 실패 시 임베드 폴백(카테고리 단위 안전망).
     #[cfg(target_arch = "wasm32")]
-    let text: String = crate::modules::embedded_assets::item_ron("weapons.ron")
-        .expect("weapons.ron 임베드 누락 (build.rs)").to_string();
+    let defs: Vec<WeaponDef> = crate::modules::embedded_assets::parse_remote_or_embedded(
+        "weapons.ron",
+        crate::modules::remote_content::remote_item("weapons.ron"),
+        || crate::modules::embedded_assets::find_embedded(
+            crate::modules::embedded_assets::EMBEDDED_ITEMS,
+            "weapons.ron",
+        ),
+    );
     #[cfg(not(target_arch = "wasm32"))]
-    let text = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
-    let defs: Vec<WeaponDef> = ron::de::from_str(&text)
-        .unwrap_or_else(|e| panic!("[치명적] {} RON 파싱 실패: {}", path, e));
+    let defs: Vec<WeaponDef> = {
+        let path = "assets/items/weapons.ron";
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
+        ron::de::from_str(&text)
+            .unwrap_or_else(|e| panic!("[치명적] {} RON 파싱 실패: {}", path, e))
+    };
     let mut map = HashMap::new();
     for def in defs {
         let id: &'static str = Box::leak(def.id.into_boxed_str());
@@ -638,16 +667,25 @@ fn load_weapons_system(mut registry: ResMut<ItemRegistry>) {
 }
 
 fn load_armors_system(mut registry: ResMut<ItemRegistry>) {
-    let path = "assets/items/armors.ron";
-    // wasm32: REMOTE 우선, 없으면 임베드 슬라이스(item_ron 헬퍼).
+    // wasm32: REMOTE 우선 파싱 → 실패 시 임베드 폴백(카테고리 단위 안전망).
+    //   site DB armors 가 새 스키마(defense_bonus_min 등) 와 어긋나도 임베드로 복구.
     #[cfg(target_arch = "wasm32")]
-    let text: String = crate::modules::embedded_assets::item_ron("armors.ron")
-        .expect("armors.ron 임베드 누락 (build.rs)").to_string();
+    let defs: Vec<ArmorDef> = crate::modules::embedded_assets::parse_remote_or_embedded(
+        "armors.ron",
+        crate::modules::remote_content::remote_item("armors.ron"),
+        || crate::modules::embedded_assets::find_embedded(
+            crate::modules::embedded_assets::EMBEDDED_ITEMS,
+            "armors.ron",
+        ),
+    );
     #[cfg(not(target_arch = "wasm32"))]
-    let text = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
-    let defs: Vec<ArmorDef> = ron::de::from_str(&text)
-        .unwrap_or_else(|e| panic!("[치명적] {} RON 파싱 실패: {}", path, e));
+    let defs: Vec<ArmorDef> = {
+        let path = "assets/items/armors.ron";
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
+        ron::de::from_str(&text)
+            .unwrap_or_else(|e| panic!("[치명적] {} RON 파싱 실패: {}", path, e))
+    };
     let mut map = HashMap::new();
     for def in defs {
         let id: &'static str = Box::leak(def.id.into_boxed_str());
@@ -667,16 +705,24 @@ fn load_armors_system(mut registry: ResMut<ItemRegistry>) {
 }
 
 fn load_consumables_system(mut registry: ResMut<ItemRegistry>) {
-    let path = "assets/items/consumables.ron";
-    // wasm32: REMOTE 우선, 없으면 임베드 슬라이스(item_ron 헬퍼).
+    // wasm32: REMOTE 우선 파싱 → 실패 시 임베드 폴백(카테고리 단위 안전망).
     #[cfg(target_arch = "wasm32")]
-    let text: String = crate::modules::embedded_assets::item_ron("consumables.ron")
-        .expect("consumables.ron 임베드 누락 (build.rs)").to_string();
+    let defs: Vec<ConsumableDef> = crate::modules::embedded_assets::parse_remote_or_embedded(
+        "consumables.ron",
+        crate::modules::remote_content::remote_item("consumables.ron"),
+        || crate::modules::embedded_assets::find_embedded(
+            crate::modules::embedded_assets::EMBEDDED_ITEMS,
+            "consumables.ron",
+        ),
+    );
     #[cfg(not(target_arch = "wasm32"))]
-    let text = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
-    let defs: Vec<ConsumableDef> = ron::de::from_str(&text)
-        .unwrap_or_else(|e| panic!("[치명적] {} RON 파싱 실패: {}", path, e));
+    let defs: Vec<ConsumableDef> = {
+        let path = "assets/items/consumables.ron";
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
+        ron::de::from_str(&text)
+            .unwrap_or_else(|e| panic!("[치명적] {} RON 파싱 실패: {}", path, e))
+    };
     let mut map = HashMap::new();
     for def in defs {
         let id: &'static str = Box::leak(def.id.into_boxed_str());
@@ -3145,5 +3191,33 @@ mod tests {
         let item = InventoryItem::new(ItemKind::Weapon(WeaponKind::SWORD));
         assert_eq!(item.rolled_attack, None);
         assert_eq!(item.rolled_defense, None);
+    }
+
+    // ── REMOTE 깨진 카테고리 → 임베드 폴백 통합 회귀 테스트 ───────────────────
+    //
+    // 시나리오: site DB armors 가 새 스키마(defense_bonus_min/max)와 어긋난
+    // RON 을 REMOTE 로 보내왔을 때, parse_remote_or_embedded 가 임베드 슬라이스로
+    // 폴백해 정상 ArmorDef 목록을 반환해야 한다 (게임 startup 이 panic 하면 안 됨).
+    #[test]
+    fn 깨진_REMOTE_armors_는_임베드로_폴백되어_정상_적재된다() {
+        // REMOTE 라고 가정한 잘못된 RON — 필드명 누락/오타 등 site DB 어긋남 모사.
+        let broken_remote = "[(id: \"x\")]"; // 필수 필드 다 빠짐 → 파싱 실패.
+        // 실제 임베드 슬라이스 사용. wasm/native 빌드 모두 동일하게 EMBEDDED_ITEMS 가 있다.
+        let defs: Vec<ArmorDef> = crate::modules::embedded_assets::parse_remote_or_embedded(
+            "armors.ron",
+            Some(broken_remote),
+            || crate::modules::embedded_assets::find_embedded(
+                crate::modules::embedded_assets::EMBEDDED_ITEMS,
+                "armors.ron",
+            ),
+        );
+        assert!(!defs.is_empty(), "임베드 armors.ron 폴백으로 한 개 이상 로드");
+        // 임베드 슬라이스로 직접 파싱한 것과 같아야 한다(폴백 = 그대로).
+        let embedded_text = crate::modules::embedded_assets::find_embedded(
+            crate::modules::embedded_assets::EMBEDDED_ITEMS,
+            "armors.ron",
+        ).unwrap();
+        let direct: Vec<ArmorDef> = ron::de::from_str(embedded_text).unwrap();
+        assert_eq!(defs.len(), direct.len(), "임베드 슬라이스 그대로 폴백돼야 한다");
     }
 }

@@ -385,23 +385,41 @@ fn load_quests(mut registry: ResMut<QuestRegistry>, quest_items: Res<crate::modu
     // 있으면 그쪽을 우선 사용한다(embedded_assets::all_quests 가 처리).
     #[cfg(target_arch = "wasm32")]
     let quests = {
+        // REMOTE 우선 머지된 (name, ron_str) 목록을 순회. 한 quest 의 파싱·검증
+        // 실패는 그 quest 만 임베드로 재시도하고, 그것도 실패면 그 quest 만 skip
+        // 한다(나머지 정상 quest 들은 그대로 로드). 한 site DB 의 잘못된 quest
+        // 한 줄로 게임 전체가 죽지 않게 보호하는 격리 처리.
         let mut out: HashMap<String, QuestDef> = HashMap::new();
-        let mut errors: Vec<String> = Vec::new();
         for (name, text) in crate::modules::embedded_assets::all_quests() {
-            let def = match ron::de::from_str::<QuestDef>(text) {
-                Ok(d) => d,
-                Err(e) => { errors.push(format!("[퀘스트 오류] {} 파싱 실패: {}", name, e)); continue; }
-            };
+            // 1) REMOTE/머지 결과 파싱 시도.
+            let mut parsed = ron::de::from_str::<QuestDef>(text);
+            if let Err(e) = &parsed {
+                warn!("REMOTE 퀘스트 {} 파싱 실패 → 임베드 폴백: {}", name, e);
+                // 2) 같은 파일명으로 임베드 슬라이스에서 다시 시도.
+                match crate::modules::embedded_assets::find_embedded(
+                    crate::modules::embedded_assets::EMBEDDED_QUESTS, name,
+                ) {
+                    Some(embed_text) => match ron::de::from_str::<QuestDef>(embed_text) {
+                        Ok(d) => parsed = Ok(d),
+                        Err(ee) => {
+                            warn!("임베드 퀘스트 {} 도 파싱 실패 → 이 퀘스트 skip: {}", name, ee);
+                            continue;
+                        }
+                    },
+                    None => {
+                        warn!("임베드에 {} 없음 → 이 퀘스트 skip", name);
+                        continue;
+                    }
+                }
+            }
+            let def = parsed.unwrap();
+            // 3) 시맨틱 검증 실패도 그 quest 만 skip (다른 quest 진행).
             let semantic = validate_quest_def(&def, &quest_items);
             if !semantic.is_empty() {
-                for m in &semantic { errors.push(format!("[퀘스트 오류] {} — {}", name, m)); }
+                for m in &semantic { warn!("퀘스트 {} 시맨틱 오류 → skip — {}", name, m); }
                 continue;
             }
             out.insert(def.id.clone(), def);
-        }
-        if !errors.is_empty() {
-            for e in &errors { error!("{}", e); }
-            panic!("[치명적] 퀘스트 RON 검증 실패 (wasm 임베드)");
         }
         out
     };

@@ -120,16 +120,18 @@ pub enum MonsterSystemSet {
 
 /// monster RON 파일을 읽어 registry 에 적재한다.
 fn load_monsters(mut registry: ResMut<MonsterRegistry>) {
-    // wasm32: 임베드된 RON 으로 파싱 (std::fs 미가용, std::process::exit 미가용).
-    // 시작 시 site `/api/game/content/v1` 의 REMOTE 콘텐츠가 설치돼 있으면 그쪽 우선,
-    // 없으면 build.rs 가 자동 enumerate 한 EMBEDDED_MONSTERS 슬라이스로 폴백.
+    // wasm32: REMOTE 우선 파싱 → 실패 시 빌드 임베드 슬라이스로 폴백.
+    //   site DB monsters 가 깨져도 임베드로 복구되어 게임이 계속 떠 있는다.
+    //   native 에서는 기존 fs 경로 그대로(REMOTE 미설치).
     #[cfg(target_arch = "wasm32")]
-    let monsters = {
-        let embed = crate::modules::embedded_assets::monsters_ron()
-            .expect("monsters.ron 임베드 누락 (build.rs)");
-        ron::de::from_str::<Vec<MonsterDef>>(embed)
-            .unwrap_or_else(|e| panic!("[치명적] monsters.ron RON 파싱 실패: {}", e))
-    };
+    let monsters: Vec<MonsterDef> = crate::modules::embedded_assets::parse_remote_or_embedded(
+        "monsters.ron",
+        crate::modules::remote_content::remote_monsters(),
+        || crate::modules::embedded_assets::find_embedded(
+            crate::modules::embedded_assets::EMBEDDED_MONSTERS,
+            "monsters.ron",
+        ),
+    );
     #[cfg(not(target_arch = "wasm32"))]
     let path = "assets/monsters/monsters.ron";
     #[cfg(not(target_arch = "wasm32"))]

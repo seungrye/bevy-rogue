@@ -17,6 +17,37 @@ pub fn find_embedded<'a>(table: &'a [(&'a str, &'a str)], name: &str) -> Option<
     table.iter().find_map(|(n, content)| if *n == name { Some(*content) } else { None })
 }
 
+/// REMOTE 우선 파싱 → 실패 시 임베드 폴백.
+///
+/// 흐름:
+/// 1. `remote` 가 `Some` 이면 `ron::from_str::<T>` 시도.
+///    - 성공 → 그대로 반환.
+///    - 실패 → `warn!("REMOTE {label} 파싱 실패 → 임베드 폴백: {e}")` 로그 후 임베드 시도.
+/// 2. `embedded_fn()` 으로 임베드 슬라이스를 조회.
+///    - `None` → panic (`EMBEDDED {label} 누락`): build.rs 가 채워 넣었어야 하는데 누락.
+///    - `Some(text)` → `ron::from_str::<T>` 시도.
+///       - 성공 → 반환.
+///       - 실패 → panic (`[치명적] 임베드 {label} 파싱 실패: {e}`):
+///                빌드 시점에 정상이었던 콘텐츠가 깨졌다는 뜻이라 진짜 치명적.
+///
+/// site DB 의 일부 카테고리가 게임 스키마와 어긋나도 그 카테고리만 임베드로 폴백되어
+/// 게임 전체가 죽지 않게 보호하는 헬퍼.
+pub fn parse_remote_or_embedded<T: serde::de::DeserializeOwned>(
+    label: &str,
+    remote: Option<&str>,
+    embedded_fn: impl FnOnce() -> Option<&'static str>,
+) -> T {
+    if let Some(r) = remote {
+        match ron::from_str::<T>(r) {
+            Ok(v) => return v,
+            Err(e) => bevy::log::warn!("REMOTE {} 파싱 실패 → 임베드 폴백: {}", label, e),
+        }
+    }
+    let embedded = embedded_fn().unwrap_or_else(|| panic!("EMBEDDED {} 누락", label));
+    ron::from_str(embedded)
+        .unwrap_or_else(|e| panic!("[치명적] 임베드 {} 파싱 실패: {}", label, e))
+}
+
 // ── REMOTE 우선 → 빌드 임베드 폴백 헬퍼 ────────────────────────────────────────
 //
 // 게임의 로드 시스템들은 아래 헬퍼만 호출하면 된다.
@@ -216,6 +247,70 @@ mod tests {
         assert_eq!(map.len(), 2);
         assert!(map.contains_key("a.ron"));
         assert!(map.contains_key("new_quest.ron"));
+    }
+
+    // ── parse_remote_or_embedded 단위 테스트 ─────────────────────────────────
+
+    #[derive(serde::Deserialize, Debug, PartialEq)]
+    struct TestDef { name: String, value: i32 }
+
+    #[test]
+    fn parse_remote_or_embedded_는_REMOTE_정상이면_REMOTE를_반환한다() {
+        let remote = "(name: \"remote\", value: 1)";
+        let embedded_used = std::cell::Cell::new(false);
+        let got: TestDef = parse_remote_or_embedded("test.ron", Some(remote), || {
+            embedded_used.set(true);
+            Some("(name: \"embedded\", value: 2)")
+        });
+        assert_eq!(got, TestDef { name: "remote".into(), value: 1 });
+        assert!(!embedded_used.get(), "REMOTE 정상이면 임베드는 조회조차 하지 않는다");
+    }
+
+    #[test]
+    fn parse_remote_or_embedded_는_REMOTE_파싱_실패시_임베드로_폴백한다() {
+        let bad_remote = "이건 RON 이 아니다 @@@";
+        let got: TestDef = parse_remote_or_embedded(
+            "test.ron",
+            Some(bad_remote),
+            || Some("(name: \"fallback\", value: 99)"),
+        );
+        assert_eq!(got, TestDef { name: "fallback".into(), value: 99 });
+    }
+
+    #[test]
+    fn parse_remote_or_embedded_는_REMOTE_None이면_임베드를_사용한다() {
+        let got: TestDef = parse_remote_or_embedded(
+            "test.ron",
+            None,
+            || Some("(name: \"embedded\", value: 7)"),
+        );
+        assert_eq!(got, TestDef { name: "embedded".into(), value: 7 });
+    }
+
+    #[test]
+    #[should_panic(expected = "EMBEDDED test.ron 누락")]
+    fn parse_remote_or_embedded_는_임베드도_없으면_panic한다() {
+        let _: TestDef = parse_remote_or_embedded("test.ron", None, || None);
+    }
+
+    #[test]
+    #[should_panic(expected = "[치명적] 임베드 test.ron 파싱 실패")]
+    fn parse_remote_or_embedded_는_임베드_파싱_실패시_panic한다() {
+        let _: TestDef = parse_remote_or_embedded(
+            "test.ron",
+            None,
+            || Some("이것도 RON 이 아니다 @@@"),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "[치명적] 임베드 test.ron 파싱 실패")]
+    fn parse_remote_or_embedded_는_REMOTE_실패_후_임베드도_실패하면_panic한다() {
+        let _: TestDef = parse_remote_or_embedded(
+            "test.ron",
+            Some("나쁜 REMOTE"),
+            || Some("나쁜 EMBEDDED 도 같이"),
+        );
     }
 
     #[test]
