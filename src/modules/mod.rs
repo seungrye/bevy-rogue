@@ -3,6 +3,7 @@ pub mod combat_feedback;
 pub mod elemental;
 pub mod projectile;
 pub mod core;
+pub mod embedded_assets;
 pub mod item;
 pub mod lighting;
 pub mod map;

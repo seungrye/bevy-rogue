@@ -63,23 +63,78 @@ pub fn parse_args(args: &[String]) -> ParseResult {
                 if i >= args.len() {
                     return ParseResult::Error("--algorithm 에 값이 필요합니다".to_string());
                 }
-                algorithm = Some(args[i].clone());
+                if let Err(msg) = apply_option("algorithm", &args[i], &mut algorithm, &mut glyph_style) {
+                    return ParseResult::Error(msg);
+                }
             }
             "--glyph-style" | "-g" => {
                 i += 1;
                 if i >= args.len() {
                     return ParseResult::Error("--glyph-style 에 값이 필요합니다".to_string());
                 }
-                match GlyphStyle::from_str(&args[i]) {
-                    Some(s) => glyph_style = s,
-                    None    => return ParseResult::Error(
-                        format!("알 수 없는 글리프 스타일: {} (ascii|unicode|icon)", args[i])
-                    ),
+                if let Err(msg) = apply_option("glyph_style", &args[i], &mut algorithm, &mut glyph_style) {
+                    return ParseResult::Error(msg);
                 }
             }
             other => return ParseResult::Error(format!("알 수 없는 인수: {}", other)),
         }
         i += 1;
+    }
+    ParseResult::Run { algorithm, glyph_style }
+}
+
+/// CLI 와 URL 쿼리가 공유하는 키-값 적용 로직.
+///
+/// 같은 의미(알고리즘 이름, 글리프 스타일)를 두 입력 채널에서 동일하게 해석하도록
+/// 한 곳에 모아둔다. 새 옵션을 추가할 때 양쪽이 자동 동기화된다.
+///
+/// 키 형식은 URL 쿼리 표기(snake_case): `algorithm`, `glyph_style`.
+/// (CLI 의 `--glyph-style` 는 진입점에서 `glyph_style` 로 정규화해 위임한다.)
+pub fn apply_option(
+    key: &str,
+    value: &str,
+    algorithm: &mut Option<String>,
+    glyph_style: &mut GlyphStyle,
+) -> Result<(), String> {
+    match key {
+        "algorithm" => {
+            *algorithm = Some(value.to_string());
+            Ok(())
+        }
+        "glyph_style" | "glyph-style" => {
+            match GlyphStyle::from_str(value) {
+                Some(s) => { *glyph_style = s; Ok(()) }
+                None    => Err(format!("알 수 없는 글리프 스타일: {} (ascii|unicode|icon)", value)),
+            }
+        }
+        other => Err(format!("알 수 없는 옵션: {}", other)),
+    }
+}
+
+/// URL 쿼리 문자열을 파싱한다 (`?algorithm=bsp&glyph_style=icon` 또는 선행 `?` 없음).
+///
+/// CLI 의 `parse_args` 와 의미가 동일해야 하므로 같은 `apply_option` 을 사용한다.
+/// 빈 입력은 기본값으로 Run 을 반환한다. 알 수 없는 키/값은 Error.
+pub fn parse_query_string(query: &str) -> ParseResult {
+    let mut algorithm: Option<String> = None;
+    let mut glyph_style = GlyphStyle::Ascii;
+
+    let stripped = query.strip_prefix('?').unwrap_or(query);
+    if stripped.is_empty() {
+        return ParseResult::Run { algorithm, glyph_style };
+    }
+
+    for pair in stripped.split('&') {
+        if pair.is_empty() { continue; }
+        let (key, value) = match pair.split_once('=') {
+            Some(kv) => kv,
+            None     => return ParseResult::Error(format!("값이 없는 쿼리 키: {}", pair)),
+        };
+        // 명시적 'help' 키는 CLI 의 --help 와 동등.
+        if key == "help" { return ParseResult::Help; }
+        if let Err(msg) = apply_option(key, value, &mut algorithm, &mut glyph_style) {
+            return ParseResult::Error(msg);
+        }
     }
     ParseResult::Run { algorithm, glyph_style }
 }
@@ -165,12 +220,32 @@ pub fn run(initial_algorithm: Option<String>, initial_glyph_style: GlyphStyle) {
 use wasm_bindgen::prelude::*;
 
 /// 브라우저에서 wasm 모듈이 init 되면 호출되는 진입점.
-/// PoC 라 CLI/쿼리 파싱 없이 기본 알고리즘으로 시작한다(stage 2).
+///
+/// `window.location.search` 를 읽어 `parse_query_string` 으로 처리한다.
+/// 의미는 native CLI(`--algorithm`, `--glyph-style`)와 동일하며 같은
+/// `apply_option` 헬퍼를 공유한다. 파싱 실패/Help 는 콘솔 경고 후 기본값으로 진행.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(start)]
 pub fn start() {
     console_error_panic_hook::set_once();
-    run(Some(DEFAULT_ALGORITHM.to_string()), GlyphStyle::Ascii);
+    let query = web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .unwrap_or_default();
+    let (initial_algorithm, initial_glyph_style) = match parse_query_string(&query) {
+        ParseResult::Run { algorithm, glyph_style } => (
+            resolve_initial_algorithm(algorithm),
+            glyph_style,
+        ),
+        ParseResult::Help => {
+            web_sys::console::log_1(&HELP_TEXT.into());
+            (Some(DEFAULT_ALGORITHM.to_string()), GlyphStyle::Ascii)
+        }
+        ParseResult::Error(msg) => {
+            web_sys::console::warn_1(&format!("URL 쿼리 파싱 실패: {} — 기본값으로 진행", msg).into());
+            (Some(DEFAULT_ALGORITHM.to_string()), GlyphStyle::Ascii)
+        }
+    };
+    run(initial_algorithm, initial_glyph_style);
 }
 
 // ── 테스트 ────────────────────────────────────────────────────────────────────
@@ -292,6 +367,103 @@ mod tests {
     fn Help입력은_Run설정으로_변환되지_않는다() {
         // run_config 의 else 분기(비-Run)도 커버한다.
         assert_eq!(run_config(&args(&["--help"])), None);
+    }
+
+    // ── URL 쿼리 파서 — native CLI 와 의미가 동일해야 한다 ─────────────────────
+
+    #[test]
+    fn 빈_쿼리는_기본값으로_Run을_반환한다() {
+        assert!(matches!(parse_query_string(""), ParseResult::Run { algorithm: None, glyph_style: GlyphStyle::Ascii }));
+    }
+
+    #[test]
+    fn 선행_물음표_있는_빈_쿼리도_기본값으로_Run을_반환한다() {
+        assert!(matches!(parse_query_string("?"), ParseResult::Run { algorithm: None, glyph_style: GlyphStyle::Ascii }));
+    }
+
+    #[test]
+    fn 쿼리_algorithm_bsp는_CLI_a_bsp와_같은_결정을_낸다() {
+        let cli = parse_args(&args(&["-a", "bsp"]));
+        let url = parse_query_string("?algorithm=bsp");
+        match (cli, url) {
+            (ParseResult::Run { algorithm: Some(a), glyph_style: g1 },
+             ParseResult::Run { algorithm: Some(b), glyph_style: g2 }) => {
+                assert_eq!(a, "bsp");
+                assert_eq!(a, b);
+                assert!(matches!(g1, GlyphStyle::Ascii));
+                assert!(matches!(g2, GlyphStyle::Ascii));
+            }
+            _ => panic!("두 채널 모두 Run 이어야 한다"),
+        }
+    }
+
+    #[test]
+    fn 쿼리_glyph_style_icon은_CLI_g_icon과_같은_결정을_낸다() {
+        let cli = parse_args(&args(&["-g", "icon"]));
+        let url = parse_query_string("?glyph_style=icon");
+        for r in [cli, url] {
+            assert!(matches!(r, ParseResult::Run { glyph_style: GlyphStyle::GameIcon, .. }));
+        }
+    }
+
+    #[test]
+    fn 쿼리_복합_algorithm과_glyph_style을_함께_파싱한다() {
+        let url = parse_query_string("?algorithm=bsp&glyph_style=icon");
+        match url {
+            ParseResult::Run { algorithm: Some(a), glyph_style: GlyphStyle::GameIcon } => {
+                assert_eq!(a, "bsp");
+            }
+            other => panic!("기대: Run(bsp, icon), 실제 다름: {:?}", matches!(other, ParseResult::Run{..})),
+        }
+    }
+
+    #[test]
+    fn 쿼리에_help_키가_있으면_Help를_반환한다() {
+        assert!(matches!(parse_query_string("?help=1"), ParseResult::Help));
+    }
+
+    #[test]
+    fn 쿼리에_알수없는_키는_에러를_반환한다() {
+        assert!(matches!(parse_query_string("?wat=foo"), ParseResult::Error(_)));
+    }
+
+    #[test]
+    fn 쿼리의_알수없는_글리프스타일은_CLI와_같은_에러를_낸다() {
+        let cli_err = matches!(parse_args(&args(&["-g", "nope"])), ParseResult::Error(_));
+        let url_err = matches!(parse_query_string("?glyph_style=nope"), ParseResult::Error(_));
+        assert!(cli_err && url_err, "두 채널 모두 알 수 없는 글리프 스타일은 Error");
+    }
+
+    #[test]
+    fn 쿼리에_값이_없는_키는_에러를_반환한다() {
+        // "algorithm" 만 있고 "=" 가 없으면 Error.
+        assert!(matches!(parse_query_string("?algorithm"), ParseResult::Error(_)));
+    }
+
+    #[test]
+    fn 쿼리의_여러_빈_세그먼트는_조용히_무시된다() {
+        // "?&algorithm=bsp&" — 빈 세그먼트는 스킵되고 algorithm 만 적용.
+        let url = parse_query_string("?&algorithm=bsp&");
+        assert!(matches!(url, ParseResult::Run { algorithm: Some(ref a), .. } if a == "bsp"));
+    }
+
+    #[test]
+    fn apply_option_은_같은_매핑을_두_채널에서_공유한다() {
+        // CLI 쪽 "glyph_style" 키와 URL 쪽 "glyph-style" 키 모두 동작 — 정규화 동등성.
+        let mut algo = None;
+        let mut gs = GlyphStyle::Ascii;
+        assert!(apply_option("glyph_style", "icon", &mut algo, &mut gs).is_ok());
+        assert!(matches!(gs, GlyphStyle::GameIcon));
+        let mut gs2 = GlyphStyle::Ascii;
+        assert!(apply_option("glyph-style", "icon", &mut algo, &mut gs2).is_ok());
+        assert!(matches!(gs2, GlyphStyle::GameIcon));
+    }
+
+    #[test]
+    fn apply_option_은_알수없는_키에_에러를_반환한다() {
+        let mut algo = None;
+        let mut gs = GlyphStyle::Ascii;
+        assert!(apply_option("nonsense", "x", &mut algo, &mut gs).is_err());
     }
 
     #[test]

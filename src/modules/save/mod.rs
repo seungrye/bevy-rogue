@@ -12,12 +12,18 @@ use crate::modules::{
     map::world_to_tile_coords,
 };
 
+pub mod backend;
+
 pub const SAVE_PATH: &str = "save/progress.ron";
 const SAVE_TMP:  &str = "save/progress.ron.tmp";
 const SAVE_VERSION: u32 = 5;
 
 /// 세이브 파일 경로 설정. 테스트에서 임시 경로를 주입할 수 있도록 seam 으로 분리한다.
 /// Default 는 프로덕션 상수(`save/progress.ron`)와 동일하게 유지한다.
+///
+/// `path` 의 basename 은 wasm 의 localStorage key 로도 사용된다 (예 `save/progress.ron`
+/// → key `progress.ron`). 두 백엔드(File/WebStorage) 모두 이 SaveConfig 를 기준으로
+/// 자기 자원을 식별한다 — backend trait 추상화의 결정 입력.
 #[derive(Resource, Clone, Debug, PartialEq, Eq)]
 pub struct SaveConfig {
     pub path: String,
@@ -27,6 +33,17 @@ pub struct SaveConfig {
 impl Default for SaveConfig {
     fn default() -> Self {
         Self { path: SAVE_PATH.to_string(), tmp: SAVE_TMP.to_string() }
+    }
+}
+
+impl SaveConfig {
+    /// path 에서 basename(파일명) 만 추출한다. wasm 백엔드의 localStorage key 로
+    /// 사용되며 native 에는 영향 없다. `/` 가 없으면 path 자체.
+    pub fn storage_key(&self) -> &str {
+        match self.path.rsplit_once('/') {
+            Some((_, name)) => name,
+            None => &self.path,
+        }
     }
 }
 
@@ -131,18 +148,15 @@ pub struct SavePlugin;
 impl Plugin for SavePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SaveConfig>();
-        // wasm32 PoC: 세이브 자동 로드/저장은 모두 no-op (stage 2 에서 localStorage 백엔드).
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            app.add_systems(PostStartup, load_if_save_exists)
-                .add_systems(Update, auto_save);
-        }
+        // native: FileBackend / wasm: WebStorageBackend. 동일한 시스템이 양쪽에서
+        // 돈다 — 분기는 backend::make_backend() 내부에서만.
+        app.add_systems(PostStartup, load_if_save_exists)
+            .add_systems(Update, auto_save);
     }
 }
 
 // ── 자동 저장 ─────────────────────────────────────────────────────────────────
 
-#[cfg(not(target_arch = "wasm32"))]
 fn auto_save(
     mut events: EventReader<crate::modules::map::PlayerActedEvent>,
     inventory: Res<PlayerInventory>,
@@ -203,7 +217,18 @@ fn auto_save(
         named_zones: named_config.clone(),
     };
 
-    write_save_to(&save, &config.path, &config.tmp);
+    write_save_with_backend(&save, &*backend::make_backend(&config));
+}
+
+/// 세이브 데이터를 RON 으로 직렬화한 뒤 백엔드에 위임한다.
+/// 백엔드(File/WebStorage)는 cfg 로 선택되며, 두 경로의 의미는 동일하다.
+fn write_save_with_backend(save: &SaveData, backend: &dyn backend::SaveBackend) {
+    let content = match ron::ser::to_string_pretty(save, ron::ser::PrettyConfig::default()) {
+        Ok(s) => s,
+        // 도달 불가 방어코드: 유효한 SaveData 는 RON 직렬화에 실패하지 않는다.
+        Err(e) => { error!("세이브 직렬화 실패: {e}"); return; }
+    };
+    backend.write(&content);
 }
 
 fn collect_revealed_by_zone(world_state: &WorldState, current_map: &Map) -> HashMap<ZoneId, String> {
@@ -250,34 +275,9 @@ fn restore_player_stats(stats: &mut CombatStats, save: &SaveData) {
     stats.defense  = save.player_defense;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn write_save_to(save: &SaveData, path: &str, tmp: &str) {
-    let content = match ron::ser::to_string_pretty(save, ron::ser::PrettyConfig::default()) {
-        Ok(s) => s,
-        // 도달 불가 방어코드: 유효한 SaveData 는 RON 직렬화에 실패하지 않는다.
-        Err(e) => { error!("세이브 직렬화 실패: {e}"); return; }
-    };
-    // tmp 경로의 상위 디렉터리를 보장한다. 부모가 비어있으면(현재 디렉터리) 생성 단계를 건너뛴다.
-    let parent = std::path::Path::new(tmp).parent()
-        .filter(|p| !p.as_os_str().is_empty());
-    if let Some(parent) = parent {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            error!("세이브 디렉터리 생성 실패: {e}"); return;
-        }
-    }
-    if let Err(e) = std::fs::write(tmp, &content) {
-        error!("세이브 파일 쓰기 실패: {e}"); return;
-    }
-    if let Err(e) = std::fs::rename(tmp, path) {
-        error!("세이브 파일 교체 실패: {e}"); return;
-    }
-}
-
-/// wasm32: PoC 한정 no-op stub. stage 2 에서 localStorage 백엔드로 교체.
-#[cfg(target_arch = "wasm32")]
-fn write_save_to(_save: &SaveData, _path: &str, _tmp: &str) {
-    // intentionally empty — 브라우저 fs 미가용, stage 2 에서 localStorage 백엔드로 교체.
-}
+// 백엔드 기반 쓰기 경로는 write_save_with_backend() 이며 auto_save 가 호출한다.
+// 별도 native-only file write helper 는 더 이상 필요 없다 — FileBackend 가 같은
+// 흐름을 수행한다.
 
 // ── 자동 로드 (PostStartup) ──────────────────────────────────────────────────
 
@@ -290,7 +290,6 @@ fn get_algo(zone_id: &ZoneId, named_config: &NamedZoneConfig) -> String {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn load_if_save_exists(
     mut inventory: ResMut<PlayerInventory>,
     mut equipment: ResMut<PlayerEquipment>,
@@ -309,9 +308,10 @@ fn load_if_save_exists(
     mut apply_ev: EventWriter<ApplyMapEvent>,
     mut commands: Commands,
 ) {
-    let content = match std::fs::read_to_string(&config.path) {
-        Ok(c) => c,
-        Err(_) => return,
+    let backend = backend::make_backend(&config);
+    let content = match backend.read() {
+        Some(c) => c,
+        None => return,
     };
 
     let save: SaveData = match ron::from_str(&content) {
@@ -392,10 +392,12 @@ pub fn delete_save() {
 }
 
 fn delete_save_at(path: &str) {
-    #[cfg(not(target_arch = "wasm32"))]
-    let _ = std::fs::remove_file(path);
-    #[cfg(target_arch = "wasm32")]
-    let _ = path; // wasm: no-op (stage 2 에서 localStorage 백엔드).
+    // 백엔드를 path 기준으로 만들어 (native: 파일 / wasm: localStorage key) 삭제 위임.
+    let cfg = SaveConfig {
+        path: path.to_string(),
+        tmp:  format!("{path}.tmp"),
+    };
+    backend::make_backend(&cfg).delete();
 }
 
 // ── 단위 테스트 ───────────────────────────────────────────────────────────────
@@ -618,6 +620,19 @@ mod tests {
             .into_owned()
     }
 
+    /// 기존 file IO 분기(상위 디렉터리 생성·tmp write·rename) 테스트의 진입점.
+    /// SaveData 를 RON 으로 직렬화하고 FileBackend 로 write 한다 — 백엔드 추출 전과
+    /// 의미 동일.
+    fn write_via_file_backend(save: &SaveData, path: &str, tmp: &str) {
+        let content = ron::ser::to_string_pretty(save, ron::ser::PrettyConfig::default())
+            .expect("SaveData RON 직렬화는 실패하지 않는다");
+        let be = backend::FileBackend {
+            path: path.to_string(),
+            tmp:  tmp.to_string(),
+        };
+        backend::SaveBackend::write(&be, &content);
+    }
+
     fn 테스트_레지스트리() -> MapGeneratorRegistry {
         use crate::modules::map::generators::{bsp, forest, organic_village};
         let mut r = MapGeneratorRegistry::new();
@@ -808,7 +823,7 @@ mod tests {
         let tmp = format!("{dir}/progress.ron.tmp");
         let save = make_minimal_save();
 
-        write_save_to(&save, &path, &tmp);
+        write_via_file_backend(&save, &path, &tmp);
 
         assert!(std::path::Path::new(&path).exists(), "세이브 파일이 생성돼야 한다");
         assert!(!std::path::Path::new(&tmp).exists(), "임시 파일은 rename 후 사라져야 한다");
@@ -828,7 +843,7 @@ mod tests {
         let tmp = format!("bevy_rogue_bare_{}_{n}.ron.tmp", std::process::id());
         let save = make_minimal_save();
 
-        write_save_to(&save, &path, &tmp);
+        write_via_file_backend(&save, &path, &tmp);
 
         let full = cwd.join(&path);
         assert!(full.exists(), "현재 디렉터리에 세이브가 생성돼야 한다");
@@ -845,7 +860,7 @@ mod tests {
         let path = format!("{file}/sub/progress.ron");
         let save = make_minimal_save();
 
-        write_save_to(&save, &path, &tmp); // panic 하지 않고 조용히 반환
+        write_via_file_backend(&save, &path, &tmp); // panic 하지 않고 조용히 반환
 
         assert!(!std::path::Path::new(&path).exists());
         std::fs::remove_file(&file).ok();
@@ -859,7 +874,7 @@ mod tests {
         let path = 임시_경로("target");
         let save = make_minimal_save();
 
-        write_save_to(&save, &path, &tmpdir); // tmp 가 디렉터리라 write 실패
+        write_via_file_backend(&save, &path, &tmpdir); // tmp 가 디렉터리라 write 실패
 
         assert!(!std::path::Path::new(&path).exists());
         std::fs::remove_dir_all(&tmpdir).ok();
@@ -875,7 +890,7 @@ mod tests {
         let tmp = format!("{dir}/progress.ron.tmp");
         let save = make_minimal_save();
 
-        write_save_to(&save, &path, &tmp); // rename(tmp -> path/디렉터리) 실패
+        write_via_file_backend(&save, &path, &tmp); // rename(tmp -> path/디렉터리) 실패
 
         // tmp 는 쓰였지만 rename 실패로 path(디렉터리)는 그대로 디렉터리
         assert!(std::path::Path::new(&path).is_dir());

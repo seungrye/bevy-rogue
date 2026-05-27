@@ -180,10 +180,13 @@ impl Plugin for VillagerPlugin {
 /// villager RON 파일을 읽어 registry 에 적재한다
 fn load_villagers(mut registry: ResMut<VillagerRegistry>) {
     // wasm32: 임베드된 RON 으로 파싱 (std::fs 미가용, std::process::exit 미가용).
+    // build.rs 가 자동 enumerate 한 EMBEDDED_VILLAGERS 슬라이스에서 가져온다.
     #[cfg(target_arch = "wasm32")]
     let villagers = {
-        const EMBED: &str = include_str!("../../../assets/villagers/villagers.ron");
-        ron::de::from_str::<Vec<VillagerDef>>(EMBED)
+        let embed = crate::modules::embedded_assets::find_embedded(
+            crate::modules::embedded_assets::EMBEDDED_VILLAGERS, "villagers.ron")
+            .expect("villagers.ron 임베드 누락 (build.rs)");
+        ron::de::from_str::<Vec<VillagerDef>>(embed)
             .unwrap_or_else(|e| panic!("[치명적] villagers.ron RON 파싱 실패: {}", e))
     };
     #[cfg(not(target_arch = "wasm32"))]
@@ -204,6 +207,8 @@ fn load_villagers(mut registry: ResMut<VillagerRegistry>) {
 
 /// 주어진 경로의 villager RON 을 읽어 파싱한다 (테스트 가능한 seam).
 /// 읽기 실패·파싱 실패를 에러 메시지로 반환한다 (process::exit 없음).
+/// wasm 빌드는 embedded slice 를 쓰므로 이 함수는 호출되지 않는다(테스트 only).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn read_villager_defs(path: &str) -> Result<Vec<VillagerDef>, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("villager 파일 {} 을 읽을 수 없습니다: {}", path, e))?;

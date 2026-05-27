@@ -19,10 +19,15 @@ bevy = { version = "0.13" }
 bevy_rapier2d = "0.26"
 serde = { version = "1", features = ["derive"] }
 ron = "0.8"
+# native/wasm 양쪽에서 std::time::Instant 대체 — wasm 에선 performance.now(),
+# native 에선 std::time::Instant 와 호환되는 API. 패닉 위험 없음.
+web-time = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 console_error_panic_hook = "0.1"
+# URL 쿼리/localStorage 등 브라우저 API 사용.
+web-sys = { version = "0.3", features = ["Window", "Location", "Storage"] }
 # 의존성 그래프의 getrandom 0.2 (rand 0.8 등) 가 wasm 에서 js 백엔드를 쓰도록.
 getrandom = { version = "0.2", features = ["js"] }
 # bevy_reflect → uuid v1 → getrandom 0.3 이 wasm_js 백엔드 사용.

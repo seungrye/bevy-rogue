@@ -499,9 +499,9 @@ fn update_fov(
     if Some(key) == *last_pos { return; }
     *last_pos = Some(key);
 
-    // 성능 로그용 타이머 — wasm32 의 std::time::Instant 는 패닉하므로 native 한정.
-    #[cfg(not(target_arch = "wasm32"))]
-    let start = std::time::Instant::now();
+    // 성능 로그용 타이머 — web-time::Instant 는 native/wasm 양쪽에서 동작한다.
+    // (std::time::Instant 는 wasm32 에서 패닉.)
+    let start = web_time::Instant::now();
     let map = map_res.map_mut();
     map.tiles.iter_mut().for_each(|t| t.visible = false);
 
@@ -519,11 +519,8 @@ fn update_fov(
     }
     // FOV 계산이 5ms 이상 걸릴 때만 찍는 성능 로그. 테스트 맵은 작아 항상 즉시
     // 끝나므로 이 분기의 True 쪽은 결정론적으로 도달 불가. // 도달 불가 방어코드
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let elapsed = start.elapsed();
-        if elapsed.as_millis() >= 5 { debug!("FOV: {:?}", elapsed); }
-    }
+    let elapsed = start.elapsed();
+    if elapsed.as_millis() >= 5 { debug!("FOV: {:?}", elapsed); }
 }
 
 fn update_player_bars(

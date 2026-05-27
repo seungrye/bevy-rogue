@@ -207,7 +207,9 @@ fn load_quest_items_system(mut registry: ResMut<QuestItemRegistry>) {
     // wasm32: 브라우저 런타임은 std::fs 가 없으므로 컴파일 시 RON 을 임베드한다.
     // 네이티브는 기존 동작(파일 시스템 읽기) 그대로.
     #[cfg(target_arch = "wasm32")]
-    let text: String = include_str!("../../../assets/items/quest_items.ron").to_string();
+    let text: String = crate::modules::embedded_assets::find_embedded(
+        crate::modules::embedded_assets::EMBEDDED_ITEMS, "quest_items.ron")
+        .expect("quest_items.ron 임베드 누락 (build.rs)").to_string();
     #[cfg(not(target_arch = "wasm32"))]
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
@@ -480,10 +482,13 @@ pub struct StartLoadout {
 #[derive(Resource, Default)]
 pub struct StartLoadoutRegistry(pub StartLoadout);
 
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 const START_LOADOUT_PATH: &str = "assets/items/start_loadout.ron";
 
 /// 지정 경로에서 시작 로드아웃을 읽는다. 읽기/파싱 실패 시 기본 로드아웃(gold 50)으로 폴백.
 /// 경로를 인자로 받아 테스트에서 임의 파일(정상/깨진/없는)을 주입할 수 있게 한다.
+/// wasm 빌드는 embedded slice 를 쓰므로 이 함수는 호출되지 않는다(테스트 only).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn read_start_loadout(path: &str) -> StartLoadout {
     match std::fs::read_to_string(path) {
         Ok(text) => match ron::de::from_str::<StartLoadout>(&text) {
@@ -501,7 +506,30 @@ fn read_start_loadout(path: &str) -> StartLoadout {
 }
 
 fn load_start_loadout_system(mut registry: ResMut<StartLoadoutRegistry>) {
-    registry.0 = read_start_loadout(START_LOADOUT_PATH);
+    // wasm32: 브라우저에 fs 가 없으므로 build.rs 가 임베드한 슬라이스에서 직접 파싱.
+    // 실패시 기본 로드아웃으로 폴백(네이티브 read_start_loadout 과 의미 동일).
+    #[cfg(target_arch = "wasm32")]
+    {
+        let text = crate::modules::embedded_assets::find_embedded(
+            crate::modules::embedded_assets::EMBEDDED_ITEMS, "start_loadout.ron")
+            .unwrap_or("");
+        registry.0 = match ron::de::from_str::<StartLoadout>(text) {
+            Ok(loadout) => {
+                info!("start_loadout 로드 완료 (gold: {}, items: {}, consumables: {}) (wasm 임베드)",
+                    loadout.gold, loadout.items.len(), loadout.consumables.len());
+                loadout
+            }
+            Err(e) => {
+                warn!("start_loadout.ron 파싱 실패, 기본 로드아웃 사용: {}", e);
+                StartLoadout { gold: 50, ..Default::default() }
+            }
+        };
+        return;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        registry.0 = read_start_loadout(START_LOADOUT_PATH);
+    }
 }
 
 /// loadout 을 inventory / equipment 에 적용한다.
@@ -580,7 +608,9 @@ fn apply_loadout_unless_save(
 fn load_weapons_system(mut registry: ResMut<ItemRegistry>) {
     let path = "assets/items/weapons.ron";
     #[cfg(target_arch = "wasm32")]
-    let text: String = include_str!("../../../assets/items/weapons.ron").to_string();
+    let text: String = crate::modules::embedded_assets::find_embedded(
+        crate::modules::embedded_assets::EMBEDDED_ITEMS, "weapons.ron")
+        .expect("weapons.ron 임베드 누락 (build.rs)").to_string();
     #[cfg(not(target_arch = "wasm32"))]
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
@@ -609,7 +639,9 @@ fn load_weapons_system(mut registry: ResMut<ItemRegistry>) {
 fn load_armors_system(mut registry: ResMut<ItemRegistry>) {
     let path = "assets/items/armors.ron";
     #[cfg(target_arch = "wasm32")]
-    let text: String = include_str!("../../../assets/items/armors.ron").to_string();
+    let text: String = crate::modules::embedded_assets::find_embedded(
+        crate::modules::embedded_assets::EMBEDDED_ITEMS, "armors.ron")
+        .expect("armors.ron 임베드 누락 (build.rs)").to_string();
     #[cfg(not(target_arch = "wasm32"))]
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
@@ -636,7 +668,9 @@ fn load_armors_system(mut registry: ResMut<ItemRegistry>) {
 fn load_consumables_system(mut registry: ResMut<ItemRegistry>) {
     let path = "assets/items/consumables.ron";
     #[cfg(target_arch = "wasm32")]
-    let text: String = include_str!("../../../assets/items/consumables.ron").to_string();
+    let text: String = crate::modules::embedded_assets::find_embedded(
+        crate::modules::embedded_assets::EMBEDDED_ITEMS, "consumables.ron")
+        .expect("consumables.ron 임베드 누락 (build.rs)").to_string();
     #[cfg(not(target_arch = "wasm32"))]
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
