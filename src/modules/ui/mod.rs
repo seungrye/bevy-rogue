@@ -7,7 +7,9 @@ pub mod hud;
 pub mod minimap;
 pub mod quest_panel;
 pub mod shop;
+pub mod transparency;
 use crate::modules::map::{MAP_WIDTH, TILE_SIZE};
+use transparency::{FadeOnOverlap, FadeTarget};
 
 const DIALOG_PANEL_BG_COLOR: Color = Color::rgba(0.1, 0.1, 0.1, 0.8);
 
@@ -26,6 +28,7 @@ impl Plugin for GameUiPlugin {
             .add_plugins(hud::StatusHudPlugin)
             .add_plugins(quest_panel::QuestPanelPlugin)
             .add_plugins(shop::ShopPlugin)
+            .add_plugins(transparency::UiOverlapTransparencyPlugin)
             .add_systems(Startup, setup_ui)
             .add_event::<LogMessage>()
             .init_resource::<MessageLog>()
@@ -35,33 +38,37 @@ impl Plugin for GameUiPlugin {
 
 #[derive(Event)] pub struct LogMessage(pub String);
 #[derive(Resource, Default)] pub struct MessageLog(pub Vec<String>);
-#[derive(Component)] struct DialogText;
+#[derive(Component)] pub(crate) struct DialogText;
 
 fn setup_ui(mut commands: Commands, asset_server: Res<AssetServer>) {
     let dialog_font = asset_server.load("fonts/NanumSquareNeo-bRg.ttf");
 
     // 하단 대화창
-    commands.spawn(NodeBundle {
-        style: Style {
-            width: Val::Px(MAP_WIDTH as f32 * TILE_SIZE),
-            height: Val::Px(DIALOG_PANEL_HEIGHT_PX),
-            position_type: PositionType::Absolute,
-            left: Val::Px(0.0),
-            bottom: Val::Px(0.0),
-            padding: UiRect::all(Val::Px(10.0)),
-            overflow: Overflow::clip_y(),
-            flex_wrap: FlexWrap::Wrap,
+    commands.spawn((
+        NodeBundle {
+            style: Style {
+                width: Val::Px(MAP_WIDTH as f32 * TILE_SIZE),
+                height: Val::Px(DIALOG_PANEL_HEIGHT_PX),
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                bottom: Val::Px(0.0),
+                padding: UiRect::all(Val::Px(10.0)),
+                overflow: Overflow::clip_y(),
+                flex_wrap: FlexWrap::Wrap,
+                ..default()
+            },
+            background_color: DIALOG_PANEL_BG_COLOR.into(),
             ..default()
         },
-        background_color: DIALOG_PANEL_BG_COLOR.into(),
-        ..default()
-    }).with_children(|parent| {
+        FadeOnOverlap(FadeTarget::Dialog),
+    )).with_children(|parent| {
         parent.spawn((
             TextBundle::from_section(
                 "",
                 TextStyle { font: dialog_font, font_size: 16.0, color: Color::WHITE },
             ),
             DialogText,
+            FadeOnOverlap(FadeTarget::Dialog),
         ));
     });
 }

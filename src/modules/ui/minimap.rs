@@ -169,6 +169,7 @@ fn spawn_minimap_overlay(
     asset_server: Res<AssetServer>,
     registry: Res<MapGeneratorRegistry>,
 ) {
+    use super::transparency::{FadeOnOverlap, FadeTarget};
     let font = asset_server.load("fonts/NanumSquareNeo-bRg.ttf");
     commands
         .spawn((
@@ -188,15 +189,22 @@ fn spawn_minimap_overlay(
             MinimapOverlay,
         ))
         .with_children(|parent| {
-            parent.spawn(ImageBundle {
-                style: Style {
-                    width: Val::Px(MINIMAP_DISPLAY_SIZE),
-                    height: Val::Px(MINIMAP_DISPLAY_SIZE),
+            parent.spawn((
+                ImageBundle {
+                    style: Style {
+                        width: Val::Px(MINIMAP_DISPLAY_SIZE),
+                        height: Val::Px(MINIMAP_DISPLAY_SIZE),
+                        ..default()
+                    },
+                    image: minimap_res.0.clone().into(),
+                    // 이미지 tint 는 BackgroundColor 와 곱해진다. 기본값은
+                    // Color::NONE (알파 0) 이라 페이드 대상이 없어진다.
+                    // 흰색으로 고정해 페이드 시스템이 alpha 만 조절하도록 한다.
+                    background_color: Color::WHITE.into(),
                     ..default()
                 },
-                image: minimap_res.0.clone().into(),
-                ..default()
-            });
+                FadeOnOverlap(FadeTarget::Minimap),
+            ));
             parent.spawn((
                 TextBundle::from_section(
                     registry.current_name(),
@@ -207,14 +215,18 @@ fn spawn_minimap_overlay(
                     },
                 ),
                 GeneratorNameText,
+                FadeOnOverlap(FadeTarget::Minimap),
             ));
-            parent.spawn(TextBundle::from_section(
-                "[F1] 맵 전환",
-                TextStyle {
-                    font,
-                    font_size: 11.0,
-                    color: Color::GRAY,
-                },
+            parent.spawn((
+                TextBundle::from_section(
+                    "[F1] 맵 전환",
+                    TextStyle {
+                        font,
+                        font_size: 11.0,
+                        color: Color::GRAY,
+                    },
+                ),
+                FadeOnOverlap(FadeTarget::Minimap),
             ));
         });
 }
