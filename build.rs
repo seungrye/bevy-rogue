@@ -36,6 +36,7 @@ fn main() {
         ("items", "weapons.ron"),
         ("items", "armors.ron"),
         ("items", "consumables.ron"),
+        ("items", "accessories.ron"),
         ("items", "start_loadout.ron"),
     ]);
     write_named_files(&mut out, &assets_root, "EMBEDDED_MONSTERS", &[

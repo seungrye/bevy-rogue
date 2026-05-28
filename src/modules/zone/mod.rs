@@ -619,9 +619,12 @@ fn discover_portals_in_fov(
 
 fn zone_portals(zone: &ZoneId) -> Vec<(PortalDirection, ZoneId)> {
     match zone {
-        ZoneId::Town => vec![
-            (PortalDirection::South, ZoneId::Forest),
-        ],
+        // 마을(Town)은 신규 게임 시작 시 어떤 기본 포털도 두지 않는다.
+        //   - 사용자 혼란 방지: 시작하자마자 정체불명 포털이 보이지 않게 한다.
+        //   - 퀘스트가 발급하는 OpenPortal 만 마을에 포털을 만든다.
+        //   - 다른 zone(Forest 등) 에서 마을로 되돌아오는 return portal 은
+        //     그 zone 의 `zone_portals` 에서 정의하므로 유지된다.
+        ZoneId::Town => vec![],
         ZoneId::Forest => vec![
             (PortalDirection::North, ZoneId::Town),
             (PortalDirection::South, ZoneId::Dungeon(1)),
@@ -1088,15 +1091,25 @@ mod tests {
     }
 
     #[test]
-    fn 마을과_던전1층은_각자의_정적_포탈_집합을_가진다() {
-        // Town arm 과 Dungeon(1) arm 을 직접 실행.
+    fn 마을은_기본_포털을_갖지_않고_던전1층은_위아래_두_포털을_가진다() {
+        // Town arm: 사용자 혼란 줄이려고 신규 게임 시작 시 기본 포털을 두지 않는다.
+        //   - 퀘스트 OpenPortal 로만 생기고, 다른 zone 의 return 포털은 그쪽 정의에 있다.
         let town = zone_portals(&ZoneId::Town);
-        assert_eq!(town.len(), 1);
-        assert_eq!(town[0].1, ZoneId::Forest);
+        assert!(town.is_empty(), "마을은 기본 자동 포털이 없어야 한다");
         let d1 = zone_portals(&ZoneId::Dungeon(1));
         assert_eq!(d1.len(), 2);
         assert_eq!(d1[0].1, ZoneId::Forest);
         assert_eq!(d1[1].1, ZoneId::Dungeon(2));
+    }
+
+    #[test]
+    fn 숲은_마을로_돌아가는_복귀_포털을_여전히_가진다() {
+        // 다른 zone(여기서는 Forest) 에서 마을로 돌아오는 return 포털은 유지된다.
+        let forest = zone_portals(&ZoneId::Forest);
+        assert!(
+            forest.iter().any(|(_, target)| *target == ZoneId::Town),
+            "숲에서 마을로 돌아가는 포털은 살아 있어야 한다 (마을에 갇히지 않게)",
+        );
     }
 
     #[test]

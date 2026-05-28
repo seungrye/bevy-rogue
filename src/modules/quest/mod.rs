@@ -934,16 +934,19 @@ pub fn item_id_to_kind(id: &str, quest_items: &crate::modules::item::QuestItemRe
         "bow"                 => Some(ItemKind::Weapon(crate::modules::item::WeaponKind::BOW)),
         "leather_armor"       => Some(ItemKind::Armor(crate::modules::item::ArmorKind::LEATHER_ARMOR)),
         "health_potion"       => Some(ItemKind::Consumable(crate::modules::item::ConsumableKind::HEALTH_POTION)),
-        // 그 외는 레지스트리에서 조회한다. quest item → consumable → weapon → armor
+        // 그 외는 레지스트리에서 조회한다. quest item → consumable → weapon → armor → accessory
         // 순으로 시도해 첫 매칭 kind 를 반환한다. 이렇게 해야 퀘스트가 trap_kit/
-        // disarm_tool 같은 일반 소모품·장비도 GiveItem/RemoveItem 으로 다룰 수 있다.
+        // disarm_tool 같은 일반 소모품·장비, scout_lens/trap_scope 같은 액세서리도
+        // GiveItem/RemoveItem 으로 다룰 수 있다.
         other => quest_items.intern_quest_item(other).map(|s| ItemKind::QuestItem(QuestItemKind(s)))
             .or_else(|| quest_items.intern_consumable(other)
                 .map(|s| ItemKind::Consumable(crate::modules::item::ConsumableKind(s))))
             .or_else(|| quest_items.intern_weapon(other)
                 .map(|s| ItemKind::Weapon(crate::modules::item::WeaponKind(s))))
             .or_else(|| quest_items.intern_armor(other)
-                .map(|s| ItemKind::Armor(crate::modules::item::ArmorKind(s)))),
+                .map(|s| ItemKind::Armor(crate::modules::item::ArmorKind(s))))
+            .or_else(|| quest_items.intern_accessory(other)
+                .map(|s| ItemKind::Accessory(crate::modules::item::AccessoryKind(s)))),
     }
 }
 
@@ -1034,6 +1037,22 @@ mod tests {
         assert_eq!(item_id_to_kind("dagger", qi()),      Some(ItemKind::Weapon(WeaponKind("dagger"))));
         // 방어구 분기 (leather_armor 이외)
         assert_eq!(item_id_to_kind("plate_armor", qi()), Some(ItemKind::Armor(ArmorKind("plate_armor"))));
+    }
+
+    #[test]
+    fn 퀘스트가_지급하는_액세서리ID도_레지스트리에서_kind로_매핑된다() {
+        // scout_lens / trap_scope 같은 액세서리도 GiveItem 으로 지급되므로
+        // item_id_to_kind 가 accessory 레지스트리도 조회해 ItemKind::Accessory 로 매핑.
+        use crate::modules::item::AccessoryKind;
+        let _ = qi();
+        assert_eq!(
+            item_id_to_kind("scout_lens", qi()),
+            Some(ItemKind::Accessory(AccessoryKind("scout_lens"))),
+        );
+        assert_eq!(
+            item_id_to_kind("trap_scope", qi()),
+            Some(ItemKind::Accessory(AccessoryKind("trap_scope"))),
+        );
     }
 
     #[test]
@@ -3020,7 +3039,7 @@ mod tests {
 
     #[test]
     fn 함정공략퀘스트_수락전이는_해제도구와_안내도구를_지급한다() {
-        // 핍진성: 도구를 건네며 T/Y 사용을 안내한다. 함정 해제/표시/설치 도구가
+        // 핍진성: 도구를 건네며 T/Y 사용을 안내한다. 함정 해제/표시(액세서리)/설치 도구가
         // 모두 지급되어야 플레이어가 갑자기 메커니즘을 알게 되는 어색함이 없다.
         let def = load_trap_mine_quest();
         let t = def.transitions.iter()
@@ -3031,8 +3050,8 @@ mod tests {
             "수락 시 해제 도구(disarm_tool)를 지급해야 한다",
         );
         assert!(
-            t.actions.iter().any(|a| matches!(a, QuestAction::GiveItem(id) if id == "scout_lens")),
-            "수락 시 함정 표시용 올빼미 안경(scout_lens)을 지급해야 한다",
+            t.actions.iter().any(|a| matches!(a, QuestAction::GiveItem(id) if id == "trap_scope")),
+            "수락 시 함정 표시용 광부의 등불(trap_scope, 액세서리)을 지급해야 한다",
         );
         assert!(
             t.actions.iter().any(|a| matches!(a, QuestAction::GiveItems { item, count } if item == "trap_kit" && *count >= 1)),

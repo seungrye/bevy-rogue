@@ -90,6 +90,7 @@ fn glyph_unicode(kind: ItemKind, r: &ItemRegistry) -> &'static str {
         ItemKind::Armor(a)      => r.armor(a).map(|m| m.glyph_unicode).unwrap_or("?"),
         ItemKind::Consumable(c) => r.consumable(c).map(|m| m.glyph_unicode).unwrap_or("?"),
         ItemKind::QuestItem(qk) => r.quest_item(qk).map(|m| m.glyph_unicode).unwrap_or("?"),
+        ItemKind::Accessory(ak) => r.accessory(ak).map(|m| m.glyph_unicode).unwrap_or("?"),
     }
 }
 
@@ -99,6 +100,7 @@ fn glyph_game_icon(kind: ItemKind, r: &ItemRegistry) -> &'static str {
         ItemKind::Armor(a)      => r.armor(a).map(|m| m.glyph_game_icon).unwrap_or("?"),
         ItemKind::Consumable(c) => r.consumable(c).map(|m| m.glyph_game_icon).unwrap_or("?"),
         ItemKind::QuestItem(qk) => r.quest_item(qk).map(|m| m.glyph_game_icon).unwrap_or("?"),
+        ItemKind::Accessory(ak) => r.accessory(ak).map(|m| m.glyph_game_icon).unwrap_or("?"),
     }
 }
 
@@ -161,6 +163,7 @@ pub struct ItemRegistry {
     pub weapons:     HashMap<&'static str, WeaponMeta>,
     pub armors:      HashMap<&'static str, ArmorMeta>,
     pub consumables: HashMap<&'static str, ConsumableMeta>,
+    pub accessories: HashMap<&'static str, AccessoryMeta>,
 }
 
 impl ItemRegistry {
@@ -176,6 +179,9 @@ impl ItemRegistry {
     pub fn consumable(&self, kind: ConsumableKind) -> Option<&ConsumableMeta> {
         self.consumables.get(kind.0)
     }
+    pub fn accessory(&self, kind: AccessoryKind) -> Option<&AccessoryMeta> {
+        self.accessories.get(kind.0)
+    }
 
     /// 등록된 quest item ID 의 leak 된 &'static str 반환 (item_id_to_kind 에서 사용)
     pub fn intern_quest_item(&self, id: &str) -> Option<&'static str> {
@@ -189,6 +195,9 @@ impl ItemRegistry {
     }
     pub fn intern_consumable(&self, id: &str) -> Option<&'static str> {
         self.consumables.get_key_value(id).map(|(k, _)| *k)
+    }
+    pub fn intern_accessory(&self, id: &str) -> Option<&'static str> {
+        self.accessories.get_key_value(id).map(|(k, _)| *k)
     }
 }
 
@@ -307,6 +316,20 @@ pub fn build_test_registry() -> ItemRegistry {
             effect: def.effect,
         });
     }
+    // accessories
+    let text = std::fs::read_to_string("assets/items/accessories.ron").expect("accessories.ron");
+    let defs: Vec<AccessoryDef> = ron::de::from_str(&text).expect("accessories.ron 파싱");
+    for def in defs {
+        let id: &'static str = Box::leak(def.id.into_boxed_str());
+        r.accessories.insert(id, AccessoryMeta {
+            display_name:    Box::leak(def.display_name.into_boxed_str()),
+            glyph_ascii:     Box::leak(def.glyph_ascii.into_boxed_str()),
+            glyph_unicode:   Box::leak(def.glyph_unicode.into_boxed_str()),
+            glyph_game_icon: Box::leak(def.glyph_game_icon.into_boxed_str()),
+            pickup_message:  Box::leak(def.pickup_message.into_boxed_str()),
+            desc:            Box::leak(def.desc.into_boxed_str()),
+        });
+    }
     r
 }
 
@@ -371,6 +394,34 @@ impl<'de> serde::Deserialize<'de> for ConsumableKind {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let s = String::deserialize(d)?;
         Ok(ConsumableKind(Box::leak(s.into_boxed_str())))
+    }
+}
+
+/// 액세서리(장신구) 종류 — 스탯에 영향을 주지 않고, 코드가 id 로 효과를 분기한다.
+/// 현재 등록 항목: scout_lens(잠입 전용 가드 시야 표시), trap_scope(함정 노출).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct AccessoryKind(pub &'static str);
+
+impl AccessoryKind {
+    #[allow(dead_code)] // 테스트에서만 참조되는 공개 접근자 (프로덕션 미사용)
+    pub fn id(self) -> &'static str { self.0 }
+    pub const SCOUT_LENS: AccessoryKind = AccessoryKind("scout_lens");
+    pub const TRAP_SCOPE: AccessoryKind = AccessoryKind("trap_scope");
+}
+
+impl serde::Serialize for AccessoryKind {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> { s.serialize_str(self.0) }
+}
+impl<'de> serde::Deserialize<'de> for AccessoryKind {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Ok(AccessoryKind(Box::leak(s.into_boxed_str())))
+    }
+}
+
+impl AccessoryKind {
+    pub fn display_name(self, r: &ItemRegistry) -> &'static str {
+        r.accessory(self).map(|m| m.display_name).unwrap_or("???")
     }
 }
 
@@ -468,6 +519,28 @@ pub struct ConsumableMeta {
     pub glyph_game_icon: &'static str,
     pub pickup_message: &'static str,
     pub effect: ConsumableEffect,
+}
+
+// ── Accessory: RON 정의/메타/로드 ──────────────────────────────────────────
+#[derive(Debug, Deserialize, Clone)]
+pub struct AccessoryDef {
+    pub id: String,
+    pub display_name: String,
+    pub glyph_ascii: String,
+    pub glyph_unicode: String,
+    pub glyph_game_icon: String,
+    pub pickup_message: String,
+    pub desc: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AccessoryMeta {
+    pub display_name: &'static str,
+    pub glyph_ascii: &'static str,
+    pub glyph_unicode: &'static str,
+    pub glyph_game_icon: &'static str,
+    pub pickup_message: &'static str,
+    pub desc: &'static str,
 }
 
 // ── 시작 로드아웃 (assets/items/start_loadout.ron) ─────────────────────────
@@ -583,6 +656,8 @@ pub fn apply_start_loadout(
             inv.items.push(InventoryItem::new(ItemKind::Weapon(WeaponKind(intern))));
         } else if let Some(intern) = registry.intern_armor(id) {
             inv.items.push(InventoryItem::new(ItemKind::Armor(ArmorKind(intern))));
+        } else if let Some(intern) = registry.intern_accessory(id) {
+            inv.items.push(InventoryItem::new(ItemKind::Accessory(AccessoryKind(intern))));
         } else {
             warn!("start_loadout: 알 수 없는 item id '{}'", id);
         }
@@ -739,12 +814,48 @@ fn load_consumables_system(mut registry: ResMut<ItemRegistry>) {
     registry.consumables = map;
 }
 
+fn load_accessories_system(mut registry: ResMut<ItemRegistry>) {
+    // wasm32: REMOTE 우선 파싱 → 실패 시 임베드 폴백(카테고리 단위 안전망).
+    #[cfg(target_arch = "wasm32")]
+    let defs: Vec<AccessoryDef> = crate::modules::embedded_assets::parse_remote_or_embedded(
+        "accessories.ron",
+        crate::modules::remote_content::remote_item("accessories.ron"),
+        || crate::modules::embedded_assets::find_embedded(
+            crate::modules::embedded_assets::EMBEDDED_ITEMS,
+            "accessories.ron",
+        ),
+    );
+    #[cfg(not(target_arch = "wasm32"))]
+    let defs: Vec<AccessoryDef> = {
+        let path = "assets/items/accessories.ron";
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("[치명적] {} 읽기 실패: {}", path, e));
+        ron::de::from_str(&text)
+            .unwrap_or_else(|e| panic!("[치명적] {} RON 파싱 실패: {}", path, e))
+    };
+    let mut map = HashMap::new();
+    for def in defs {
+        let id: &'static str = Box::leak(def.id.into_boxed_str());
+        map.insert(id, AccessoryMeta {
+            display_name:    Box::leak(def.display_name.into_boxed_str()),
+            glyph_ascii:     Box::leak(def.glyph_ascii.into_boxed_str()),
+            glyph_unicode:   Box::leak(def.glyph_unicode.into_boxed_str()),
+            glyph_game_icon: Box::leak(def.glyph_game_icon.into_boxed_str()),
+            pickup_message:  Box::leak(def.pickup_message.into_boxed_str()),
+            desc:            Box::leak(def.desc.into_boxed_str()),
+        });
+    }
+    info!("accessory 로드: {} 종", map.len());
+    registry.accessories = map;
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum ItemKind {
     Weapon(WeaponKind),
     Armor(ArmorKind),
     Consumable(ConsumableKind),
     QuestItem(QuestItemKind),
+    Accessory(AccessoryKind),
 }
 
 impl ItemKind {
@@ -754,6 +865,7 @@ impl ItemKind {
             ItemKind::Armor(a)      => r.armor(a).map(|m| m.glyph_ascii).unwrap_or("?"),
             ItemKind::Consumable(c) => r.consumable(c).map(|m| m.glyph_ascii).unwrap_or("?"),
             ItemKind::QuestItem(qk) => r.quest_item(qk).map(|m| m.glyph_ascii).unwrap_or("?"),
+            ItemKind::Accessory(ak) => r.accessory(ak).map(|m| m.glyph_ascii).unwrap_or("?"),
         }
     }
 
@@ -763,6 +875,7 @@ impl ItemKind {
             ItemKind::Armor(_)      => Color::rgb(0.2, 0.4, 1.0),
             ItemKind::Consumable(_) => Color::rgb(0.2, 0.9, 0.2),
             ItemKind::QuestItem(_)  => Color::rgb(0.8, 0.3, 1.0),
+            ItemKind::Accessory(_)  => Color::rgb(1.0, 0.6, 0.2),
         }
     }
 
@@ -772,6 +885,7 @@ impl ItemKind {
             ItemKind::Armor(a)      => r.armor(a).map(|m| m.display_name).unwrap_or("???"),
             ItemKind::Consumable(c) => r.consumable(c).map(|m| m.display_name).unwrap_or("???"),
             ItemKind::QuestItem(qk) => r.quest_item(qk).map(|m| m.display_name).unwrap_or("???"),
+            ItemKind::Accessory(ak) => r.accessory(ak).map(|m| m.display_name).unwrap_or("???"),
         }
     }
 
@@ -781,6 +895,7 @@ impl ItemKind {
             ItemKind::Armor(a)      => r.armor(a).map(|m| m.pickup_message).unwrap_or("방어구를 획득했다!"),
             ItemKind::Consumable(c) => r.consumable(c).map(|m| m.pickup_message).unwrap_or("소모품을 획득했다!"),
             ItemKind::QuestItem(qk) => r.quest_item(qk).map(|m| m.pickup_message).unwrap_or("아이템을 획득했다!"),
+            ItemKind::Accessory(ak) => r.accessory(ak).map(|m| m.pickup_message).unwrap_or("장신구를 획득했다!"),
         }
     }
 }
@@ -897,12 +1012,12 @@ pub fn item_display_color(
             Some(rarity) => rarity.color(),
             None => kind.color(),
         },
-        ItemKind::Consumable(_) | ItemKind::QuestItem(_) => kind.color(),
+        ItemKind::Consumable(_) | ItemKind::QuestItem(_) | ItemKind::Accessory(_) => kind.color(),
     }
 }
 
 /// 무기/방어구 드롭 시 tier 범위 안에서 스탯을 롤한다.
-/// Consumable/QuestItem 은 (None, None). registry 조회 실패도 (None, None).
+/// Consumable/QuestItem/Accessory 는 (None, None). registry 조회 실패도 (None, None).
 pub fn roll_item_stats<R: Rng + ?Sized>(
     kind: ItemKind,
     rng: &mut R,
@@ -917,7 +1032,7 @@ pub fn roll_item_stats<R: Rng + ?Sized>(
             Some(m) => (None, Some(rng.gen_range(m.defense_bonus_min..=m.defense_bonus_max))),
             None => (None, None),
         },
-        ItemKind::Consumable(_) | ItemKind::QuestItem(_) => (None, None),
+        ItemKind::Consumable(_) | ItemKind::QuestItem(_) | ItemKind::Accessory(_) => (None, None),
     }
 }
 
@@ -1116,6 +1231,10 @@ pub struct PlayerEquipment {
     /// 장착한 방어구의 롤된 방어보너스. serde default → 구 세이브는 None.
     #[serde(default)]
     pub armor_rolled_defense: Option<i32>,
+    /// 장착한 액세서리. 통계엔 영향 없고 효과는 id 로 분기(`AccessoryKind::SCOUT_LENS` 등).
+    /// serde default → 구 세이브는 None (액세서리 슬롯이 없던 시절 호환).
+    #[serde(default)]
+    pub accessory: Option<AccessoryKind>,
 }
 
 #[derive(Resource, Default)]
@@ -1215,6 +1334,7 @@ impl Plugin for ItemPlugin {
                 load_weapons_system.in_set(ItemSystemSet::Load),
                 load_armors_system.in_set(ItemSystemSet::Load),
                 load_consumables_system.in_set(ItemSystemSet::Load),
+                load_accessories_system.in_set(ItemSystemSet::Load),
                 load_start_loadout_system.in_set(ItemSystemSet::Load),
                 setup_glyph_fonts,
             ))
@@ -1354,7 +1474,7 @@ fn pickup_items(
 
     for (entity, kind, tx, ty, rolled_attack, rolled_defense) in at_tile {
         match kind {
-            ItemKind::Weapon(_) | ItemKind::Armor(_) | ItemKind::QuestItem(_) => {
+            ItemKind::Weapon(_) | ItemKind::Armor(_) | ItemKind::QuestItem(_) | ItemKind::Accessory(_) => {
                 inventory.items.push(InventoryItem { kind, rolled_attack, rolled_defense });
             }
             ItemKind::Consumable(ck) => {
@@ -1800,10 +1920,10 @@ mod tests {
     }
 
     #[test]
-    fn 퀘스트아이템_ron은_36종을_모두_로드한다() {
-        // 기존 35종 + 신규 퀘스트 아이템 1종(arcane_focus, 원소의 시험장 퀘스트 목표) = 36종.
+    fn 퀘스트아이템_ron은_35종을_모두_로드한다() {
+        // scout_lens 가 액세서리로 이관되어(quest_items.ron 에서 제거) 35종으로 줄었다.
         let registry = qi();
-        assert_eq!(registry.quest_items.len(), 36, "quest_items.ron 에 36 종이 정의되어야 한다");
+        assert_eq!(registry.quest_items.len(), 35, "quest_items.ron 에 35 종이 정의되어야 한다");
     }
 
     #[test]
@@ -2041,6 +2161,118 @@ mod tests {
         assert_eq!(ItemKind::Armor(ArmorKind("nope")).pickup_message(qi()), "방어구를 획득했다!");
         assert_eq!(ItemKind::Consumable(ConsumableKind("nope")).pickup_message(qi()), "소모품을 획득했다!");
         assert_eq!(ItemKind::QuestItem(QuestItemKind("nope")).pickup_message(qi()), "아이템을 획득했다!");
+        assert_eq!(ItemKind::Accessory(AccessoryKind("nope")).pickup_message(qi()), "장신구를 획득했다!");
+    }
+
+    // ── Accessory: 등록·메타·serde·표시 ───────────────────────────────────────
+
+    #[test]
+    fn 액세서리_ron은_등록된_종류를_모두_로드한다() {
+        // scout_lens(잠입) + trap_scope(함정) 최소 2 종.
+        let r = qi();
+        assert!(r.accessory(AccessoryKind::SCOUT_LENS).is_some(), "scout_lens 가 로드돼야 한다");
+        assert!(r.accessory(AccessoryKind::TRAP_SCOPE).is_some(), "trap_scope 가 로드돼야 한다");
+        assert!(r.accessories.len() >= 2, "최소 2 종 이상이어야 한다");
+    }
+
+    #[test]
+    fn 액세서리_표시이름_글리프_획득메시지가_정확하다() {
+        let lens = ItemKind::Accessory(AccessoryKind::SCOUT_LENS);
+        assert_eq!(lens.display_name(qi()), "올빼미 안경");
+        assert_eq!(lens.glyph(qi()), "O");
+        assert!(lens.pickup_message(qi()).contains("올빼미 안경"));
+        let scope = ItemKind::Accessory(AccessoryKind::TRAP_SCOPE);
+        assert_eq!(scope.display_name(qi()), "광부의 등불");
+        assert_eq!(scope.glyph(qi()), "L");
+        assert!(scope.pickup_message(qi()).contains("광부의 등불"));
+    }
+
+    #[test]
+    fn 액세서리종류는_serde_직렬화_왕복이_보존된다() {
+        let ak = AccessoryKind::SCOUT_LENS;
+        let s = ron::ser::to_string(&ak).unwrap();
+        assert_eq!(s, "\"scout_lens\"");
+        let parsed: AccessoryKind = ron::de::from_str(&s).unwrap();
+        assert_eq!(parsed, ak);
+    }
+
+    #[test]
+    fn 액세서리종류의_id는_내부식별자를_돌려준다() {
+        assert_eq!(AccessoryKind::SCOUT_LENS.id(), "scout_lens");
+        assert_eq!(AccessoryKind::TRAP_SCOPE.id(), "trap_scope");
+    }
+
+    #[test]
+    fn 액세서리는_별도의_카테고리_색을_가진다() {
+        // 다른 카테고리(녹/파랑/노랑/보라)와 안 겹치는 주황 계열.
+        let c = ItemKind::Accessory(AccessoryKind::SCOUT_LENS).color();
+        assert_eq!(c, Color::rgb(1.0, 0.6, 0.2));
+    }
+
+    #[test]
+    fn 액세서리의_레지스트리_인턴은_같은_id에_같은_포인터를_돌려준다() {
+        let a = qi().intern_accessory("scout_lens").expect("등록된 ID");
+        let b = qi().intern_accessory("scout_lens").expect("등록된 ID");
+        assert_eq!(a.as_ptr(), b.as_ptr(), "같은 등록된 ID 는 같은 포인터여야 한다");
+        assert!(qi().intern_accessory("does_not_exist").is_none());
+    }
+
+    #[test]
+    fn 액세서리_로드_시스템이_레지스트리를_채운다() {
+        let mut app = App::new();
+        app.init_resource::<ItemRegistry>()
+            .add_systems(Startup, load_accessories_system);
+        app.update();
+        let r = app.world.resource::<ItemRegistry>();
+        assert!(r.accessory(AccessoryKind::SCOUT_LENS).is_some());
+        assert!(r.accessory(AccessoryKind::TRAP_SCOPE).is_some());
+    }
+
+    #[test]
+    fn 액세서리는_롤되지_않는다() {
+        let mut rng = rand::thread_rng();
+        assert_eq!(roll_item_stats(ItemKind::Accessory(AccessoryKind::SCOUT_LENS), &mut rng, qi()), (None, None));
+    }
+
+    #[test]
+    fn 액세서리의_표시색은_카테고리색을_그대로_쓴다() {
+        let c = item_display_color(ItemKind::Accessory(AccessoryKind::SCOUT_LENS), None, None, qi());
+        assert_eq!(c, ItemKind::Accessory(AccessoryKind::SCOUT_LENS).color());
+    }
+
+    #[test]
+    fn 시작로드아웃_items_에_액세서리_id가_있으면_인벤토리_액세서리로_들어간다() {
+        // apply_start_loadout 의 intern_accessory 분기 실행.
+        let mut inv = PlayerInventory::default();
+        let mut eq = PlayerEquipment::default();
+        let loadout = StartLoadout {
+            gold: 0, weapon: None, armor: None,
+            items: vec!["scout_lens".into()],
+            consumables: vec![],
+        };
+        apply_start_loadout(&mut inv, &mut eq, &loadout, qi());
+        assert_eq!(inv.items.len(), 1);
+        assert!(matches!(inv.items[0].kind, ItemKind::Accessory(AccessoryKind("scout_lens"))));
+    }
+
+    #[test]
+    fn 액세서리는_PlayerEquipment_의_serde_default_로_None_으로_역직렬화된다() {
+        // 구 세이브: accessory 필드 없음 → serde(default) 로 None.
+        let old = "(weapon: None, armor: None)";
+        let parsed: PlayerEquipment = ron::de::from_str(old).expect("구 세이브 역직렬화");
+        assert!(parsed.accessory.is_none(), "구 세이브는 accessory None 으로 채워진다");
+    }
+
+    #[test]
+    fn 액세서리를_장착한_PlayerEquipment_도_serde_왕복이_보존된다() {
+        let eq = PlayerEquipment {
+            weapon: None, armor: None,
+            weapon_rolled_attack: None, armor_rolled_defense: None,
+            accessory: Some(AccessoryKind::SCOUT_LENS),
+        };
+        let s = ron::ser::to_string(&eq).unwrap();
+        let parsed: PlayerEquipment = ron::de::from_str(&s).unwrap();
+        assert_eq!(parsed.accessory, Some(AccessoryKind::SCOUT_LENS));
     }
 
     #[test]
@@ -3002,7 +3234,7 @@ mod tests {
                     ItemKind::Armor(a) => {
                         assert!(qi().armor(a).unwrap().tier <= 2, "레벨1 장비드롭은 T1/T2");
                     }
-                    ItemKind::Consumable(_) | ItemKind::QuestItem(_) => {}
+                    ItemKind::Consumable(_) | ItemKind::QuestItem(_) | ItemKind::Accessory(_) => {}
                 }
             }
         }
@@ -3114,6 +3346,7 @@ mod tests {
         let eq = PlayerEquipment {
             weapon: Some(WeaponKind::SWORD), armor: None,
             weapon_rolled_attack: Some(9), armor_rolled_defense: None,
+            accessory: None,
         };
         assert_eq!(effective_attack(&eq, qi()), 9, "중앙값 7 이 아니라 롤값 9");
     }
@@ -3123,6 +3356,7 @@ mod tests {
         let eq = PlayerEquipment {
             weapon: None, armor: Some(ArmorKind::LEATHER_ARMOR),
             weapon_rolled_attack: None, armor_rolled_defense: Some(4),
+            accessory: None,
         };
         assert_eq!(effective_defense(&eq, qi()), PLAYER_DEF + 4, "중앙값 3 이 아니라 롤값 4");
     }

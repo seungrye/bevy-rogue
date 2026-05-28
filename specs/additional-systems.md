@@ -52,3 +52,19 @@
 - 활성 퀘스트 목록 + 각 현재 페이즈 `objective` 를 패널로(키 토글, 예 `J`). 기존 `QuestState.phases` + `QuestDef.phases[].objective` + 미니맵 마커 활용. 읽기 전용.
 - 순수 함수 `journal_entries(quest_state, registry) -> Vec<(title, objective)>`(활성/진행 중만). 테스트: 활성 퀘스트만 표시, 페이즈별 objective, 완료/미시작 제외, 빈 경우.
 - 의존 적음 — 독립 진행 가능.
+
+## G. Accessory 슬롯 (착용형 도구)
+- `PlayerEquipment.accessory: Option<AccessoryKind>` 슬롯 신규. 무기/방어구와 같은 장비 흐름(인벤토리에서 `Enter` 로 장착/해제). `ItemKind::Accessory` 새 variant. `assets/items/accessories.ron` 데이터.
+- 효과는 id 별 코드 매핑(통계 영향 없음):
+  - **`scout_lens` (올빼미 안경)**: 착용 시 가드 시야 영역 빨간 오버레이(`update_guard_vision_overlay` 가 equipment 기반). stealth 퀘스트 전용.
+  - **`trap_scope` (광부의 등불)**: 착용 시 시야 반경 `TRAP_SCOPE_RADIUS=8` 안의 숨김 함정 자동 노출(`reveal_traps_by_lens` 시스템). 함정 퀘스트(trap_mine_quest) 전용.
+- site 측 풀 스키마: `types/item.ts` AccessoryDef, `lib/ron.ts` parse/serialize, `models/item.tsx` discriminator, `/api/quests/items/*` CRUD, `/api/game/content/v1` `accessories.ron` 키 추가, UI 에디터 분기.
+- 기존 세이브 호환: `#[serde(default)]` 로 신규 필드 None.
+- 마이그레이션: `scripts/migrate-from-bevy-rogue.mjs` 가 accessories.ron 처리.
+- 테스트: 로드/serde, 장착/해제, scout_lens·trap_scope 효과, item_id_to_kind 폴백.
+
+## H. 마을 자동 포털 제거 정책
+- 신규 게임 시작 시 마을(Town) zone 에 자동 생성되는 portal 을 제거(`zone_portals(Town) == []`).
+- 사용자가 어떤 퀘스트를 수행해야 하는지 헷갈리는 문제 해결 — 퀘스트 액션 `OpenPortal` 로 생성된 포털만 마을에 등장.
+- 유지: 다른 zone(Forest 등) 에서 마을로 돌아오는 return portal — 없으면 갇혀버림.
+- 테스트: 마을 zone_portals 빈 Vec, Forest 의 마을 return portal 정상.

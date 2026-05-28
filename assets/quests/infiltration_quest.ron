@@ -40,10 +40,11 @@ QuestDef(
         "infiltrating": QuestPhaseDef(
             dialog: [
                 "아직 문서를 손에 넣지 못했나? 서두르되, 조급해선 안 되네.",
+                "잊지 말게 — 올빼미 안경은 액세서리 슬롯에 착용해야만 시야가 보인다네.",
                 "경비병의 시선은 앞이 넓고 뒤가 좁다네. 등 뒤를 노리게.",
                 "한 번이라도 들키면 사례는 없어. 하지만 문서만 가져오면 돼.",
             ],
-            objective: Some("잠입구역에 들어가 기밀 문서를 회수하라. 경비병에게 들키지 마라."),
+            objective: Some("올빼미 안경을 착용하고 잠입구역에 들어가 기밀 문서를 회수하라. 경비병에게 들키지 마라."),
         ),
 
         // ── 3단계: 회수 완료, 촌장에게 귀환 ─────────────────────
@@ -82,7 +83,7 @@ QuestDef(
             actions: [
                 ClearFlag("stealth_blown"),
                 GiveItem("scout_lens"),
-                Log("촌장: 이 안경을 끼면 놈들의 시선이 보일 걸세. 붉게 비치는 곳을 피하게."),
+                Log("촌장: 이 올빼미 안경을 액세서리 슬롯에 착용하게. 착용해야만 경비병의 시선이 붉게 비쳐 보인다네. 붉은 곳은 피하게."),
                 OpenPortal(zone: "infiltration", generator: "walled_town", placement: Border),
                 SpawnGuards(count: 5),
                 PlaceTraps(kind: Alarm, count: 4, hidden: true),

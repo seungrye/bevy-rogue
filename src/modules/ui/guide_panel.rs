@@ -69,10 +69,19 @@ pub fn guide_entries() -> Vec<GuideEntry> {
         GuideEntry {
             category: "시야 / 잠입",
             title: "위험 타일 표시 (정찰 도구)",
-            description: "정찰 도구(scout_lens)를 인벤토리에 지니면 가드 시야가 닿는 \
-                '위험 타일'에 반투명 붉은 오버레이가 깔린다. 어두운 타일은 가드가 더 \
+            description: "정찰 도구(scout_lens, 액세서리)를 장비 패널의 액세서리 슬롯에 \
+                착용하면 가드 시야가 닿는 '위험 타일'에 반투명 붉은 오버레이가 깔린다. \
+                인벤토리에만 있고 미착용이면 효과가 없다. 어두운 타일은 가드가 더 \
                 가까워야만 위험으로 표시돼 탐지 로직과 같은 광량을 공유한다.",
-            visual: "위험 타일 = 붉은 틴트",
+            visual: "위험 타일 = 붉은 틴트 (안경 착용 시)",
+        },
+        GuideEntry {
+            category: "함정",
+            title: "함정 자동 노출 (광부의 등불)",
+            description: "광부의 등불(trap_scope, 액세서리)을 액세서리 슬롯에 착용하면 \
+                시야 안의 모든 숨김 함정이 즉시 드러난다 — 인접해야만 보이는 일반 \
+                노출(체비쇼프 1) 보다 훨씬 넓다. 미착용 시 효과 없음.",
+            visual: "함정 등불 착용 → 시야 내 함정 모두 노출",
         },
         GuideEntry {
             category: "조명 / 그림자",
@@ -421,6 +430,7 @@ mod tests {
         }
         assert!(full.contains("8타일"), "방향 FOV 정면 8타일 수치 포함");
         assert!(full.contains("scout_lens"), "정찰 도구 id 포함");
+        assert!(full.contains("trap_scope"), "함정 등불 id 포함");
         assert!(full.contains("MP 8"), "파이어볼 MP 비용 포함");
         assert!(full.contains("trap_kit"), "함정 키트 id 포함");
         assert!(full.contains("disarm_tool"), "해제 도구 id 포함");

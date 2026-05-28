@@ -10,8 +10,20 @@ use crate::modules::{
     player::Player,
     monster::{Monster, PlayerDetectedEvent},
     elemental::{Element, ElementalApplyEvent},
+    item::{PlayerEquipment, AccessoryKind},
     ui::LogMessage,
 };
+
+/// 액세서리 슬롯 ID — 착용 시 시야 내 숨김 함정을 자동 노출.
+pub const TRAP_SCOPE_ID: &str = "trap_scope";
+
+/// trap_scope 효과 반경 (체비쇼프). 일반 reveal_hidden_traps(인접 1) 보다 훨씬 넓다.
+pub const TRAP_SCOPE_RADIUS: i32 = 8;
+
+/// `(equipment)` 가 함정 등불(`trap_scope`)을 착용 중인지 (순수 함수).
+pub fn player_has_trap_scope(equipment: &PlayerEquipment) -> bool {
+    equipment.accessory == Some(AccessoryKind(TRAP_SCOPE_ID))
+}
 
 // ── 데이터 ───────────────────────────────────────────────────────────────────
 
@@ -202,10 +214,14 @@ impl Plugin for TrapPlugin {
             // 동작하도록 여기서도 보장한다.
             .add_event::<PlayerDetectedEvent>()
             .add_event::<ElementalApplyEvent>()
+            // reveal_traps_by_lens 가 읽는 PlayerEquipment — ItemPlugin 이 보통
+            // 등록하지만 단독 테스트에서도 동작하도록 여기서도 init 한다.
+            .init_resource::<PlayerEquipment>()
             .add_systems(Update, (
                 handle_spawn_trap,
                 trigger_traps,
                 reveal_hidden_traps,
+                reveal_traps_by_lens,
             ));
     }
 }
@@ -395,6 +411,28 @@ fn reveal_hidden_traps(
     for (mut trap, mut vis) in trap_query.iter_mut() {
         if !trap.hidden { continue; }
         if should_reveal(trap.hidden, trap.tile_x, trap.tile_y, px, py, REVEAL_DIST) {
+            trap.hidden = false;
+            *vis = Visibility::Visible;
+        }
+    }
+}
+
+/// `trap_scope`(광부의 등불) 액세서리 착용 시, 인접 제약 없이 반경 `TRAP_SCOPE_RADIUS`
+/// 이내의 모든 숨김 함정을 즉시 드러낸다. 미착용이면 no-op.
+///
+/// `reveal_hidden_traps` 의 인접 1칸 노출과 독립적으로 동작해, 두 시스템이
+/// 같은 함정을 양쪽에서 노출시켜도 idempotent (이미 노출이면 그대로 둠).
+fn reveal_traps_by_lens(
+    mut trap_query: Query<(&mut Trap, &mut Visibility)>,
+    player_query: Query<&Transform, With<Player>>,
+    equipment: Res<PlayerEquipment>,
+) {
+    if !player_has_trap_scope(&equipment) { return; }
+    let Ok(transform) = player_query.get_single() else { return };
+    let (px, py) = world_to_tile_coords(transform.translation);
+    for (mut trap, mut vis) in trap_query.iter_mut() {
+        if !trap.hidden { continue; }
+        if should_reveal(trap.hidden, trap.tile_x, trap.tile_y, px, py, TRAP_SCOPE_RADIUS) {
             trap.hidden = false;
             *vis = Visibility::Visible;
         }

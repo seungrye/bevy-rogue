@@ -430,6 +430,77 @@ fn 통과타일이_없으면_함정은_배치되지_않는다() {
     assert_eq!(trap_count(&mut app), 0, "통과타일 없으면 배치 실패");
 }
 
+// ── reveal_traps_by_lens (광부의 등불 액세서리) ───────────────────────────────
+
+fn lens_app(equipped: bool) -> App {
+    let mut app = App::new();
+    let mut eq = PlayerEquipment::default();
+    if equipped { eq.accessory = Some(AccessoryKind(TRAP_SCOPE_ID)); }
+    app.insert_resource(eq);
+    app.add_systems(Update, reveal_traps_by_lens);
+    app
+}
+
+#[test]
+fn 함정등불_착용자는_시야_반경_안의_숨김함정이_노출된다() {
+    // 등불 착용 + 반경 안(체비쇼프 ≤ TRAP_SCOPE_RADIUS) → 노출.
+    let mut app = lens_app(true);
+    let pos = tile_to_world_coords(5, 5);
+    app.world.spawn((Player, Transform::from_xyz(pos.x, pos.y, 1.0)));
+    let t = app.world.spawn((
+        Trap { kind: TrapKind::Spike, tile_x: 11, tile_y: 5, hidden: true },
+        Visibility::Hidden,
+    )).id();
+    app.update();
+    assert!(!app.world.get::<Trap>(t).unwrap().hidden, "등불 착용 시 멀어도 노출");
+}
+
+#[test]
+fn 함정등불_미착용시에는_원거리_숨김함정이_그대로다() {
+    let mut app = lens_app(false);
+    let pos = tile_to_world_coords(5, 5);
+    app.world.spawn((Player, Transform::from_xyz(pos.x, pos.y, 1.0)));
+    let t = app.world.spawn((
+        Trap { kind: TrapKind::Spike, tile_x: 11, tile_y: 5, hidden: true },
+        Visibility::Hidden,
+    )).id();
+    app.update();
+    assert!(app.world.get::<Trap>(t).unwrap().hidden, "미착용이면 등불 시스템은 no-op");
+}
+
+#[test]
+fn 함정등불_반경_밖의_함정은_노출되지_않는다() {
+    // 반경(TRAP_SCOPE_RADIUS=8) 을 벗어난 함정은 등불로도 안 보인다.
+    let mut app = lens_app(true);
+    let pos = tile_to_world_coords(0, 0);
+    app.world.spawn((Player, Transform::from_xyz(pos.x, pos.y, 1.0)));
+    let t = app.world.spawn((
+        Trap { kind: TrapKind::Spike, tile_x: 20, tile_y: 20, hidden: true },
+        Visibility::Hidden,
+    )).id();
+    app.update();
+    assert!(app.world.get::<Trap>(t).unwrap().hidden, "반경 초과는 등불로도 미노출");
+}
+
+#[test]
+fn 함정등불_착용자_플레이어가_없으면_등불노출은_조용히_종료된다() {
+    let mut app = lens_app(true);
+    let t = app.world.spawn((
+        Trap { kind: TrapKind::Spike, tile_x: 5, tile_y: 5, hidden: true },
+        Visibility::Hidden,
+    )).id();
+    app.update();
+    assert!(app.world.get::<Trap>(t).unwrap().hidden, "플레이어 없으면 변화 없음");
+}
+
+#[test]
+fn 함정등불_보유판정은_액세서리_슬롯의_등불을_인식한다() {
+    let mut eq = PlayerEquipment::default();
+    assert!(!player_has_trap_scope(&eq), "기본 장비엔 등불이 없다");
+    eq.accessory = Some(AccessoryKind(TRAP_SCOPE_ID));
+    assert!(player_has_trap_scope(&eq), "등불 착용 시 true");
+}
+
 // ── 플러그인 빌드 ───────────────────────────────────────────────────────────────
 
 #[test]

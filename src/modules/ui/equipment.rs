@@ -14,6 +14,8 @@ const SPEAR_ICON:  &str = "\u{EAAC}";
 const BOW_ICON:    &str = "\u{E978}";
 const ARMOR_ICON:  &str = "\u{EA96}";
 const POTION_ICON: &str = "\u{EA72}";
+/// 액세서리 슬롯·아이콘 — RPG-awesome 의 반지(\u{E975}) 글리프. 함정 등불/안경 모두 동일 아이콘.
+const ACCESSORY_ICON: &str = "\u{E975}";
 
 // 미니맵 너비(180) + 오른쪽 여백(5) + 여유(5) = 190
 const PANEL_WIDTH: f32 = MINIMAP_DISPLAY_SIZE + 10.0;
@@ -146,6 +148,15 @@ fn handle_equipment_input(
                         log.send(LogMessage(format!("{} 장착.", a.display_name(&items))));
                     }
                 }
+                ItemKind::Accessory(ak) => {
+                    if equipment.accessory == Some(ak) {
+                        equipment.accessory = None;
+                        log.send(LogMessage(format!("{} 해제.", ak.display_name(&items))));
+                    } else {
+                        equipment.accessory = Some(ak);
+                        log.send(LogMessage(format!("{} 장착.", ak.display_name(&items))));
+                    }
+                }
                 ItemKind::Consumable(_) | ItemKind::QuestItem(_) => {}
             }
         } else {
@@ -221,6 +232,7 @@ fn item_kind_icon(kind: &ItemKind) -> &'static str {
         ItemKind::Armor(_)     => ARMOR_ICON,
         ItemKind::Consumable(_) => POTION_ICON,
         ItemKind::QuestItem(_)  => "*",
+        ItemKind::Accessory(_)  => ACCESSORY_ICON,
     }
 }
 
@@ -302,6 +314,19 @@ pub(crate) fn build_panel_sections(
         }
     }
 
+    // 액세서리 슬롯
+    s.push(kr("\n A c c e s s o r y\n", c_category));
+    match equipment.accessory {
+        None => {
+            s.push(ico(&format!("  {} ", ACCESSORY_ICON), c_inactive));
+            s.push(kr("없음\n",                            c_inactive));
+        }
+        Some(ak) => {
+            s.push(ico(&format!("  {} ", ACCESSORY_ICON), c_active));
+            s.push(kr(&format!("{}\n", ak.display_name(quest_items)), c_active));
+        }
+    }
+
     // ── INVENTORY 헤더 ──
     s.push(kr("\n/ I N V E N T O R Y /\n", c_header));
     s.push(kr("─────────────────────\n",   c_sep));
@@ -310,8 +335,9 @@ pub(crate) fn build_panel_sections(
     if total == 0 {
         s.push(kr("  (비어있음)\n", c_inactive));
     } else {
-        let mut weapon_marked = false;
-        let mut armor_marked  = false;
+        let mut weapon_marked    = false;
+        let mut armor_marked     = false;
+        let mut accessory_marked = false;
         for (i, inv_item) in inventory.items.iter().enumerate() {
             let (sel, color) = if i == cursor { (">", c_cursor) } else { (" ", c_normal) };
             let equipped = match inv_item.kind {
@@ -320,6 +346,9 @@ pub(crate) fn build_panel_sections(
                 }
                 ItemKind::Armor(a) if equipment.armor == Some(a) && !armor_marked => {
                     armor_marked = true; true
+                }
+                ItemKind::Accessory(ak) if equipment.accessory == Some(ak) && !accessory_marked => {
+                    accessory_marked = true; true
                 }
                 _ => false,
             };
@@ -475,21 +504,24 @@ mod tests {
     }
 
     #[test]
-    fn 무기와_방어구를_장착하면_슬롯에_각각_표시된다() {
+    fn 무기와_방어구와_액세서리를_장착하면_슬롯에_각각_표시된다() {
         let mut eq = empty_eq();
         eq.weapon = Some(WeaponKind::SWORD);
         eq.armor  = Some(ArmorKind::LEATHER_ARMOR);
+        eq.accessory = Some(crate::modules::item::AccessoryKind::SCOUT_LENS);
         let text = build_panel_text(&empty_inv(), &eq, 0, qi());
         assert!(text.contains("ATK"));
         assert!(text.contains("DEF"));
-        // 빈 슬롯 "없음" 은 없어야 한다.
+        assert!(text.contains("올빼미 안경"), "액세서리 슬롯에 장착한 이름이 표시되어야 한다");
+        // 모든 슬롯이 채워졌으니 빈 슬롯 "없음" 은 없어야 한다.
         assert!(!text.contains("없음"));
     }
 
     #[test]
     fn 빈_장비_슬롯은_없음으로_표시된다() {
+        // 무기/방어구/액세서리 3 슬롯이 모두 비었을 때 각자 "없음" 으로 표시된다.
         let text = build_panel_text(&empty_inv(), &empty_eq(), 0, qi());
-        assert_eq!(text.matches("없음").count(), 2);
+        assert_eq!(text.matches("없음").count(), 3);
     }
 
     #[test]
@@ -783,6 +815,71 @@ mod tests {
         app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
         app.update();
         assert!(app.world.resource::<PlayerEquipment>().armor.is_none());
+    }
+
+    #[test]
+    fn 빈슬롯_액세서리를_선택하고_엔터를_누르면_장착된다() {
+        use crate::modules::item::AccessoryKind;
+        let mut app = 키_입력_하네스();
+        app.add_systems(Update, handle_equipment_input);
+        app.world.resource_mut::<EquipmentPanelOpen>().0 = true;
+        app.world.resource_mut::<PlayerInventory>().items
+            .push(InventoryItem::new(ItemKind::Accessory(AccessoryKind::SCOUT_LENS)));
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
+        app.update();
+        assert_eq!(app.world.resource::<PlayerEquipment>().accessory, Some(AccessoryKind::SCOUT_LENS));
+    }
+
+    #[test]
+    fn 이미_장착한_액세서리에_엔터를_누르면_해제된다() {
+        use crate::modules::item::AccessoryKind;
+        let mut app = 키_입력_하네스();
+        app.add_systems(Update, handle_equipment_input);
+        app.world.resource_mut::<EquipmentPanelOpen>().0 = true;
+        app.world.resource_mut::<PlayerInventory>().items
+            .push(InventoryItem::new(ItemKind::Accessory(AccessoryKind::SCOUT_LENS)));
+        app.world.resource_mut::<PlayerEquipment>().accessory = Some(AccessoryKind::SCOUT_LENS);
+        app.world.resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
+        app.update();
+        assert!(app.world.resource::<PlayerEquipment>().accessory.is_none());
+    }
+
+    #[test]
+    fn 인벤토리의_장착중인_액세서리에는_장착_표식이_붙는다() {
+        use crate::modules::item::AccessoryKind;
+        let mut inv = empty_inv();
+        inv.items.push(InventoryItem::new(ItemKind::Accessory(AccessoryKind::SCOUT_LENS)));
+        let mut eq = empty_eq();
+        eq.accessory = Some(AccessoryKind::SCOUT_LENS);
+        let text = build_panel_text(&inv, &eq, 0, qi());
+        assert!(text.contains("[장착]"), "착용 중 액세서리에는 장착 표식이 붙는다");
+    }
+
+    #[test]
+    fn 같은_액세서리가_둘이면_뒤엣것은_장착_표식이_없다() {
+        use crate::modules::item::AccessoryKind;
+        let mut inv = empty_inv();
+        inv.items.push(InventoryItem::new(ItemKind::Accessory(AccessoryKind::SCOUT_LENS)));
+        inv.items.push(InventoryItem::new(ItemKind::Accessory(AccessoryKind::SCOUT_LENS)));
+        let mut eq = empty_eq();
+        eq.accessory = Some(AccessoryKind::SCOUT_LENS);
+        let text = build_panel_text(&inv, &eq, 0, qi());
+        assert_eq!(text.matches("[장착]").count(), 1, "장착 표식은 한 번만 붙는다");
+    }
+
+    #[test]
+    fn 액세서리_아이콘은_반지_글리프다() {
+        use crate::modules::item::AccessoryKind;
+        assert_eq!(item_kind_icon(&ItemKind::Accessory(AccessoryKind::SCOUT_LENS)), ACCESSORY_ICON);
+    }
+
+    #[test]
+    fn 액세서리_슬롯이_비면_없음으로_표시된다() {
+        let text = build_panel_text(&empty_inv(), &empty_eq(), 0, qi());
+        // 액세서리 카테고리 헤더와 "없음" 이 함께 들어 있어야 한다.
+        assert!(text.contains("A c c e s s o r y"));
+        // 무기/방어구/액세서리 3 슬롯 모두 비었으니 "없음" 이 3번.
+        assert_eq!(text.matches("없음").count(), 3);
     }
 
     #[test]

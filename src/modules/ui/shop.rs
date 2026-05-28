@@ -77,6 +77,7 @@ fn item_display_name(kind: ItemKind, items: &crate::modules::item::ItemRegistry)
         ItemKind::Armor(a)      => items.armor(a).map(|m| m.display_name).unwrap_or("???"),
         ItemKind::Consumable(c) => items.consumable(c).map(|m| m.display_name).unwrap_or("???"),
         ItemKind::QuestItem(_)  => "퀘스트 아이템",
+        ItemKind::Accessory(a)  => items.accessory(a).map(|m| m.display_name).unwrap_or("???"),
     }
 }
 

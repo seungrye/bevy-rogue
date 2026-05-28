@@ -260,3 +260,10 @@
 8. 지형 상호작용과 상태이상
 
 이 순서는 새 콘텐츠를 많이 추가하기보다, 이미 구현된 시스템을 플레이어가 더 잘 이해하고 반복 플레이할 수 있게 만드는 방향을 우선한다.
+
+## 최근 추가 (Accessory 슬롯, 마을 포털 정책)
+
+- **Accessory 슬롯** (장비 패널, `E` → `Enter` 로 장착/해제. specs/additional-systems.md §G):
+  - `scout_lens`(올빼미 안경, stealth 전용) — 가드 시야 영역 빨간 오버레이.
+  - `trap_scope`(광부의 등불, 함정 전용) — 시야 반경 8 안의 숨김 함정 자동 노출.
+- **마을 자동 포털 제거** (specs/additional-systems.md §H): 신규 게임 시작 시 마을 자동 portal 0개. 퀘스트 `OpenPortal` 로 받은 포털만 마을에 등장 (헷갈림 방지). Forest 등 다른 zone 의 마을 return portal 은 유지.

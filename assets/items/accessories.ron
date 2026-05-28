@@ -1,0 +1,32 @@
+// 액세서리(장신구) 정의 — 게임 코드와 분리된 데이터.
+// 형식: Vec<AccessoryDef>
+//   id: 인벤토리/장비 슬롯에서 참조하는 안정 식별자
+//   display_name: 인벤토리/UI 표기 이름
+//   glyph_ascii / glyph_unicode / glyph_game_icon: 글리프 스타일별 표시 문자
+//   pickup_message: 획득 시 로그 메시지
+//   desc: 효과 설명(가이드/패널 표시 용, 게임 로직은 id 로 분기)
+//
+// 액세서리는 스탯에 영향을 주지 않고, 코드가 id 로 효과를 분기한다(원소·잠입·함정 등).
+// 현재 효과:
+//   - "scout_lens" (올빼미 안경, 잠입 전용): 착용 시 가드 시야 영역을 붉게 표시.
+//   - "trap_scope" (광부의 등불, 함정 전용): 착용 시 시야 내 숨김 함정을 자동으로 노출.
+[
+    AccessoryDef(
+        id: "scout_lens",
+        display_name: "올빼미 안경",
+        glyph_ascii: "O",
+        glyph_unicode: "\u{1F50E}",
+        glyph_game_icon: "\u{1F50E}",
+        pickup_message: "올빼미 안경을 받았다. 착용하면 경비병의 시선이 붉게 비쳐 보인다.",
+        desc: "잠입 전용. 착용하면 가드의 시야가 닿는 위험 타일이 붉게 표시된다.",
+    ),
+    AccessoryDef(
+        id: "trap_scope",
+        display_name: "광부의 등불",
+        glyph_ascii: "L",
+        glyph_unicode: "\u{1F526}",
+        glyph_game_icon: "\u{1F526}",
+        pickup_message: "광부의 등불을 받았다. 착용하면 깔린 함정의 위치가 빛에 드러난다.",
+        desc: "함정 전용. 착용하면 시야 내 숨김 함정이 자동으로 드러난다.",
+    ),
+]

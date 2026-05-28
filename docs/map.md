@@ -81,6 +81,12 @@ pub trait MapGenerator: Send + Sync {
 - 동일 `GlobalSeed`로는 항상 동일한 맵이 생성됨 (로그라이크 시드 재현 가능)
 - `thread_rng()` 는 맵 생성에 사용하지 않음
 
+## 존 포털 정책
+
+- 신규 게임 시작 시 마을(`ZoneId::Town`)에는 **자동 생성 포털이 없다**(`zone_portals(Town) == []`). 사용자가 어떤 퀘스트를 받아야 하는지 헷갈리는 문제를 막기 위해, **퀘스트 액션 `OpenPortal` 로 생성된 포털만** 마을에 등장한다.
+- 다른 존(Forest 등)은 자동 포털을 가진다 — 특히 마을로 돌아오는 **return portal 은 유지**되어 갇히지 않는다.
+- 자세한 정책: `specs/additional-systems.md §H`.
+
 ## 에셋
 
 게임은 `assets/` 디렉터리 아래의 파일들을 필요로 한다:

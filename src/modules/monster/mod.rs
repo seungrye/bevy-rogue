@@ -14,7 +14,7 @@ use crate::modules::{
     combat::{CombatStats, Defeated, Speed, calc_damage},
     ui::LogMessage,
     combat_feedback::CombatFeedbackEvent,
-    item::{ItemDropEvent, PlayerEquipment, ItemRegistry, PlayerInventory, ItemKind, QuestItemKind, effective_attack, effective_defense},
+    item::{ItemDropEvent, PlayerEquipment, ItemRegistry, PlayerInventory, AccessoryKind, effective_attack, effective_defense},
     zone::{WorldState, ZoneId, ZonePersistence, MonsterSlot},
     map::GlobalTurn,
     elemental::{Element, ElementalApplyEvent, ElementalStatus, Stunned, weapon_element},
@@ -255,11 +255,10 @@ pub fn danger_tiles(
     out
 }
 
-/// 인벤토리에 정찰 도구(`scout_lens`)를 보유했는지 여부 (순수 함수).
-/// 보유하면 위험 타일 오버레이가 활성화된다.
-pub fn player_has_scout_lens(inventory: &PlayerInventory) -> bool {
-    let lens = ItemKind::QuestItem(QuestItemKind(SCOUT_LENS_ID));
-    inventory.items.iter().any(|i| i.kind == lens)
+/// 액세서리 슬롯에 정찰 도구(`scout_lens`)를 **착용 중**인지 여부 (순수 함수).
+/// 인벤토리에만 있고 미장착이면 false — 잠입 도구는 슬롯 점유라는 비용을 갖는다.
+pub fn player_has_scout_lens(equipment: &PlayerEquipment) -> bool {
+    equipment.accessory == Some(AccessoryKind(SCOUT_LENS_ID))
 }
 
 /// 정찰 도구 보유 시 가드 시야가 닿는 위험 타일에 반투명 붉은 오버레이를 깔고,
@@ -271,18 +270,18 @@ pub fn player_has_scout_lens(inventory: &PlayerInventory) -> bool {
 fn update_guard_vision_overlay(
     mut commands: Commands,
     map_res: Res<MapResource>,
-    inventory: Res<PlayerInventory>,
+    equipment: Res<PlayerEquipment>,
     light_map: Res<LightMap>,
     monster_query: Query<(&Monster, &Facing, &CombatStats)>,
     overlay_query: Query<Entity, With<GuardVisionOverlay>>,
 ) {
-    // 매번 기존 오버레이를 비우고 다시 그린다 — 이동/facing/인벤토리 변화 반영을 단순화.
+    // 매번 기존 오버레이를 비우고 다시 그린다 — 이동/facing/장착 변화 반영을 단순화.
     for entity in overlay_query.iter() {
         commands.entity(entity).despawn();
     }
 
-    // 정찰 도구 미보유면 오버레이 없음 (제거만 하고 종료).
-    if !player_has_scout_lens(&inventory) {
+    // 정찰 도구 미착용이면 오버레이 없음 (제거만 하고 종료).
+    if !player_has_scout_lens(&equipment) {
         return;
     }
 
@@ -2737,8 +2736,6 @@ mod tests {
 
     // ── danger_tiles (위험 타일 순수 함수) ────────────────────────────────────
 
-    use crate::modules::item::InventoryItem;
-
     #[test]
     fn 위험타일은_가드_정면_시야_타일을_포함한다() {
         // 가드(5,5)가 오른쪽(+x)을 보면 정면 타일(8,5)이 위험 타일에 포함된다.
@@ -2792,19 +2789,15 @@ mod tests {
 
     // ── update_guard_vision_overlay (오버레이 시스템) ─────────────────────────
 
-    fn scout_lens_item() -> InventoryItem {
-        InventoryItem::new(ItemKind::QuestItem(QuestItemKind(SCOUT_LENS_ID)))
-    }
-
     /// 오버레이 시스템 + 필요한 리소스를 갖춘 App. AssetServer(Image) 는 SpriteBundle 용.
     fn overlay_app(map: Map, has_lens: bool) -> App {
         let mut app = asset_app();
         let (w, h) = (map.width, map.height);
         app.insert_resource(MapResource(map));
         app.insert_resource(bright_light_map(w, h));
-        let mut inv = PlayerInventory::default();
-        if has_lens { inv.items.push(scout_lens_item()); }
-        app.insert_resource(inv);
+        let mut eq = PlayerEquipment::default();
+        if has_lens { eq.accessory = Some(AccessoryKind(SCOUT_LENS_ID)); }
+        app.insert_resource(eq);
         app.add_systems(Update, update_guard_vision_overlay);
         app
     }
@@ -2823,21 +2816,21 @@ mod tests {
     }
 
     #[test]
-    fn 정찰도구를_보유하면_위험타일에_오버레이가_생긴다() {
+    fn 정찰도구를_착용하면_위험타일에_오버레이가_생긴다() {
         let map = open_map(20, 20);
         let mut app = overlay_app(map, true);
         spawn_guard_for_overlay(&mut app, (5, 5), IVec2::new(1, 0), 6);
         app.update();
-        assert!(overlay_count(&mut app) > 0, "정찰 도구 보유 시 위험 타일 오버레이가 스폰되어야 한다");
+        assert!(overlay_count(&mut app) > 0, "정찰 도구 착용 시 위험 타일 오버레이가 스폰되어야 한다");
     }
 
     #[test]
-    fn 정찰도구가_없으면_오버레이가_생기지_않는다() {
+    fn 정찰도구를_미착용하면_오버레이가_생기지_않는다() {
         let map = open_map(20, 20);
         let mut app = overlay_app(map, false);
         spawn_guard_for_overlay(&mut app, (5, 5), IVec2::new(1, 0), 6);
         app.update();
-        assert_eq!(overlay_count(&mut app), 0, "정찰 도구 미보유 시 오버레이가 없어야 한다");
+        assert_eq!(overlay_count(&mut app), 0, "정찰 도구 미착용 시 오버레이가 없어야 한다");
     }
 
     #[test]
@@ -2865,18 +2858,18 @@ mod tests {
     }
 
     #[test]
-    fn 정찰도구를_잃으면_기존_오버레이가_제거된다() {
-        // 보유 → 오버레이 생성, 미보유로 바뀌면 전부 제거.
+    fn 정찰도구를_해제하면_기존_오버레이가_제거된다() {
+        // 착용 → 오버레이 생성, 해제하면 전부 제거.
         let map = open_map(20, 20);
         let mut app = overlay_app(map.clone(), true);
         spawn_guard_for_overlay(&mut app, (5, 5), IVec2::new(1, 0), 6);
         app.update();
-        assert!(overlay_count(&mut app) > 0, "보유 시 오버레이 존재");
+        assert!(overlay_count(&mut app) > 0, "착용 시 오버레이 존재");
 
-        // 인벤토리에서 정찰 도구 제거.
-        app.world.resource_mut::<PlayerInventory>().items.clear();
+        // 액세서리 슬롯 해제.
+        app.world.resource_mut::<PlayerEquipment>().accessory = None;
         app.update();
-        assert_eq!(overlay_count(&mut app), 0, "정찰 도구를 잃으면 오버레이가 전부 제거된다");
+        assert_eq!(overlay_count(&mut app), 0, "정찰 도구를 해제하면 오버레이가 전부 제거된다");
     }
 
     #[test]
@@ -2894,10 +2887,10 @@ mod tests {
     }
 
     #[test]
-    fn 정찰도구_보유_판정은_인벤토리의_올빼미안경을_인식한다() {
-        let mut inv = PlayerInventory::default();
-        assert!(!player_has_scout_lens(&inv), "기본 인벤토리엔 정찰 도구가 없다");
-        inv.items.push(scout_lens_item());
-        assert!(player_has_scout_lens(&inv), "올빼미 안경을 넣으면 보유로 판정한다");
+    fn 정찰도구_착용_판정은_액세서리_슬롯의_올빼미안경을_인식한다() {
+        let mut eq = PlayerEquipment::default();
+        assert!(!player_has_scout_lens(&eq), "기본 장비엔 정찰 도구가 없다");
+        eq.accessory = Some(AccessoryKind(SCOUT_LENS_ID));
+        assert!(player_has_scout_lens(&eq), "올빼미 안경 착용 시 보유로 판정한다");
     }
 }

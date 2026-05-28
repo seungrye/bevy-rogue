@@ -59,10 +59,11 @@ QuestDef(
         "infiltrating": QuestPhaseDef(
             dialog: [
                 "아직 인장을 못 찾았소? 금고는 깊고, 추위는 더 깊지.",
+                "잊지 마시오 — 올빼미 안경은 액세서리 슬롯에 착용해야만 시야가 보이오.",
                 "경비병의 시선은 앞이 넓고 뒤가 좁다오. 등 뒤를 노리시오.",
                 "한 번이라도 들키면 값은 깎이오. 그래도 인장만 가져오면 거래는 성립이지.",
             ],
-            objective: Some("얼어붙은 금고에 들어가 스타크 가문 인장을 회수하라. 경비병에게 들키지 마라."),
+            objective: Some("올빼미 안경을 착용하고 얼어붙은 금고에 들어가 스타크 가문 인장을 회수하라. 경비병에게 들키지 마라."),
         ),
 
         // ── 3단계: 회수 완료, 상인에게 귀환 ─────────────────────
@@ -110,7 +111,7 @@ QuestDef(
             actions: [
                 ClearFlag("stealth_blown"),
                 GiveItem("scout_lens"),
-                Log("상인: 이 올빼미 안경을 끼시오. 경비병의 시선이 붉게 비쳐 보일 거요."),
+                Log("상인: 이 올빼미 안경을 액세서리 슬롯에 착용하시오. 착용해야만 경비병의 시선이 붉게 비쳐 보이오. 붉은 곳은 피하시오."),
                 OpenPortal(zone: "dreadfort_vault", generator: "bsp_indoor", placement: Border),
                 SpawnGuards(count: 6),
                 Log("상인: 포탈을 열어뒀소. 그림자 속으로 사라지시오."),
