@@ -113,7 +113,8 @@ QuestDef(
                 GiveItem("scout_lens"),
                 Log("상인: 이 올빼미 안경을 액세서리 슬롯에 착용하시오. 착용해야만 경비병의 시선이 붉게 비쳐 보이오. 붉은 곳은 피하시오."),
                 OpenPortal(zone: "dreadfort_vault", generator: "bsp_indoor", placement: Border),
-                SpawnGuards(count: 6),
+                // zone: 명시적 — 마을(Town) 에 즉시 깔리지 않고 금고 진입 시점에만 스폰.
+                SpawnGuards(count: 6, zone: Named("dreadfort_vault")),
                 Log("상인: 포탈을 열어뒀소. 그림자 속으로 사라지시오."),
             ],
             to: "infiltrating"),

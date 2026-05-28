@@ -80,8 +80,9 @@ QuestDef(
                 GiveItem("health_potion"),
                 Log("수렵단장: 이 회복약을 챙기게. 마룡의 한기에 버티려면 필요할 거야."),
                 OpenPortal(zone: "wyrm_lair", generator: "bsp", placement: Border),
-                SpawnMonster(id: "frost_wyrm", count: 1),
-                SpawnMonster(id: "troll", count: 2),
+                // zone: 명시적 — 마을(Town) 에 즉시 보스가 등장하지 않고 둥지 진입 시점에 스폰.
+                SpawnMonster(id: "frost_wyrm", count: 1, zone: Named("wyrm_lair")),
+                SpawnMonster(id: "troll",      count: 2, zone: Named("wyrm_lair")),
                 Log("수렵단장: 둥지로 가는 길을 열었네. 놈은 제 보물 위에서 자네를 기다릴 걸세."),
             ],
             to: "hunting"),

@@ -12,7 +12,7 @@ use crate::modules::{
     },
     player::{Player, MovingTo, MoveQueue, PlayerSystemSet, LERP_SPEED},
     ui::{LogMessage, minimap::{DiscoveredMarkers, MarkerKind}},
-    quest::{QuestRegistry, QuestState, QuestSystemSet, KillNpcEvent, DespawnWorldItemEvent, execute_actions, QuestDef, eval_condition},
+    quest::{QuestRegistry, QuestState, QuestSystemSet, KillNpcEvent, DespawnWorldItemEvent, execute_actions, QuestDef, eval_condition, DeferredZoneSpawns},
     monster::{SpawnGuardEvent, SpawnMonsterEvent},
     trap::SpawnTrapEvent,
     item::{PlayerInventory},
@@ -342,15 +342,35 @@ fn sync_occupied_tiles(
     }
 }
 
+/// 일반 villager 스폰을 허용하는 zone 인지 판정하는 순수 함수.
+///
+/// `ZoneId::Town` 만 허용한다. infiltration / dreadfort_vault 등 퀘스트가 동적으로
+/// 등록한 `ZoneId::Named` zone 은 walled_town/bsp_indoor 같은 Village 계열 생성기를
+/// 써서 `map_type == Village` 이지만 그곳에는 NPC(잠입 대상 가드만) 만 둬야 한다.
+/// Forest/Dungeon 등은 원래 `MapType::Dungeon` 이라 villager 가 안 깔리지만, 안전을
+/// 위해 zone 검사도 함께 적용한다.
+pub fn villager_spawn_allowed(zone: &crate::modules::zone::ZoneId) -> bool {
+    matches!(zone, crate::modules::zone::ZoneId::Town)
+}
+
 fn spawn_on_startup(
     mut commands: Commands,
     map_res: Res<crate::modules::map::MapResource>,
     asset_server: Res<AssetServer>,
     quest_registry: Res<QuestRegistry>,
     villager_registry: Res<VillagerRegistry>,
+    // `Option<Res<…>>` — WorldState 가 없는 단독 villager 테스트 호환 (None 이면
+    // 기존 동작 = 허용). 실제 게임은 ZonePlugin 이 WorldState 를 항상 등록한다.
+    world_state: Option<Res<crate::modules::zone::WorldState>>,
 ) {
     let map = map_res.map();
-    if map.map_type == MapType::Village {
+    // 시작 zone(Town)에서만 villager 스폰 — 단, WorldState 미등록 테스트에서는
+    // 기존 동작(map_type=Village 이면 무조건 스폰)을 유지.
+    let zone_allowed = world_state
+        .as_ref()
+        .map(|w| villager_spawn_allowed(&w.current))
+        .unwrap_or(true);
+    if map.map_type == MapType::Village && zone_allowed {
         do_spawn(&mut commands, &map.rooms.clone(), map.shop_vendor, &asset_server, &quest_registry, &villager_registry);
     }
 }
@@ -363,12 +383,19 @@ fn respawn_on_regen(
     quest_registry: Res<QuestRegistry>,
     villager_registry: Res<VillagerRegistry>,
     map_res: Res<crate::modules::map::MapResource>,
+    world_state: Option<Res<crate::modules::zone::WorldState>>,
 ) {
+    let zone_allowed = world_state
+        .as_ref()
+        .map(|w| villager_spawn_allowed(&w.current))
+        .unwrap_or(true);
     for event in events.read() {
         for entity in villager_query.iter() {
             commands.entity(entity).despawn();
         }
-        if event.map_type == MapType::Village {
+        // map_type=Village 라도 quest 전용 Named zone(infiltration/dreadfort_vault 등)
+        // 에는 villager 를 스폰하지 않는다 — 두 번째 가드(zone 화이트리스트) 적용.
+        if event.map_type == MapType::Village && zone_allowed {
             do_spawn(&mut commands, &event.rooms, map_res.map().shop_vendor, &asset_server, &quest_registry, &villager_registry);
         }
     }
@@ -498,8 +525,18 @@ fn handle_bump(
     mut shop_open: EventWriter<crate::modules::ui::shop::ShopOpenEvent>,
     quest_items: Res<crate::modules::item::QuestItemRegistry>,
     map_res: Res<crate::modules::map::MapResource>,
+    // `Option<ResMut>` — DeferredZoneSpawns 가 없는 단독 villager 테스트 호환.
+    // 실제 게임은 QuestPlugin 이 항상 등록한다. None 이면 임시 큐를 만들어 폐기.
+    mut deferred_opt: Option<ResMut<DeferredZoneSpawns>>,
 ) {
     let map = map_res.map();
+    // ResMut/None 분기를 한 곳에 합치는 어댑터: Some 이면 그쪽 큐를, None 이면
+    // 로컬 임시 큐를 가리키는 가변 참조를 만든다.
+    let mut fallback = DeferredZoneSpawns::default();
+    let deferred: &mut DeferredZoneSpawns = match deferred_opt.as_mut() {
+        Some(r) => r.as_mut(),
+        None => &mut fallback,
+    };
     // vendor 들의 현재 타일 집합 — 카운터 너머 보정에 사용.
     let vendor_tiles: HashSet<(usize, usize)> = villager_query.iter()
         .filter(|v| v.vendor)
@@ -533,7 +570,7 @@ fn handle_bump(
             if quest_active {
                 // vendor 여부와 무관하게 퀘스트가 끝나기 전엔 퀘스트 대화 우선 — 핵심 수정.
                 let qid = giver.as_ref().unwrap().0.clone();
-                show_quest_dialog(&mut villager, &qid, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut writers, &quest_items);
+                show_quest_dialog(&mut villager, &qid, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut writers, &quest_items, deferred);
                 // QuestGiver 마커는 discover_quest_npcs_in_fov 가 quest 상태에 따라 자동 갱신
             } else if villager.vendor {
                 // 순수 vendor, 또는 퀘스트가 종료된 vendor-giver → 상점.
@@ -541,7 +578,7 @@ fn handle_bump(
             } else if let Some((qid, _)) = giver.as_ref() {
                 // 비-vendor giver 가 종료된 경우: 종료 페이즈 대화 유지(회귀 방지).
                 let qid = qid.clone();
-                show_quest_dialog(&mut villager, &qid, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut writers, &quest_items);
+                show_quest_dialog(&mut villager, &qid, &registry, &mut quest_state, &mut inventory, &mut log_writer, &world_state, &mut writers, &quest_items, deferred);
             } else if !villager.dialogues.is_empty() {
                 let msg = villager.dialogues[villager.dialogue_idx].clone();
                 log_writer.send(LogMessage(msg));
@@ -553,6 +590,7 @@ fn handle_bump(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn show_quest_dialog(
     villager: &mut Villager,
     quest_id: &str,
@@ -563,6 +601,7 @@ fn show_quest_dialog(
     world: &WorldState,
     writers: &mut QuestActionWriters,
     quest_items: &crate::modules::item::QuestItemRegistry,
+    deferred: &mut DeferredZoneSpawns,
 ) {
     // 폭발 등 위치 기반 액션의 트리거 위치 — 상호작용 대상 NPC 좌표.
     let trigger_pos = (villager.tile_x, villager.tile_y);
@@ -605,7 +644,7 @@ fn show_quest_dialog(
                 &t.actions, quest_id, trigger_pos, state, inventory, log,
                 &mut writers.kill_npc, &mut writers.open_portal, &mut writers.close_portal,
                 &mut writers.despawn_item, &mut writers.spawn_guards, &mut writers.spawn_monster,
-                &mut writers.explode, &mut writers.place_traps, quest_items,
+                &mut writers.explode, &mut writers.place_traps, quest_items, deferred,
             );
             if t.to != phase_id {
                 state.set_phase(quest_id, &t.to);
@@ -2624,14 +2663,17 @@ mod tests {
         quest_items: &crate::modules::item::QuestItemRegistry,
     ) {
         use bevy::ecs::system::SystemState;
+        // 하네스 — deferred 큐는 매 호출마다 새로 만들어 시그니처에만 맞춘다.
+        // (테스트는 즉시 발행 경로만 검증하므로 deferred 큐 결과는 무시.)
         let mut ss: SystemState<(
             EventWriter<LogMessage>,
             QuestActionWriters,
         )> = SystemState::new(&mut app.world);
         let (mut log, mut writers) = ss.get_mut(&mut app.world);
+        let mut deferred = DeferredZoneSpawns::default();
         show_quest_dialog(
             villager, quest_id, registry, state, inventory, &mut log, world,
-            &mut writers, quest_items,
+            &mut writers, quest_items, &mut deferred,
         );
         ss.apply(&mut app.world);
     }
@@ -3029,6 +3071,74 @@ mod tests {
         let (glyph, color) = quest_npc_glyph("wq", &def, &state, &inv, &world, Color::WHITE, qi());
         assert_eq!(glyph, "?", "Auto self-loop 만 있으면 진행 중 '?'");
         assert_eq!(color, Color::rgb(0.3, 1.0, 0.6));
+    }
+
+    // ── villager_spawn_allowed (zone 화이트리스트) ───────────────────────────
+
+    #[test]
+    fn villager_스폰허용_zone은_Town뿐이다() {
+        use crate::modules::zone::ZoneId;
+        assert!(villager_spawn_allowed(&ZoneId::Town), "Town 은 허용");
+        assert!(!villager_spawn_allowed(&ZoneId::Forest), "Forest 는 불허");
+        assert!(!villager_spawn_allowed(&ZoneId::Dungeon(1)), "Dungeon 은 불허");
+        assert!(!villager_spawn_allowed(&ZoneId::Named("infiltration".into())),
+            "Named quest zone(잠입구역)은 불허 — 빌리저 자동 스폰 금지");
+        assert!(!villager_spawn_allowed(&ZoneId::Named("dreadfort_vault".into())),
+            "Named quest zone(금고)도 불허");
+    }
+
+    #[test]
+    fn 마을재생성이면서_Town_zone이면_주민이_스폰된다() {
+        // Town zone + map_type=Village 의 정상 경로 — 가드 무조건 통과.
+        let mut app = regen_app();
+        app.insert_resource(crate::modules::zone::WorldState::default()); // 기본 = Town
+        app.world.send_event(VillagerRespawnEvent {
+            map_type: MapType::Village,
+            rooms: rooms_with(1),
+        });
+        app.update();
+        let count = app.world.query::<&Villager>().iter(&app.world).count();
+        assert!(count >= 1, "Town zone + Village 맵이면 한 명 이상 스폰: {}", count);
+    }
+
+    #[test]
+    fn 마을재생성이지만_Named_quest_zone이면_빌리저는_스폰되지_않는다() {
+        // 잠입구역(Named) 진입 시 walled_town 으로 map_type=Village 이지만
+        // zone 가드(villager_spawn_allowed)가 false → 빌리저 스폰 X.
+        use crate::modules::zone::{WorldState, ZoneId};
+        let mut app = regen_app();
+        let mut world = WorldState::default();
+        world.current = ZoneId::Named("infiltration".into());
+        app.insert_resource(world);
+        app.world.send_event(VillagerRespawnEvent {
+            map_type: MapType::Village,
+            rooms: rooms_with(1),
+        });
+        app.update();
+        let count = app.world.query::<&Villager>().iter(&app.world).count();
+        assert_eq!(count, 0, "Named quest zone 에서는 일반 빌리저 자동 스폰 X");
+    }
+
+    #[test]
+    fn 시작스폰이_Named_quest_zone이면_빌리저는_스폰되지_않는다() {
+        // Startup 분기 — spawn_on_startup 도 같은 zone 화이트리스트를 따른다.
+        use crate::modules::zone::{WorldState, ZoneId};
+        let mut app = asset_app();
+        let mut map = full_floor_map();
+        map.map_type = MapType::Village;
+        map.rooms = rooms_with(2);
+        app.insert_resource(MapResource(map));
+        app.insert_resource(QuestRegistry::default());
+        let mut vreg = VillagerRegistry::default();
+        vreg.villagers.push(vdef("a", "갑"));
+        app.insert_resource(vreg);
+        let mut world = WorldState::default();
+        world.current = ZoneId::Named("infiltration".into());
+        app.insert_resource(world);
+        app.add_systems(Update, spawn_on_startup);
+        app.update();
+        let count = app.world.query::<&Villager>().iter(&app.world).count();
+        assert_eq!(count, 0, "Named quest zone 으로 시작해도 빌리저 스폰 X");
     }
 }
 

@@ -83,38 +83,126 @@ fn 탐지반경_보정은_0_밑으로_내려가지_않는다() {
 #[test]
 fn 미탐험_타일은_색을_정하지_않는다() {
     let base = tile_base_color(TileKind::Floor);
-    assert_eq!(tile_render_color(base, false, false, LightLevel::Bright), None);
+    // distance 인자(d=0 / d=5)와 무관하게 미탐험은 항상 None.
+    assert_eq!(tile_render_color(base, false, false, LightLevel::Bright, 0), None);
+    assert_eq!(tile_render_color(base, false, false, LightLevel::Bright, 5), None);
 }
 
 #[test]
-fn 탐험만_된_타일은_광량과_무관하게_0_3배로_디밍된다() {
+fn 탐험만_된_타일은_광량과_거리와_무관하게_0_3배로_디밍된다() {
     let base = Color::rgb(1.0, 1.0, 1.0);
-    let dark = tile_render_color(base, false, true, LightLevel::Dark).unwrap();
-    let bright = tile_render_color(base, false, true, LightLevel::Bright).unwrap();
-    // visible=false 면 광량 무관 — 두 결과가 같고 0.3 디밍.
+    let dark   = tile_render_color(base, false, true, LightLevel::Dark,   0).unwrap();
+    let bright = tile_render_color(base, false, true, LightLevel::Bright, 0).unwrap();
+    let far    = tile_render_color(base, false, true, LightLevel::Bright, 7).unwrap();
+    // visible=false 면 광량·거리 무관 — 세 결과가 같고 0.3 디밍.
     assert_eq!(dark, bright, "기억 타일은 광량과 무관");
+    assert_eq!(bright, far, "기억 타일은 거리와도 무관");
     assert!((dark.r() - 0.3).abs() < 1e-6, "기억 타일은 0.3 디밍");
 }
 
 #[test]
-fn 보이고_밝은_타일은_기본색_그대로다() {
+fn 보이고_밝은_타일은_거리1이면_기본색_그대로다() {
+    // d=1 → falloff 1.0 → 밝음 분기는 base 그대로.
     let base = tile_base_color(TileKind::Water);
-    assert_eq!(tile_render_color(base, true, true, LightLevel::Bright), Some(base));
+    assert_eq!(tile_render_color(base, true, true, LightLevel::Bright, 1), Some(base));
 }
 
 #[test]
-fn 보이지만_어두운_타일은_기본색보다_어둡게_디밍된다() {
+fn 보이지만_어두운_타일은_거리1이면_DARK_DIM_FACTOR로_디밍된다() {
+    // d=1 → falloff 1.0 → 어둠 분기는 base × DARK_DIM_FACTOR.
     let base = Color::rgb(1.0, 1.0, 1.0);
-    let dimmed = tile_render_color(base, true, true, LightLevel::Dark).unwrap();
-    assert!((dimmed.r() - DARK_DIM_FACTOR).abs() < 1e-6, "어둠은 DARK_DIM_FACTOR 디밍");
+    let dimmed = tile_render_color(base, true, true, LightLevel::Dark, 1).unwrap();
+    assert!((dimmed.r() - DARK_DIM_FACTOR).abs() < 1e-6, "어둠 d=1 은 DARK_DIM_FACTOR 디밍");
     assert!(dimmed.r() < base.r(), "어둠 타일은 기본색보다 어둡다");
 }
 
 #[test]
 fn 디밍은_알파값을_보존한다() {
     let base = Color::rgba(0.8, 0.6, 0.4, 0.5);
-    let dimmed = tile_render_color(base, true, true, LightLevel::Dark).unwrap();
+    let dimmed = tile_render_color(base, true, true, LightLevel::Dark, 1).unwrap();
     assert!((dimmed.a() - 0.5).abs() < 1e-6, "알파는 유지된다");
+}
+
+// ── distance_falloff_alpha / 시야 거리 감쇠 곡선 ──────────────────────────────
+
+#[test]
+fn 거리감쇠_d_1은_알파_1_0으로_완전한_밝기다() {
+    // 사용자 곡선: d=1 → 1.0 (100%).
+    assert!((distance_falloff_alpha(1) - 1.0).abs() < 1e-6);
+}
+
+#[test]
+fn 거리감쇠_d_2는_알파_0_5로_절반이다() {
+    // 1 / (1 + 1^3) = 0.5.
+    assert!((distance_falloff_alpha(2) - 0.5).abs() < 1e-6);
+}
+
+#[test]
+fn 거리감쇠_d_3은_알파_약_0_111이다() {
+    // 1 / (1 + 2^3) = 1/9 ≈ 0.1111.
+    let a = distance_falloff_alpha(3);
+    assert!((a - (1.0 / 9.0)).abs() < 1e-6, "d=3 은 1/9 ≈ 0.111");
+}
+
+#[test]
+fn 거리감쇠_d_0_이하는_방어적으로_알파_1_0이다() {
+    // 플레이어 자기 타일(d=0) 과 방어적 음수 입력.
+    assert!((distance_falloff_alpha(0)  - 1.0).abs() < 1e-6, "d=0 은 1.0");
+    assert!((distance_falloff_alpha(-3) - 1.0).abs() < 1e-6, "음수 d 는 1.0");
+}
+
+#[test]
+fn 거리감쇠는_큰_거리에서_0에_수렴한다() {
+    // FOV_FRONT(8) 이상에서도 부드럽게 0 에 수렴.
+    let a8 = distance_falloff_alpha(8);
+    assert!(a8 > 0.0 && a8 < 0.01, "d=8 은 0 근처(0.003 수준)");
+    let a20 = distance_falloff_alpha(20);
+    assert!(a20 < a8, "거리가 커질수록 더 작아진다");
+    assert!(a20 > 0.0, "여전히 양수");
+}
+
+#[test]
+fn 거리감쇠는_단조감소_한다() {
+    // d 가 커질수록 알파가 항상 감소(같음 포함).
+    let mut prev = distance_falloff_alpha(1);
+    for d in 2..=12 {
+        let cur = distance_falloff_alpha(d);
+        assert!(cur <= prev, "d={} 에서 단조감소 깨짐: {} > {}", d, cur, prev);
+        prev = cur;
+    }
+}
+
+// ── chebyshev_distance ────────────────────────────────────────────────────────
+
+#[test]
+fn 체비쇼프거리는_8방향_한걸음을_1로_본다() {
+    // 대각 한 칸도 1, 직선 한 칸도 1.
+    assert_eq!(chebyshev_distance((5, 5), (5, 5)), 0);
+    assert_eq!(chebyshev_distance((5, 5), (6, 5)), 1, "직선 1칸");
+    assert_eq!(chebyshev_distance((5, 5), (6, 6)), 1, "대각 1칸");
+    assert_eq!(chebyshev_distance((5, 5), (7, 8)), 3, "max(|dx|=2,|dy|=3)=3");
+}
+
+// ── tile_render_color × 거리 감쇠 통합 ────────────────────────────────────────
+
+#[test]
+fn 보이고_밝은_타일은_거리가_늘수록_더_어두워진다() {
+    let base = Color::rgb(1.0, 1.0, 1.0);
+    let r1 = tile_render_color(base, true, true, LightLevel::Bright, 1).unwrap().r();
+    let r2 = tile_render_color(base, true, true, LightLevel::Bright, 2).unwrap().r();
+    let r3 = tile_render_color(base, true, true, LightLevel::Bright, 3).unwrap().r();
+    assert!((r1 - 1.0).abs() < 1e-6);
+    assert!((r2 - 0.5).abs() < 1e-6, "d=2 → base × 0.5");
+    assert!((r3 - (1.0 / 9.0)).abs() < 1e-6, "d=3 → base × 1/9");
+}
+
+#[test]
+fn 보이는_어두운_타일도_거리_감쇠를_곱한다() {
+    // 어둠 디밍(0.5) 위에 거리 감쇠를 다시 곱한다.
+    let base = Color::rgb(1.0, 1.0, 1.0);
+    let r2 = tile_render_color(base, true, true, LightLevel::Dark, 2).unwrap().r();
+    let expected = DARK_DIM_FACTOR * 0.5; // 0.25
+    assert!((r2 - expected).abs() < 1e-6, "어둠 d=2: 0.5(DARK) × 0.5(falloff) = 0.25");
 }
 
 // ── compute_light_levels / LightMap ───────────────────────────────────────────
@@ -315,6 +403,48 @@ fn 디밍시스템은_이미_같은_색이면_재대입하지_않는다() {
     app.add_systems(Update, apply_light_dimming);
     app.update();
     assert_eq!(tile_color(&mut app), tile_base_color(TileKind::Floor), "같은 색이면 그대로");
+}
+
+#[test]
+fn 디밍시스템은_플레이어_거리에_따라_시야_안_타일을_더_어둡게_칠한다() {
+    // 3x1 맵 — 플레이어를 (0,0) 에, 타일은 (2,0) 한 칸만 검사한다.
+    // d = max(|2-0|, |0-0|) = 2 → falloff = 0.5. 밝음 분기는 base × 0.5.
+    let mut app = App::new();
+    let mut map = Map::new(3, 1);
+    for x in 0..3 {
+        map.set_tile(x, 0, TileKind::Floor);
+        map.tiles[x].visible = true;
+        map.tiles[x].revealed = true;
+    }
+    app.insert_resource(MapResource(map));
+    app.insert_resource(LightMap { width: 3, height: 1, levels: vec![LightLevel::Bright; 3] });
+    // 플레이어 (0,0) — Transform 으로 표현.
+    let p_coord = tile_to_world_coords(0, 0);
+    app.world.spawn((Player, Transform::from_xyz(p_coord.x, p_coord.y, 0.0)));
+    // 멀리 있는 타일(2,0) 만 엔티티로 검사.
+    app.world.spawn((
+        Text::from_section("x", TextStyle { color: Color::rgb(0.0, 0.0, 0.0), ..default() }),
+        Visibility::Visible,
+        TileEntity { x: 2, y: 0 },
+    ));
+    app.add_systems(Update, apply_light_dimming);
+    app.update();
+
+    let got = app.world.query::<&Text>().single(&app.world).sections[0].style.color;
+    let base = tile_base_color(TileKind::Floor);
+    // d=2 → falloff 0.5 → 각 채널 × 0.5.
+    assert!((got.r() - base.r() * 0.5).abs() < 1e-6, "d=2 에서 R 채널은 base × 0.5");
+    assert!((got.g() - base.g() * 0.5).abs() < 1e-6, "G 채널도 동일");
+    assert!((got.b() - base.b() * 0.5).abs() < 1e-6, "B 채널도 동일");
+}
+
+#[test]
+fn 디밍시스템은_플레이어가_없으면_거리_감쇠_없이_그린다() {
+    // 플레이어 엔티티가 없으면 None → 거리 0 으로 보아 falloff 1.0 (기존 동작).
+    let mut app = dimming_app(true, true, LightLevel::Bright, Visibility::Visible);
+    app.update();
+    assert_eq!(tile_color(&mut app), tile_base_color(TileKind::Floor),
+        "플레이어 없을 때는 falloff 1.0 — 기존 동작 보존");
 }
 
 #[test]

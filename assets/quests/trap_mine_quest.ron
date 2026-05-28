@@ -90,8 +90,9 @@ QuestDef(
                 GiveItems(item: "trap_kit", count: 3),
                 Log("농부: 함정 키트도 세 개 넣었네. T 키로 자네만의 함정을 깔 수 있지. 길목을 막을 때 쓰게."),
                 OpenPortal(zone: "trap_mine", generator: "dla", placement: Border),
-                PlaceTraps(kind: Spike, count: 6, hidden: true),
-                PlaceTraps(kind: Poison, count: 4, hidden: true),
+                // zone: 명시적 — 마을(Town) 에 즉시 함정 깔리지 않고 폐갱 진입 시점에만 배치.
+                PlaceTraps(kind: Spike, count: 6, hidden: true, zone: Named("trap_mine")),
+                PlaceTraps(kind: Poison, count: 4, hidden: true, zone: Named("trap_mine")),
                 Log("농부: 포탈을 열어뒀네. 조심해서 들어가게. 한 발 한 발 살피면서!"),
             ],
             to: "delving"),

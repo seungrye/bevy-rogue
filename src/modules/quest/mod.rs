@@ -113,16 +113,30 @@ pub enum QuestAction {
     GiveItems { item: String, count: u32 },
     /// 월드에 놓인 아이템 엔티티를 즉시 제거한다 (인벤토리는 건들지 않음)
     DespawnWorldItem(String),
-    /// 현재 맵에 가드를 `count` 마리 스폰한다 (잠입 구역 경비).
+    /// 가드를 `count` 마리 스폰한다 (잠입 구역 경비).
+    /// `zone` 지정 시 — 해당 zone 진입 시점까지 deferred 큐에 보류했다가 진입 시 스폰.
+    /// `zone` 미지정(None) — 기존 동작(현재 맵에 즉시 스폰).
     /// monster 모듈의 `SpawnGuardEvent` 를 발행해 실제 스폰을 위임한다.
-    SpawnGuards { count: u32 },
-    /// 현재 맵에 특정 MonsterDef(`id`) 를 `count` 마리 스폰한다 (보스/퀘스트 전용).
+    SpawnGuards {
+        count: u32,
+        /// 스폰할 대상 zone. None 이면 현재 맵에 즉시 스폰(기존 동작).
+        #[serde(default)]
+        zone: Option<ZoneId>,
+    },
+    /// 특정 MonsterDef(`id`) 를 `count` 마리 스폰한다 (보스/퀘스트 전용).
+    /// `zone` 지정 시 deferred, 미지정 시 즉시 — `SpawnGuards` 와 동일 의미.
     /// monster 모듈의 `SpawnMonsterEvent` 를 발행해 실제 스폰을 위임한다.
-    SpawnMonster { id: String, count: u32 },
+    SpawnMonster {
+        id: String,
+        count: u32,
+        #[serde(default)]
+        zone: Option<ZoneId>,
+    },
     /// 트리거 위치(플레이어/NPC 좌표) 기준으로 폭발을 일으킨다.
     /// map 모듈의 `ExplosionEvent` 를 발행해 지형 파괴·엔티티 피해를 위임한다.
     Explode { radius: i32, terrain: bool, entity_damage: i32 },
-    /// 현재 맵에 함정을 `count` 개 배치한다 (잠입 구역의 경보 함정 등).
+    /// 함정을 `count` 개 배치한다 (잠입 구역의 경보 함정 등).
+    /// `zone` 지정 시 deferred, 미지정 시 즉시 — `SpawnGuards` 와 동일 의미.
     /// trap 모듈의 `SpawnTrapEvent` 를 발행해 실제 배치를 위임한다.
     /// `hidden` 미지정 시 숨김(true) 함정으로 둔다.
     PlaceTraps {
@@ -130,6 +144,8 @@ pub enum QuestAction {
         count: u32,
         #[serde(default = "default_trap_hidden")]
         hidden: bool,
+        #[serde(default)]
+        zone: Option<ZoneId>,
     },
 }
 
@@ -271,6 +287,43 @@ impl QuestState {
     }
 }
 
+// ── Deferred zone spawn queue ────────────────────────────────────────────────
+
+/// 특정 zone 으로 미뤄둔 spawn 요청. `QuestAction::SpawnGuards/SpawnMonster/PlaceTraps`
+/// 의 `zone` 인자가 `Some(z)` 일 때 실제 발행 대신 큐에 쌓아두고, 플레이어가 그
+/// zone 에 진입할 때 큐를 비우며 일괄 발행한다.
+///
+/// 의도: '그림자 속의 회수' 같은 잠입 퀘스트가 마을(Town) 에서 수락되더라도
+/// 가드·함정·보스가 그 즉시 마을에 깔리지 않고, target zone(Named) 진입 시점에만
+/// 깔리도록 한다. RON 의 zone 미지정(None)은 기존 동작(현재 맵에 즉시 발행)을 유지.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum DeferredSpawn {
+    Guards { count: u32 },
+    Monster { id: String, count: u32 },
+    Traps { kind: crate::modules::trap::TrapKind, count: u32, hidden: bool },
+}
+
+/// zone → 그 zone 에 진입 시 발행할 spawn 큐. zone 진입 시 큐를 비운다.
+/// `#[serde(default)]` 로 기존 세이브와 호환(legacy 세이브 = 빈 맵).
+#[derive(Resource, Default, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DeferredZoneSpawns {
+    #[serde(default)]
+    pub queue: HashMap<ZoneId, Vec<DeferredSpawn>>,
+}
+
+impl DeferredZoneSpawns {
+    /// 한 zone 큐에 spawn 한 건을 보탠다.
+    pub fn enqueue(&mut self, zone: ZoneId, spawn: DeferredSpawn) {
+        self.queue.entry(zone).or_default().push(spawn);
+    }
+
+    /// 한 zone 의 큐를 비우며 보유 항목을 가져온다. zone 진입 시 시스템이 호출.
+    /// 큐가 비어 있으면 빈 Vec 을 반환한다 (조회는 부작용 없음).
+    pub fn drain(&mut self, zone: &ZoneId) -> Vec<DeferredSpawn> {
+        self.queue.remove(zone).unwrap_or_default()
+    }
+}
+
 // ── Plugin ───────────────────────────────────────────────────────────────────
 
 pub struct QuestPlugin;
@@ -279,6 +332,7 @@ impl Plugin for QuestPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<QuestRegistry>()
             .init_resource::<QuestState>()
+            .init_resource::<DeferredZoneSpawns>()
             .add_event::<KillNpcEvent>()
             .add_event::<DespawnWorldItemEvent>()
             // monster 모듈이 발행하는 이벤트 — MonsterPlugin 도 등록하지만
@@ -300,7 +354,50 @@ impl Plugin for QuestPlugin {
                 // 같은 frame 에 ordering 없이 실행되면 옛 map 의 rooms/tiles 를 보고
                 // 좌표를 골라 새 map 에서 wall 위에 spawn 되는 race condition 발생.
                 spawn_quest_items.after(crate::modules::map::MapSystemSet::ExecuteRegen),
+                // deferred 큐: 새 맵 적용 후 진입한 zone 큐를 비우고 실제 spawn 이벤트 발행.
+                drain_deferred_zone_spawns
+                    .after(crate::modules::map::MapSystemSet::ExecuteRegen),
             ));
+    }
+}
+
+/// 새 맵이 적용된 직후, 도착한 zone(WorldState.current) 의 deferred spawn 큐를
+/// 비우며 실제 `SpawnGuardEvent`/`SpawnMonsterEvent`/`SpawnTrapEvent` 를 발행한다.
+///
+/// 트리거: `ApplyMapEvent` 가 새 `MapResource` 를 삽입한 다음 프레임(또는 같은
+/// 프레임 내 ExecuteRegen 이후). `MapResource::is_changed()` 로 한 번만 동작.
+/// zone 큐가 비어 있으면 no-op.
+///
+/// 결과: 잠입 퀘스트가 마을에서 수락되면 가드·함정·보스 spawn 이 target zone
+/// (Named) 진입 시점까지 보류됐다가 그 zone 에 들어오는 순간 한꺼번에 발행된다.
+fn drain_deferred_zone_spawns(
+    map_res: Res<MapResource>,
+    world_state: Res<crate::modules::zone::WorldState>,
+    mut deferred: ResMut<DeferredZoneSpawns>,
+    mut spawn_guards: EventWriter<SpawnGuardEvent>,
+    mut spawn_monster: EventWriter<SpawnMonsterEvent>,
+    mut place_traps: EventWriter<SpawnTrapEvent>,
+) {
+    // 맵이 막 갱신된 프레임만 처리 — 같은 zone 안에서 매 프레임 중복 발행 방지.
+    if !map_res.is_changed() { return; }
+    let zone = &world_state.current;
+    let drained = deferred.drain(zone);
+    if drained.is_empty() { return; }
+    for spawn in drained {
+        match spawn {
+            DeferredSpawn::Guards { count } => {
+                spawn_guards.send(SpawnGuardEvent { count });
+                info!("deferred 가드 스폰 발행 ({:?}, {}마리)", zone, count);
+            }
+            DeferredSpawn::Monster { id, count } => {
+                info!("deferred 몬스터 스폰 발행 ({:?}, {} {}마리)", zone, id, count);
+                spawn_monster.send(SpawnMonsterEvent { id, count });
+            }
+            DeferredSpawn::Traps { kind, count, hidden } => {
+                place_traps.send(SpawnTrapEvent { kind, count, hidden });
+                info!("deferred 함정 배치 발행 ({:?}, {:?} {}개)", zone, kind, count);
+            }
+        }
     }
 }
 
@@ -674,6 +771,7 @@ fn check_auto_advance(
 
 // ── 퀘스트 액션 실행 (빌리저 시스템에서 호출) ────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 pub fn execute_actions(
     actions: &[QuestAction],
     quest_id: &str,
@@ -690,6 +788,7 @@ pub fn execute_actions(
     explode: &mut EventWriter<ExplosionEvent>,
     place_traps: &mut EventWriter<SpawnTrapEvent>,
     quest_items: &crate::modules::item::QuestItemRegistry,
+    deferred: &mut DeferredZoneSpawns,
 ) {
     for action in actions {
         match action {
@@ -760,13 +859,26 @@ pub fn execute_actions(
                 despawn_item.send(DespawnWorldItemEvent(item_id.clone()));
                 info!("월드 아이템 제거: {}", item_id);
             }
-            QuestAction::SpawnGuards { count } => {
-                spawn_guards.send(SpawnGuardEvent { count: *count });
-                info!("가드 스폰 요청: {}마리", count);
+            QuestAction::SpawnGuards { count, zone } => {
+                if let Some(target) = zone {
+                    deferred.enqueue(target.clone(), DeferredSpawn::Guards { count: *count });
+                    info!("가드 스폰 deferred → {:?}: {}마리", target, count);
+                } else {
+                    spawn_guards.send(SpawnGuardEvent { count: *count });
+                    info!("가드 스폰 요청(즉시): {}마리", count);
+                }
             }
-            QuestAction::SpawnMonster { id, count } => {
-                spawn_monster.send(SpawnMonsterEvent { id: id.clone(), count: *count });
-                info!("몬스터 스폰 요청: {} {}마리", id, count);
+            QuestAction::SpawnMonster { id, count, zone } => {
+                if let Some(target) = zone {
+                    deferred.enqueue(
+                        target.clone(),
+                        DeferredSpawn::Monster { id: id.clone(), count: *count },
+                    );
+                    info!("몬스터 스폰 deferred → {:?}: {} {}마리", target, id, count);
+                } else {
+                    spawn_monster.send(SpawnMonsterEvent { id: id.clone(), count: *count });
+                    info!("몬스터 스폰 요청(즉시): {} {}마리", id, count);
+                }
             }
             QuestAction::Explode { radius, terrain, entity_damage } => {
                 explode.send(ExplosionEvent {
@@ -780,9 +892,20 @@ pub fn execute_actions(
                     trigger_pos, radius, terrain, entity_damage
                 );
             }
-            QuestAction::PlaceTraps { kind, count, hidden } => {
-                place_traps.send(SpawnTrapEvent { kind: *kind, count: *count, hidden: *hidden });
-                info!("함정 배치 요청: {:?} {}개 (숨김 {})", kind, count, hidden);
+            QuestAction::PlaceTraps { kind, count, hidden, zone } => {
+                if let Some(target) = zone {
+                    deferred.enqueue(
+                        target.clone(),
+                        DeferredSpawn::Traps { kind: *kind, count: *count, hidden: *hidden },
+                    );
+                    info!(
+                        "함정 배치 deferred → {:?}: {:?} {}개 (숨김 {})",
+                        target, kind, count, hidden,
+                    );
+                } else {
+                    place_traps.send(SpawnTrapEvent { kind: *kind, count: *count, hidden: *hidden });
+                    info!("함정 배치 요청(즉시): {:?} {}개 (숨김 {})", kind, count, hidden);
+                }
             }
         }
     }
@@ -1977,6 +2100,7 @@ mod tests {
         trigger_pos: (usize, usize),
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run_execute_actions_system(
         input: Res<ActionInput>,
         mut state: ResMut<QuestState>,
@@ -1991,12 +2115,13 @@ mod tests {
         mut explode: EventWriter<ExplosionEvent>,
         mut place_traps: EventWriter<SpawnTrapEvent>,
         quest_items: Res<crate::modules::item::QuestItemRegistry>,
+        mut deferred: ResMut<DeferredZoneSpawns>,
     ) {
         execute_actions(
             &input.actions, &input.quest_id, input.trigger_pos, &mut state, &mut inventory,
             &mut log, &mut kill_npc, &mut open_portal, &mut close_portal,
             &mut despawn_item, &mut spawn_guards, &mut spawn_monster, &mut explode,
-            &mut place_traps, &quest_items,
+            &mut place_traps, &quest_items, &mut deferred,
         );
     }
 
@@ -2006,6 +2131,7 @@ mod tests {
         app.insert_resource(crate::modules::item::build_test_registry())
             .insert_resource(QuestState::default())
             .insert_resource(PlayerInventory::default())
+            .insert_resource(DeferredZoneSpawns::default())
             .insert_resource(ActionInput { actions, quest_id: "q".into(), trigger_pos: (5, 5) })
             .add_event::<crate::modules::ui::LogMessage>()
             .add_event::<KillNpcEvent>()
@@ -2153,19 +2279,40 @@ mod tests {
     }
 
     #[test]
-    fn SpawnGuards액션은_요청한_마릿수로_가드스폰_이벤트를_발행한다() {
-        let mut app = execute_actions_app(vec![QuestAction::SpawnGuards { count: 3 }]);
+    fn SpawnGuards액션은_zone_미지정시_즉시_가드스폰_이벤트를_발행한다() {
+        let mut app = execute_actions_app(vec![QuestAction::SpawnGuards { count: 3, zone: None }]);
         app.update();
         let events = app.world.resource::<Events<SpawnGuardEvent>>();
         let mut cursor = events.get_reader();
         let counts: Vec<u32> = cursor.read(events).map(|e| e.count).collect();
-        assert_eq!(counts, vec![3], "한 번의 SpawnGuardEvent 에 count=3");
+        assert_eq!(counts, vec![3], "zone 없으면 즉시 SpawnGuardEvent count=3");
+        // deferred 큐는 비어 있어야 한다(즉시 발행).
+        assert!(app.world.resource::<DeferredZoneSpawns>().queue.is_empty(),
+            "zone 미지정 시 deferred 큐 비어 있음");
+    }
+
+    #[test]
+    fn SpawnGuards액션은_zone_지정시_즉시발행_없이_deferred_큐에만_쌓인다() {
+        let zone = ZoneId::Named("infiltration".into());
+        let mut app = execute_actions_app(vec![QuestAction::SpawnGuards {
+            count: 5, zone: Some(zone.clone()),
+        }]);
+        app.update();
+        // SpawnGuardEvent 는 발행되면 안 된다 — deferred 큐에만 들어간다.
+        let events = app.world.resource::<Events<SpawnGuardEvent>>();
+        let mut cursor = events.get_reader();
+        let counts: Vec<u32> = cursor.read(events).map(|e| e.count).collect();
+        assert!(counts.is_empty(), "zone 지정 시 즉시 발행 X");
+        let deferred = app.world.resource::<DeferredZoneSpawns>();
+        let q = deferred.queue.get(&zone).expect("해당 zone 큐에 항목");
+        assert_eq!(q.len(), 1, "큐에 1개 항목");
+        assert!(matches!(q[0], DeferredSpawn::Guards { count: 5 }), "Guards(5) 항목");
     }
 
     #[test]
     fn SpawnMonster액션은_지정id와_마릿수로_몬스터스폰_이벤트를_발행한다() {
         let mut app = execute_actions_app(vec![QuestAction::SpawnMonster {
-            id: "dragon".into(), count: 2,
+            id: "dragon".into(), count: 2, zone: None,
         }]);
         app.update();
         let events = app.world.resource::<Events<SpawnMonsterEvent>>();
@@ -2176,10 +2323,25 @@ mod tests {
     }
 
     #[test]
+    fn SpawnMonster액션은_zone_지정시_deferred_큐에_쌓인다() {
+        let zone = ZoneId::Named("wyrm_lair".into());
+        let mut app = execute_actions_app(vec![QuestAction::SpawnMonster {
+            id: "frost_wyrm".into(), count: 1, zone: Some(zone.clone()),
+        }]);
+        app.update();
+        let events = app.world.resource::<Events<SpawnMonsterEvent>>();
+        let mut cursor = events.get_reader();
+        assert!(cursor.read(events).next().is_none(), "즉시 발행 X");
+        let q = &app.world.resource::<DeferredZoneSpawns>().queue[&zone];
+        assert!(matches!(&q[0],
+            DeferredSpawn::Monster { id, count: 1 } if id == "frost_wyrm"));
+    }
+
+    #[test]
     fn PlaceTraps액션은_지정종류와_개수로_함정스폰_이벤트를_발행한다() {
         use crate::modules::trap::TrapKind;
         let mut app = execute_actions_app(vec![QuestAction::PlaceTraps {
-            kind: TrapKind::Alarm, count: 4, hidden: true,
+            kind: TrapKind::Alarm, count: 4, hidden: true, zone: None,
         }]);
         app.update();
         let events = app.world.resource::<Events<SpawnTrapEvent>>();
@@ -2190,18 +2352,76 @@ mod tests {
     }
 
     #[test]
+    fn PlaceTraps액션은_zone_지정시_deferred_큐에_쌓인다() {
+        use crate::modules::trap::TrapKind;
+        let zone = ZoneId::Named("infiltration".into());
+        let mut app = execute_actions_app(vec![QuestAction::PlaceTraps {
+            kind: TrapKind::Alarm, count: 4, hidden: true, zone: Some(zone.clone()),
+        }]);
+        app.update();
+        let events = app.world.resource::<Events<SpawnTrapEvent>>();
+        let mut cursor = events.get_reader();
+        assert!(cursor.read(events).next().is_none(), "즉시 발행 X");
+        let q = &app.world.resource::<DeferredZoneSpawns>().queue[&zone];
+        assert!(matches!(&q[0],
+            DeferredSpawn::Traps { kind: TrapKind::Alarm, count: 4, hidden: true }));
+    }
+
+    #[test]
     fn PlaceTraps는_hidden_생략시_기본값_숨김으로_역직렬화된다() {
-        // RON 에 hidden 을 안 적으면 default_trap_hidden() == true.
+        // RON 에 hidden 을 안 적으면 default_trap_hidden() == true. zone 도 미지정.
         let ron = r#"PlaceTraps(kind: Spike, count: 2)"#;
         let action: QuestAction = ron::de::from_str(ron).expect("PlaceTraps 역직렬화");
         match action {
-            QuestAction::PlaceTraps { kind, count, hidden } => {
+            QuestAction::PlaceTraps { kind, count, hidden, zone } => {
                 assert_eq!(kind, crate::modules::trap::TrapKind::Spike);
                 assert_eq!(count, 2);
                 assert!(hidden, "hidden 생략 시 기본 숨김(true)");
+                assert!(zone.is_none(), "zone 생략 시 None — 기존 즉시 발행 동작 유지");
             }
             _ => panic!("PlaceTraps 로 파싱돼야 한다"),
         }
+    }
+
+    #[test]
+    fn SpawnGuards는_zone_생략시_None_으로_역직렬화된다() {
+        // 기존 RON 호환 — `SpawnGuards(count: 5)` 가 zone:None 으로 파싱.
+        let ron = r#"SpawnGuards(count: 5)"#;
+        let action: QuestAction = ron::de::from_str(ron).expect("SpawnGuards 역직렬화");
+        assert!(matches!(action, QuestAction::SpawnGuards { count: 5, zone: None }));
+    }
+
+    #[test]
+    fn SpawnMonster는_zone_생략시_None_으로_역직렬화된다() {
+        let ron = r#"SpawnMonster(id: "frost_wyrm", count: 1)"#;
+        let action: QuestAction = ron::de::from_str(ron).expect("SpawnMonster 역직렬화");
+        assert!(matches!(action,
+            QuestAction::SpawnMonster { id, count: 1, zone: None } if id == "frost_wyrm"));
+    }
+
+    #[test]
+    fn SpawnGuards는_zone_Some_지정을_RON에서_파싱한다() {
+        // implicit_some 없이 직접 작성: Some(Named("…")).
+        // 실제 quest RON 들은 `#![enable(implicit_some)]` 으로 Some 을 생략 가능.
+        let ron = r#"SpawnGuards(count: 5, zone: Some(Named("infiltration")))"#;
+        let action: QuestAction = ron::de::from_str(ron).expect("SpawnGuards(zone) 역직렬화");
+        match action {
+            QuestAction::SpawnGuards { count: 5, zone: Some(ZoneId::Named(n)) } => {
+                assert_eq!(n, "infiltration");
+            }
+            _ => panic!("zone:Some(Named) 로 파싱돼야 한다"),
+        }
+    }
+
+    #[test]
+    fn SpawnGuards는_implicit_some_지시자가_있으면_Some생략을_허용한다() {
+        // 실제 quest RON 파일과 동일한 방식 — 헤더에 implicit_some 활성화 시
+        // `zone: Named("…")` 로 Some 을 생략해도 Some(Named(…)) 로 파싱.
+        let ron = r#"#![enable(implicit_some)]
+SpawnGuards(count: 5, zone: Named("infiltration"))"#;
+        let action: QuestAction = ron::de::from_str(ron).expect("implicit_some 역직렬화");
+        assert!(matches!(action,
+            QuestAction::SpawnGuards { count: 5, zone: Some(ZoneId::Named(ref n)) } if n == "infiltration"));
     }
 
     #[test]
@@ -2650,7 +2870,7 @@ mod tests {
             )
         "#).expect("RON 파싱 성공");
         let actions = &def.transitions[0].actions;
-        assert!(matches!(&actions[0], QuestAction::SpawnGuards { count } if *count == 4));
+        assert!(matches!(&actions[0], QuestAction::SpawnGuards { count, .. } if *count == 4));
     }
 
     #[test]
@@ -2759,7 +2979,7 @@ mod tests {
             "수락 시 stealth_blown 플래그를 초기화해야 한다");
         assert!(t.actions.iter().any(|a| matches!(a, QuestAction::OpenPortal { zone, .. } if zone == "infiltration")),
             "수락 시 잠입구역 포탈을 열어야 한다");
-        assert!(t.actions.iter().any(|a| matches!(a, QuestAction::SpawnGuards { count } if (4..=6).contains(count))),
+        assert!(t.actions.iter().any(|a| matches!(a, QuestAction::SpawnGuards { count, .. } if (4..=6).contains(count))),
             "수락 시 가드 4~6마리를 스폰해야 한다");
     }
 
@@ -2857,7 +3077,7 @@ mod tests {
         // 첫 잠입 퀘스트(infiltration)와 다른 구역으로 포탈을 열어야 한다.
         assert!(t.actions.iter().any(|a| matches!(a, QuestAction::OpenPortal { zone, .. } if zone == "dreadfort_vault")),
             "수락 시 금고 구역 포탈을 열어야 한다");
-        assert!(t.actions.iter().any(|a| matches!(a, QuestAction::SpawnGuards { count } if (4..=6).contains(count))),
+        assert!(t.actions.iter().any(|a| matches!(a, QuestAction::SpawnGuards { count, .. } if (4..=6).contains(count))),
             "수락 시 가드 4~6마리를 스폰해야 한다");
     }
 
@@ -3020,13 +3240,13 @@ mod tests {
         // 숨김 가시 함정 다수 배치
         assert!(
             t.actions.iter().any(|a| matches!(a,
-                QuestAction::PlaceTraps { kind: TrapKind::Spike, count, hidden: true } if *count >= 1)),
+                QuestAction::PlaceTraps { kind: TrapKind::Spike, count, hidden: true, .. } if *count >= 1)),
             "수락 시 숨김 가시 함정을 배치해야 한다",
         );
         // 숨김 독 함정 다수 배치
         assert!(
             t.actions.iter().any(|a| matches!(a,
-                QuestAction::PlaceTraps { kind: TrapKind::Poison, count, hidden: true } if *count >= 1)),
+                QuestAction::PlaceTraps { kind: TrapKind::Poison, count, hidden: true, .. } if *count >= 1)),
             "수락 시 숨김 독 함정을 배치해야 한다",
         );
         // 폐갱 포탈 — 등록된 생성기(dla)로 연다.
@@ -3113,10 +3333,11 @@ mod tests {
     }
 
     #[test]
-    fn 함정공략퀘스트_수락전이의_PlaceTraps가_실제_함정스폰_이벤트로_실행된다() {
+    fn 함정공략퀘스트_수락전이의_PlaceTraps는_폐갱_zone_큐에_보류된다() {
         use crate::modules::trap::TrapKind;
-        // RON 의 수락 전이 액션을 그대로 execute_actions 로 실행해, PlaceTraps 가
-        // SpawnTrapEvent 로 발행되는지(가시/독 모두) end-to-end 로 확인한다.
+        // RON 의 PlaceTraps 에 zone: Named("trap_mine") 가 명시돼 있어 수락 시
+        // 즉시 SpawnTrapEvent 를 발행하지 않고 폐갱 zone deferred 큐에 들어간다.
+        // (마을에 함정 깔리는 버그 방지.)
         let def = load_trap_mine_quest();
         let t = def.transitions.iter()
             .find(|t| t.from == "not_started" && t.trigger == TriggerKind::Interact)
@@ -3124,17 +3345,22 @@ mod tests {
         let mut app = execute_actions_app(t.actions.clone());
         app.update();
 
+        // 즉시 발행되면 안 된다.
         let events = app.world.resource::<Events<SpawnTrapEvent>>();
         let mut cursor = events.get_reader();
-        let kinds: Vec<TrapKind> = cursor.read(events).map(|e| e.kind).collect();
-        assert!(kinds.contains(&TrapKind::Spike), "가시 함정 스폰 이벤트가 발행돼야 한다");
-        assert!(kinds.contains(&TrapKind::Poison), "독 함정 스폰 이벤트가 발행돼야 한다");
-        // 함정이 모두 숨김으로 배치되는지(역직렬화·전달 일관성) 확인.
-        let mut cursor2 = app.world.resource::<Events<SpawnTrapEvent>>().get_reader();
-        assert!(
-            cursor2.read(app.world.resource::<Events<SpawnTrapEvent>>()).all(|e| e.hidden),
-            "퀘스트가 깐 함정은 모두 숨김이어야 한다",
-        );
+        assert!(cursor.read(events).next().is_none(),
+            "zone 지정 PlaceTraps 는 즉시 발행 X (마을에 함정 금지)");
+
+        // 폐갱 큐에 가시·독 함정이 쌓이고 모두 숨김(true) 이어야 한다.
+        let zone = ZoneId::Named("trap_mine".into());
+        let queue = app.world.resource::<DeferredZoneSpawns>().queue.get(&zone)
+            .cloned().unwrap_or_default();
+        assert!(queue.iter().any(|s|
+            matches!(s, DeferredSpawn::Traps { kind: TrapKind::Spike, hidden: true, .. })),
+            "폐갱 큐에 숨김 가시 함정이 보류돼야 한다: {:?}", queue);
+        assert!(queue.iter().any(|s|
+            matches!(s, DeferredSpawn::Traps { kind: TrapKind::Poison, hidden: true, .. })),
+            "폐갱 큐에 숨김 독 함정이 보류돼야 한다: {:?}", queue);
     }
 
     // ── dragon_hunt_quest (보스 토벌 퀘스트) 콘텐츠 검증 ──────────────────────
@@ -3181,7 +3407,7 @@ mod tests {
         // 보스(frost_wyrm)를 둥지에 스폰해야 한다.
         assert!(
             t.actions.iter().any(|a| matches!(a,
-                QuestAction::SpawnMonster { id, count } if id == "frost_wyrm" && *count >= 1)),
+                QuestAction::SpawnMonster { id, count, .. } if id == "frost_wyrm" && *count >= 1)),
             "수락 시 보스 서리 마룡을 스폰해야 한다",
         );
         // 부하도 함께 스폰한다("보스 + 부하" 패턴).
@@ -3266,9 +3492,10 @@ mod tests {
     }
 
     #[test]
-    fn 보스토벌퀘스트_수락전이의_SpawnMonster가_실제_몬스터스폰_이벤트로_실행된다() {
-        // RON 의 수락 전이 액션을 그대로 execute_actions 로 실행해, SpawnMonster 가
-        // SpawnMonsterEvent 로 발행되는지 end-to-end 로 확인한다(보스 + 부하).
+    fn 보스토벌퀘스트_수락전이의_SpawnMonster는_둥지_zone_큐에_보류된다() {
+        // RON 의 SpawnMonster 에 zone: Named("wyrm_lair") 가 명시돼 있어
+        // 수락 시 즉시 SpawnMonsterEvent 를 발행하지 않고, 둥지 zone deferred 큐에 들어간다.
+        // (마을에 보스 등장 버그 방지.)
         let def = load_dragon_hunt_quest();
         let t = def.transitions.iter()
             .find(|t| t.from == "not_started" && t.trigger == TriggerKind::Interact)
@@ -3276,14 +3503,22 @@ mod tests {
         let mut app = execute_actions_app(t.actions.clone());
         app.update();
 
+        // 즉시 발행되면 안 된다 — zone 지정 spawn 은 deferred 경로로만.
         let events = app.world.resource::<Events<SpawnMonsterEvent>>();
         let mut cursor = events.get_reader();
-        let payloads: Vec<(String, u32)> = cursor.read(events)
-            .map(|e| (e.id.clone(), e.count)).collect();
-        assert!(payloads.iter().any(|(id, c)| id == "frost_wyrm" && *c == 1),
-            "보스 서리 마룡 1마리 스폰 이벤트가 발행돼야 한다: {:?}", payloads);
-        assert!(payloads.iter().any(|(id, _)| id == "troll"),
-            "부하 몬스터 스폰 이벤트도 발행돼야 한다: {:?}", payloads);
+        assert!(cursor.read(events).next().is_none(),
+            "zone 지정 SpawnMonster 는 즉시 발행 X (마을에 보스 등장 금지)");
+
+        // 둥지(wyrm_lair) 큐에 보스(서리 마룡) + 부하(트롤) 가 쌓여야 한다.
+        let zone = ZoneId::Named("wyrm_lair".into());
+        let queue = app.world.resource::<DeferredZoneSpawns>().queue.get(&zone)
+            .cloned().unwrap_or_default();
+        assert!(queue.iter().any(|s|
+            matches!(s, DeferredSpawn::Monster { id, count: 1 } if id == "frost_wyrm")),
+            "둥지 큐에 보스 서리 마룡 1마리가 보류돼야 한다: {:?}", queue);
+        assert!(queue.iter().any(|s|
+            matches!(s, DeferredSpawn::Monster { id, .. } if id == "troll")),
+            "둥지 큐에 트롤 부하도 보류돼야 한다: {:?}", queue);
     }
 
     #[test]
@@ -3724,5 +3959,106 @@ mod tests {
             .collect();
         assert_eq!(givers, vec!["loot_farming_quest"],
             "보물사냥꾼을 giver 로 쓰는 퀘스트는 loot_farming_quest 하나뿐이어야 한다");
+    }
+
+    // ── drain_deferred_zone_spawns (zone 진입 시 큐 비우기) ────────────────────
+
+    /// drain 시스템 단독 테스트 하네스 — MapResource(is_changed=true) + WorldState +
+    /// DeferredZoneSpawns + 3 종 spawn event 를 묶어 한 번 update 한다.
+    fn drain_app(current: ZoneId, deferred: DeferredZoneSpawns) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        // MapResource — drain 은 map_res.is_changed 만 보고 안의 값은 안 본다.
+        app.insert_resource(crate::modules::map::MapResource(
+            crate::modules::map::Map::new(1, 1)
+        ));
+        let mut world = crate::modules::zone::WorldState::default();
+        world.current = current;
+        app.insert_resource(world);
+        app.insert_resource(deferred);
+        app.add_event::<SpawnGuardEvent>()
+            .add_event::<SpawnMonsterEvent>()
+            .add_event::<SpawnTrapEvent>()
+            .add_systems(Update, drain_deferred_zone_spawns);
+        app
+    }
+
+    #[test]
+    fn drain시스템은_현재_zone_큐를_비우며_spawn_이벤트를_발행한다() {
+        let zone = ZoneId::Named("infiltration".into());
+        let mut def = DeferredZoneSpawns::default();
+        def.enqueue(zone.clone(), DeferredSpawn::Guards { count: 5 });
+        def.enqueue(zone.clone(),
+            DeferredSpawn::Traps { kind: crate::modules::trap::TrapKind::Alarm, count: 3, hidden: true });
+        let mut app = drain_app(zone.clone(), def);
+        app.update();
+
+        // SpawnGuardEvent: count=5
+        let ge = app.world.resource::<Events<SpawnGuardEvent>>();
+        let mut gr = ge.get_reader();
+        let counts: Vec<u32> = gr.read(ge).map(|e| e.count).collect();
+        assert_eq!(counts, vec![5], "큐의 가드 count=5 가 발행돼야 한다");
+
+        // SpawnTrapEvent: (Alarm, 3, true)
+        let te = app.world.resource::<Events<SpawnTrapEvent>>();
+        let mut tr = te.get_reader();
+        let traps: Vec<(crate::modules::trap::TrapKind, u32, bool)> = tr.read(te)
+            .map(|e| (e.kind, e.count, e.hidden)).collect();
+        assert_eq!(traps, vec![(crate::modules::trap::TrapKind::Alarm, 3, true)]);
+
+        // 큐가 비어야 한다 — 중복 발행 방지.
+        assert!(app.world.resource::<DeferredZoneSpawns>().queue.get(&zone).is_none(),
+            "drain 후 큐 비어야 한다");
+    }
+
+    #[test]
+    fn drain시스템은_다른_zone_큐는_건드리지_않는다() {
+        // 현재 zone 은 infiltration, 큐는 dreadfort_vault 만 있음 → 발행 X.
+        let here = ZoneId::Named("infiltration".into());
+        let other = ZoneId::Named("dreadfort_vault".into());
+        let mut def = DeferredZoneSpawns::default();
+        def.enqueue(other.clone(), DeferredSpawn::Guards { count: 6 });
+        let mut app = drain_app(here, def);
+        app.update();
+        let ge = app.world.resource::<Events<SpawnGuardEvent>>();
+        let mut gr = ge.get_reader();
+        assert!(gr.read(ge).next().is_none(), "현재 zone 이 아니면 발행 X");
+        // 다른 zone 큐는 보존돼야 한다 — 그 zone 에 진입할 때 비워야.
+        assert_eq!(app.world.resource::<DeferredZoneSpawns>().queue.get(&other)
+            .map(|v| v.len()).unwrap_or(0), 1, "다른 zone 큐 보존");
+    }
+
+    #[test]
+    fn drain시스템은_큐가_비어있으면_조용히_no_op한다() {
+        let mut app = drain_app(ZoneId::Town, DeferredZoneSpawns::default());
+        app.update();
+        let ge = app.world.resource::<Events<SpawnGuardEvent>>();
+        let mut gr = ge.get_reader();
+        assert!(gr.read(ge).next().is_none(), "큐 비면 발행 X");
+    }
+
+    #[test]
+    fn drain시스템은_몬스터_deferred도_발행한다() {
+        let zone = ZoneId::Named("wyrm_lair".into());
+        let mut def = DeferredZoneSpawns::default();
+        def.enqueue(zone.clone(), DeferredSpawn::Monster { id: "frost_wyrm".into(), count: 1 });
+        let mut app = drain_app(zone.clone(), def);
+        app.update();
+        let me = app.world.resource::<Events<SpawnMonsterEvent>>();
+        let mut mr = me.get_reader();
+        let payloads: Vec<(String, u32)> = mr.read(me)
+            .map(|e| (e.id.clone(), e.count)).collect();
+        assert_eq!(payloads, vec![("frost_wyrm".to_string(), 1)]);
+    }
+
+    #[test]
+    fn DeferredZoneSpawns_drain은_같은_zone_재호출시_빈vec를_반환한다() {
+        let mut q = DeferredZoneSpawns::default();
+        let z = ZoneId::Named("trap_mine".into());
+        q.enqueue(z.clone(), DeferredSpawn::Guards { count: 2 });
+        let first = q.drain(&z);
+        assert_eq!(first.len(), 1);
+        let second = q.drain(&z);
+        assert!(second.is_empty(), "두 번째 drain 은 빈 vec");
     }
 }

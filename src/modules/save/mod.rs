@@ -1,16 +1,34 @@
 use bevy::prelude::*;
+use bevy::ecs::system::SystemParam;
 use std::collections::HashMap;
 use crate::modules::{
     map::{Map, MapResource, MapGeneratorRegistry, MAP_WIDTH, MAP_HEIGHT, ApplyMapEvent, GlobalTurn, GlobalSeed},
     player::{Player, PlayerProgress},
     item::{PlayerInventory, PlayerEquipment},
-    quest::QuestState,
+    quest::{QuestState, DeferredZoneSpawns},
     zone::{WorldState, ZoneId, ZonePersistence, ZoneSnapshot, NamedZoneConfig, zone_seed},
     ui::minimap::DiscoveredMarkers,
     combat::{CombatStats, Defeated},
     combat_feedback::BloodStain,
     map::world_to_tile_coords,
 };
+
+/// 시스템 파라미터 16 개 한도를 넘지 않도록 quest 관련 (read-only) 리소스를 묶는다.
+/// auto_save 가 16 개 한도를 넘는 것을 피하기 위한 단순한 묶음 — 의미적 분리는 없다.
+#[derive(SystemParam)]
+struct SaveQuestParams<'w> {
+    state: Res<'w, QuestState>,
+    registry: Res<'w, crate::modules::quest::QuestRegistry>,
+    deferred: Res<'w, DeferredZoneSpawns>,
+}
+
+/// load_if_save_exists 가 ResMut 로 받아야 하는 quest 리소스 묶음.
+#[derive(SystemParam)]
+struct LoadQuestParams<'w> {
+    state: ResMut<'w, QuestState>,
+    registry: ResMut<'w, crate::modules::quest::QuestRegistry>,
+    deferred: ResMut<'w, DeferredZoneSpawns>,
+}
 
 pub mod backend;
 
@@ -139,6 +157,11 @@ pub struct SaveData {
     pub zone_persistence: HashMap<ZoneId, ZoneSnapshot>,
     pub discovered_markers: DiscoveredMarkers,
     pub named_zones: NamedZoneConfig,
+    /// zone 진입 시 발행할 deferred spawn 큐 — 잠입 퀘스트 수락 후 그 zone 에 들어가기
+    /// 전에 저장/로드해도 정상적으로 가드·함정·보스가 깔리도록 영속화.
+    /// `#[serde(default)]` 로 기존 세이브(이 필드 없는 데이터) 와 호환.
+    #[serde(default)]
+    pub deferred_zone_spawns: crate::modules::quest::DeferredZoneSpawns,
 }
 
 // ── Plugin ────────────────────────────────────────────────────────────────────
@@ -157,13 +180,13 @@ impl Plugin for SavePlugin {
 
 // ── 자동 저장 ─────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn auto_save(
     mut events: EventReader<crate::modules::map::PlayerActedEvent>,
     inventory: Res<PlayerInventory>,
     equipment: Res<PlayerEquipment>,
     progress: Res<PlayerProgress>,
-    quest_state: Res<QuestState>,
-    quest_registry: Res<crate::modules::quest::QuestRegistry>,
+    quest: SaveQuestParams,
     world_state: Res<WorldState>,
     persistence: Res<ZonePersistence>,
     markers: Res<DiscoveredMarkers>,
@@ -208,13 +231,14 @@ fn auto_save(
         player_progress: progress.clone(),
         inventory: inventory.clone(),
         equipment: equipment.clone(),
-        quest_state: quest_state.clone(),
-        active_quests: quest_registry.active.clone(),
+        quest_state: quest.state.clone(),
+        active_quests: quest.registry.active.clone(),
         current_zone: world_state.current.clone(),
         zone_revealed,
         zone_persistence,
         discovered_markers: markers.clone(),
         named_zones: named_config.clone(),
+        deferred_zone_spawns: quest.deferred.clone(),
     };
 
     write_save_with_backend(&save, &*backend::make_backend(&config));
@@ -290,12 +314,12 @@ fn get_algo(zone_id: &ZoneId, named_config: &NamedZoneConfig) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn load_if_save_exists(
     mut inventory: ResMut<PlayerInventory>,
     mut equipment: ResMut<PlayerEquipment>,
     mut progress: ResMut<PlayerProgress>,
-    mut quest_state: ResMut<QuestState>,
-    mut quest_registry: ResMut<crate::modules::quest::QuestRegistry>,
+    mut quest: LoadQuestParams,
     mut world_state: ResMut<WorldState>,
     mut persistence: ResMut<ZonePersistence>,
     mut markers: ResMut<DiscoveredMarkers>,
@@ -348,19 +372,20 @@ fn load_if_save_exists(
     }
 
     // 리소스 복원
-    *inventory    = save.inventory;
-    *equipment    = save.equipment;
-    *progress     = save.player_progress;
-    *quest_state  = save.quest_state;
+    *inventory       = save.inventory;
+    *equipment       = save.equipment;
+    *progress        = save.player_progress;
+    *quest.state     = save.quest_state;
     // 활성 퀘스트 복원 — load_quests 가 startup 에 spawn_chance 로 재롤한 값을 덮어쓴다.
     // saved 가 비어있으면(legacy 저장 데이터) 재롤한 값 그대로 둔다.
     if !save.active_quests.is_empty() {
-        quest_registry.active = save.active_quests;
+        quest.registry.active = save.active_quests;
     }
-    *persistence  = ZonePersistence(save.zone_persistence);
-    *markers      = save.discovered_markers;
-    global_turn.0 = save.global_turn;
-    global_seed.0 = save.global_seed;
+    *persistence     = ZonePersistence(save.zone_persistence);
+    *markers         = save.discovered_markers;
+    *quest.deferred  = save.deferred_zone_spawns;
+    global_turn.0    = save.global_turn;
+    global_seed.0    = save.global_seed;
 
     // 이전 방문 존 맵 재생성 후 캐시
     let zone_maps: HashMap<ZoneId, Map> = save.zone_revealed.iter()
@@ -449,6 +474,7 @@ mod tests {
             zone_persistence: HashMap::new(),
             discovered_markers: DiscoveredMarkers::default(),
             named_zones: NamedZoneConfig::default(),
+            deferred_zone_spawns: crate::modules::quest::DeferredZoneSpawns::default(),
         }
     }
 
@@ -508,6 +534,9 @@ mod tests {
         assert!(parsed.is_ok(), "legacy 저장 데이터 파싱 실패: {:?}", parsed.err());
         let s = parsed.unwrap();
         assert!(s.active_quests.is_empty());
+        // deferred_zone_spawns 필드가 없는 legacy 세이브도 #[serde(default)] 로 빈 큐.
+        assert!(s.deferred_zone_spawns.queue.is_empty(),
+            "deferred 필드 없는 legacy 세이브는 빈 큐로 복원");
     }
 
     #[test]
@@ -952,6 +981,7 @@ mod tests {
         app.insert_resource(PlayerProgress::default());
         app.insert_resource(QuestState::default());
         app.insert_resource(QuestRegistry::default());
+        app.insert_resource(DeferredZoneSpawns::default());
         app.insert_resource(WorldState::default());
         app.insert_resource(ZonePersistence::default());
         app.insert_resource(DiscoveredMarkers::default());
@@ -1032,6 +1062,7 @@ mod tests {
         app.insert_resource(PlayerProgress::default());
         app.insert_resource(QuestState::default());
         app.insert_resource(QuestRegistry::default());
+        app.insert_resource(DeferredZoneSpawns::default());
         app.insert_resource(WorldState::default());
         app.insert_resource(ZonePersistence::default());
         app.insert_resource(DiscoveredMarkers::default());
@@ -1131,6 +1162,42 @@ mod tests {
         let ev: Vec<_> = reader.read(events).collect();
         assert_eq!(ev.len(), 1, "맵 적용 이벤트가 하나 발행돼야 한다");
         assert_eq!(ev[0].spawn_pos, Some((2, 2)));
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn 세이브와_로드는_DeferredZoneSpawns_큐를_왕복으로_보존한다() {
+        // 잠입 퀘스트 수락 → 세이브 → 종료 → 로드 시나리오: deferred 큐가 살아남아야
+        // target zone 진입 시 가드·함정·보스가 정상 발행된다.
+        use crate::modules::quest::DeferredSpawn;
+        let path = 임시_경로("deferred");
+        let mut save = make_minimal_save();
+        let zone = ZoneId::Named("infiltration".into());
+        save.deferred_zone_spawns
+            .enqueue(zone.clone(), DeferredSpawn::Guards { count: 5 });
+        save.deferred_zone_spawns.enqueue(
+            zone.clone(),
+            DeferredSpawn::Traps {
+                kind: crate::modules::trap::TrapKind::Alarm,
+                count: 4,
+                hidden: true,
+            },
+        );
+        let content = ron::ser::to_string_pretty(&save, ron::ser::PrettyConfig::default()).unwrap();
+        std::fs::write(&path, content).unwrap();
+
+        let mut app = load_앱(SaveConfig { path: path.clone(), tmp: format!("{path}.tmp") });
+        app.world.spawn((Player, CombatStats { hp: 1, max_hp: 1, mp: 0, max_mp: 0, attack: 1, defense: 1 }));
+        app.update();
+
+        // 로드 후 DeferredZoneSpawns 리소스가 saved 값으로 복원돼야 한다.
+        let restored = app.world.resource::<DeferredZoneSpawns>();
+        let queue = restored.queue.get(&zone).cloned().unwrap_or_default();
+        assert_eq!(queue.len(), 2, "두 건이 보존돼야 한다: {:?}", queue);
+        assert!(queue.iter().any(|s| matches!(s, DeferredSpawn::Guards { count: 5 })));
+        assert!(queue.iter().any(|s|
+            matches!(s, DeferredSpawn::Traps { count: 4, hidden: true, .. })));
 
         std::fs::remove_file(&path).ok();
     }

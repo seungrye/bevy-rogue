@@ -28,7 +28,7 @@ pub fn player_has_trap_scope(equipment: &PlayerEquipment) -> bool {
 // ── 데이터 ───────────────────────────────────────────────────────────────────
 
 /// 함정의 종류. 각 종류는 발동 시 서로 다른 효과를 낸다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 pub enum TrapKind {
     /// 가시 함정 — 밟은 대상에게 즉시 피해.
     Spike,

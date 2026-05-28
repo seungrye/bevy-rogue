@@ -83,29 +83,62 @@ pub fn effective_vision_radius(base: i32, player_light: LightLevel) -> i32 {
     }
 }
 
-/// 가시성(visible/revealed)과 광량을 함께 받아 타일의 최종 렌더 색을 결정하는
+/// 시야 안 타일의 **거리 감쇠 알파**를 결정하는 순수 함수.
+///
+/// 플레이어로부터의 체비쇼프 거리 `d` (8방향 격자 게임 기준)에 따라
+/// `alpha = 1 / (1 + (d-1)^3)` 곡선으로 감쇠한다.
+///
+/// 곡선 값:
+///   - d ≤ 1 → 1.0       (플레이어 자기 타일 + 바로 옆은 완전한 밝기)
+///   - d = 2 → 0.5
+///   - d = 3 ≈ 0.111
+///   - d = 4 → 1/28 ≈ 0.0357
+///   - 큰 d 는 0 에 수렴 — 시야 끝(FOV_FRONT=8)에서도 부드럽게 사라진다.
+///
+/// 거리 0 / 음수는 1.0 으로 본다 (플레이어 자기 타일 보호 + 방어).
+pub fn distance_falloff_alpha(distance: i32) -> f32 {
+    if distance <= 1 {
+        return 1.0;
+    }
+    let d_minus_1 = (distance - 1) as f32;
+    1.0 / (1.0 + d_minus_1 * d_minus_1 * d_minus_1)
+}
+
+/// 두 타일 사이의 체비쇼프 거리 (max(|dx|, |dy|)). 8방향 격자 게임의 한 걸음
+/// 거리와 일치하므로 시야 거리 감쇠 곱셈 인자로 그대로 쓴다.
+pub fn chebyshev_distance(a: (i32, i32), b: (i32, i32)) -> i32 {
+    (a.0 - b.0).abs().max((a.1 - b.1).abs())
+}
+
+/// 가시성(visible/revealed)과 광량·거리를 함께 받아 타일의 최종 렌더 색을 결정하는
 /// **단일 순수 함수** — 디밍은 여기 한 곳에서만 결정한다(이중 처리/예외 분기 금지).
 ///
 /// - 미탐험(`!visible && !revealed`): `None` — 숨김(색 갱신 안 함).
-/// - 탐험만 됨(`!visible`): 기존대로 0.3 배 디밍(광량 무관 — 안 보이는 기억).
-/// - 보이고 밝음: 기본 색.
-/// - 보이고 어둠: `DARK_DIM_FACTOR` 배 디밍(광량 그림자).
+/// - 탐험만 됨(`!visible`): 기존대로 0.3 배 디밍(광량/거리 무관 — 안 보이는 기억).
+/// - 보이고 밝음: 기본 색 × `distance_falloff_alpha(distance)` (시야 거리 감쇠).
+/// - 보이고 어둠: `DARK_DIM_FACTOR` × `distance_falloff_alpha(distance)` 디밍.
+///
+/// `distance` 는 플레이어 ↔ 타일 체비쇼프 거리. 거리가 음수/0 이면 1.0 으로 간주
+/// (플레이어 자기 타일 + 방어). 거리 감쇠는 시야 안 타일에만 적용되며, 미탐험·
+/// 기억 타일은 거리 무관(기존 동작 보존).
 pub fn tile_render_color(
     base: Color,
     visible: bool,
     revealed: bool,
     light: LightLevel,
+    distance: i32,
 ) -> Option<Color> {
     if !visible && !revealed {
         return None;
     }
     if !visible {
-        // 탐험만 된(기억) 타일 — 광량과 무관하게 기존 0.3 디밍 유지.
+        // 탐험만 된(기억) 타일 — 광량·거리 무관하게 기존 0.3 디밍 유지.
         return Some(dim(base, 0.3));
     }
+    let falloff = distance_falloff_alpha(distance);
     match light {
-        LightLevel::Bright => Some(base),
-        LightLevel::Dark => Some(dim(base, DARK_DIM_FACTOR)),
+        LightLevel::Bright => Some(dim(base, falloff)),
+        LightLevel::Dark => Some(dim(base, DARK_DIM_FACTOR * falloff)),
     }
 }
 
@@ -167,19 +200,31 @@ fn update_light_map(
     light_map.levels = compute_light_levels(map.width, map.height, &sources);
 }
 
-/// 타일 스프라이트 색을 가시성 + 광량으로 한 번에 결정해 디밍한다(통합 디밍).
+/// 타일 스프라이트 색을 가시성 + 광량 + 플레이어 거리로 한 번에 결정해 디밍한다.
 /// 기존 map 의 `update_tile_visibility` 가 가시성/숨김을 담당하고, 여기서는
-/// 광량에 따른 색만 `tile_render_color` 로 일관 적용한다 — 보이는 타일에 한해.
+/// 광량·거리에 따른 색만 `tile_render_color` 로 일관 적용한다 — 보이는 타일에 한해.
+///
+/// 플레이어 위치를 받아 시야 안 타일의 체비쇼프 거리로 거리 감쇠를 곱한다.
+/// 플레이어가 없으면(테스트 등) 거리 0 으로 보아 감쇠 없음(기존 동작 보존).
 fn apply_light_dimming(
     map_res: Res<MapResource>,
     light_map: Res<LightMap>,
+    player_query: Query<&Transform, With<Player>>,
     mut tile_query: Query<(&crate::modules::map::TileEntity, &mut Text, &Visibility)>,
 ) {
     // 맵(가시성)·광량 둘 중 하나라도 바뀌어야 재적용한다.
+    // 플레이어가 움직이면 LightMap 이 ensure_player_light/update_light_map 흐름으로
+    // 매 프레임 갱신되며 is_changed 가 켜져 거리 감쇠도 같이 다시 칠해진다.
     if !map_res.is_changed() && !light_map.is_changed() {
         return;
     }
     let map = map_res.map();
+    // 플레이어 위치(타일) — 없으면 (-1,-1) 로 두고 거리 감쇠를 0(=알파 1.0) 으로 본다.
+    let player_tile: Option<(i32, i32)> = player_query.get_single().ok()
+        .map(|t| {
+            let (x, y) = crate::modules::map::world_to_tile_coords(t.translation);
+            (x as i32, y as i32)
+        });
     for (tile, mut text, vis) in tile_query.iter_mut() {
         // 숨김 타일은 색을 건드리지 않는다(가시성은 map 시스템이 결정).
         if *vis == Visibility::Hidden {
@@ -188,11 +233,16 @@ fn apply_light_dimming(
         let idx = map.index(tile.x, tile.y);
         let base = crate::modules::map::tile_base_color(map.tiles[idx].kind);
         let light = light_map.at(tile.x, tile.y);
+        let distance = match player_tile {
+            Some(p) => chebyshev_distance(p, (tile.x as i32, tile.y as i32)),
+            None => 0,
+        };
         if let Some(color) = tile_render_color(
             base,
             map.tiles[idx].visible,
             map.tiles[idx].revealed,
             light,
+            distance,
         ) {
             if text.sections[0].style.color != color {
                 text.sections[0].style.color = color;
