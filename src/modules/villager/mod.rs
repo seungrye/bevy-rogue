@@ -656,7 +656,9 @@ fn show_quest_dialog(
     let Some(phase) = quest_def.phases.get(&phase_id) else { return };
 
     let dialog = phase.dialog.clone();
-    let npc_name = quest_def.giver_npc.clone();
+    // 로그 prefix 는 villager 의 한글 이름(display name) — `quest_def.giver_npc`
+    // 는 영문 id("burgomaster") 라 그대로 쓰면 "burgomaster: ..." 처럼 노출된다.
+    let npc_name = villager.name.clone();
 
     let idx = villager.quest_dialogue_idx.min(dialog.len().saturating_sub(1));
     if let Some(line) = dialog.get(idx) {

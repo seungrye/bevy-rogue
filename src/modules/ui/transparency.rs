@@ -1,5 +1,5 @@
 //! 플레이어 글리프와 UI(미니맵·하단 다이얼로그) 겹침 감지 시 알파를 일시적으로
-//! 낮춰(0.5×) 화면상 캐릭터/지도 시인성을 확보한다.
+//! 낮춰(0.25×) 화면상 캐릭터/지도 시인성을 확보한다.
 //!
 //! 배경:
 //! - 카메라가 플레이어를 따라가지만 맵 경계 근처에선 카메라가 더 이동하지 못해
@@ -11,7 +11,7 @@
 //! - 매 프레임 플레이어 월드 좌표 → viewport 좌표를 구한 뒤,
 //!   미니맵·다이얼로그 화면 영역(Rect)과의 겹침을 검사한다.
 //! - 겹치면 해당 UI 의 BackgroundColor / UiImage.color / Text 색상의 alpha 를
-//!   원본 × 0.5 로 낮추고, 겹치지 않을 때는 원본으로 복원한다.
+//!   원본 × 0.25 로 낮추고, 겹치지 않을 때는 원본으로 복원한다.
 //! - 원본 alpha 는 첫 관측 시 `OriginalAlpha*` 컴포넌트로 캐싱해
 //!   페이드/복원이 누적·소실되지 않도록 한다.
 //!
@@ -50,7 +50,9 @@ pub struct OriginalBgAlpha(pub f32);
 pub struct OriginalTextAlphas(pub Vec<f32>);
 
 /// 페이드 비율 — 겹칠 때 원본 alpha 에 곱해진다.
-pub(crate) const FADE_FACTOR: f32 = 0.5;
+/// 0.25 = 캐릭터와 겹치면 가시성 25% 만 남김(원래의 1/4). 처음 0.5 였으나
+/// 캐릭터·지도 시인성 우선으로 더 투명하게 조정.
+pub(crate) const FADE_FACTOR: f32 = 0.25;
 
 /// 미니맵 오버레이의 화면 점유 높이(px).
 /// 이미지(180) + row_gap(4) + 이름텍스트(약 13) + row_gap(4) + 힌트(약 11) ≈ 212.
@@ -294,9 +296,10 @@ mod tests {
     }
 
     #[test]
-    fn 겹치면_목표_alpha는_원본의_절반이다() {
-        assert!((target_alpha(0.8, true) - 0.4).abs() < 1e-6);
-        assert!((target_alpha(1.0, true) - 0.5).abs() < 1e-6);
+    fn 겹치면_목표_alpha는_원본의_사분의일이다() {
+        // FADE_FACTOR = 0.25
+        assert!((target_alpha(0.8, true) - 0.2).abs() < 1e-6);
+        assert!((target_alpha(1.0, true) - 0.25).abs() < 1e-6);
     }
 
     // ── is_player_overlapping ────────────────────────────────────────────
@@ -331,11 +334,12 @@ mod tests {
     // ── fade_bg_alpha ────────────────────────────────────────────────────
 
     #[test]
-    fn 원본없이_BG_페이드는_현재_alpha를_원본으로_채택해_절반으로_낮춘다() {
+    fn 원본없이_BG_페이드는_현재_alpha를_원본으로_채택해_사분의일로_낮춘다() {
         let mut bg = BackgroundColor(Color::rgba(0.1, 0.2, 0.3, 0.8));
         let captured = fade_bg_alpha(&mut bg, None, true);
         assert!((captured - 0.8).abs() < 1e-6);
-        assert!((bg.0.a() - 0.4).abs() < 1e-6);
+        // 0.8 * 0.25 = 0.2
+        assert!((bg.0.a() - 0.2).abs() < 1e-6);
         // 채널 값은 보존돼야 한다.
         assert!((bg.0.r() - 0.1).abs() < 1e-6);
         assert!((bg.0.g() - 0.2).abs() < 1e-6);
@@ -367,8 +371,9 @@ mod tests {
         assert_eq!(captured.len(), 2);
         assert!((captured[0] - 1.0).abs() < 1e-6);
         assert!((captured[1] - 0.6).abs() < 1e-6);
-        assert!((t.sections[0].style.color.a() - 0.5).abs() < 1e-6);
-        assert!((t.sections[1].style.color.a() - 0.3).abs() < 1e-6);
+        // 1.0 * 0.25 = 0.25 / 0.6 * 0.25 = 0.15
+        assert!((t.sections[0].style.color.a() - 0.25).abs() < 1e-6);
+        assert!((t.sections[1].style.color.a() - 0.15).abs() < 1e-6);
     }
 
     #[test]
@@ -391,8 +396,9 @@ mod tests {
         assert_eq!(captured.len(), 2);
         assert!((captured[0] - 1.0).abs() < 1e-6);
         assert!((captured[1] - 0.6).abs() < 1e-6, "두 번째는 현재 alpha 0.6 으로 캡처");
-        assert!((t.sections[0].style.color.a() - 0.5).abs() < 1e-6);
-        assert!((t.sections[1].style.color.a() - 0.3).abs() < 1e-6);
+        // 1.0 * 0.25 = 0.25 / 0.6 * 0.25 = 0.15
+        assert!((t.sections[0].style.color.a() - 0.25).abs() < 1e-6);
+        assert!((t.sections[1].style.color.a() - 0.15).abs() < 1e-6);
     }
 
     #[test]
