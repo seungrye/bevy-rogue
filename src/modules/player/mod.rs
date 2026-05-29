@@ -820,8 +820,9 @@ pub(crate) fn update_fov_for_test(
     tile_state_query: Query<(&mut TileBrightness, &mut TileLastSeen)>,
     last_pos: Local<Option<(IVec2, IVec2)>>,
     prev_visible: Local<HashSet<(usize, usize)>>,
+    last_seed: Local<Option<u64>>,
 ) {
-    update_fov(player_query, map_res, global_turn, light_map, grid, tile_state_query, last_pos, prev_visible);
+    update_fov(player_query, map_res, global_turn, light_map, grid, tile_state_query, last_pos, prev_visible, last_seed);
 }
 
 fn update_fov(
@@ -833,11 +834,17 @@ fn update_fov(
     mut tile_state_query: Query<(&mut TileBrightness, &mut TileLastSeen)>,
     mut last_pos: Local<Option<(IVec2, IVec2)>>,
     mut prev_visible: Local<HashSet<(usize, usize)>>,
+    mut last_seed: Local<Option<u64>>,
 ) {
-    // 맵이 교체되면 강제 재계산
-    if map_res.is_changed() {
+    // **map 교체 감지** — map.seed 비교. `map_res.is_changed()` 는 update_fov 가
+    // 매 호출 `map_mut()` 하는 것 때문에 다음 frame 마다 true 가 돼 적합하지 않음
+    // (prev_visible 이 매 frame clear 되어 시야 빠짐 추적이 깨지는 버그).
+    // seed 가 새 map 마다 unique 한 signal — 같은 map 인 한 prev_visible 유지.
+    let cur_seed = map_res.map().seed;
+    if Some(cur_seed) != *last_seed {
         *last_pos = None;
         prev_visible.clear();
+        *last_seed = Some(cur_seed);
     }
 
     let Ok((transform, facing)) = player_query.get_single() else { return };
@@ -1893,11 +1900,12 @@ mod tests {
 
     #[test]
     fn fov는_맵이_바뀌면_같은_위치여도_재계산을_강제한다() {
-        // is_changed() 분기: MapResource 를 외부에서 변경하면 last_pos 가
-        // None 으로 리셋되어 같은 위치여도 재계산한다.
-        // 재계산은 모든 tile.visible 을 먼저 false 로 만들므로, 외부에서 켜둔
-        // 먼 타일의 visible 이 false 로 바뀌는지로 재계산을 확인한다.
+        // map.seed 가 변하면 update_fov 가 reset 한다 — 새 map 교체 시그널.
+        // is_changed() 사용은 update_fov 가 매 호출 map_mut() 해서 매 frame true
+        // 가 되는 부작용 때문에 부적합 (prev_visible 추적이 깨짐). seed 비교로
+        // 진짜 map 교체만 reset.
         let mut map = Map::new(30, 30);
+        map.seed = 1;
         for y in 5..15 { for x in 5..15 { map.set_tile(x, y, TileKind::Floor); } }
         let mut app = App::new();
         app.insert_resource(MapResource(map));
@@ -1906,16 +1914,18 @@ mod tests {
         app.add_systems(Update, update_fov);
         app.update();
         let far = {
-            // 최대 반경 밖 먼 타일을 visible=true 로 켜두고 MapResource 를 changed 로 만든다.
+            // 먼 타일을 visible=true 로 켜두고 seed 도 바꿔 '맵 교체' 시그널 만든다.
             let mut mr = app.world.resource_mut::<MapResource>();
             let idx = mr.map().index(29, 29);
-            mr.map_mut().tiles[idx].visible = true;
+            let m = mr.map_mut();
+            m.tiles[idx].visible = true;
+            m.seed = 2; // 맵 교체 시뮬레이션
             idx
         };
-        app.update(); // is_changed → last_pos=None → 재계산 → 먼 타일 visible=false
+        app.update(); // last_seed 와 다름 → reset → 재계산 → 먼 타일 visible=false
         let mr = app.world.resource::<MapResource>();
         assert!(!mr.map().tiles[far].visible,
-            "맵 변경 시 재계산되어 반경 밖 타일의 visible 이 꺼져야 한다");
+            "seed 변경 시 재계산되어 반경 밖 타일의 visible 이 꺼져야 한다");
     }
 
     #[test]
