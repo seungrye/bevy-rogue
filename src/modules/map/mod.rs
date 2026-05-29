@@ -17,6 +17,52 @@ pub struct TileEntity {
     pub y: usize,
 }
 
+/// 타일의 누적 가시화 상태 (0.0~1.0). **per-entity 컴포넌트** — Bevy 의 변경 감지
+/// 가 작동해 dimming 시스템이 `Changed<TileBrightness>` 인 entity 만 sparse 하게
+/// 처리한다. 기존엔 `MapTile.brightness` 필드라 매 turn 전체 4000 tile 을 다시
+/// 칠하는 비효율이 있었음.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct TileBrightness(pub f32);
+
+impl Default for TileBrightness {
+    fn default() -> Self { Self(0.0) }
+}
+
+/// 타일이 마지막으로 `visible=true` 였던 글로벌 턴 — 망각 감쇠 곡선의 기준점.
+/// per-entity 컴포넌트로 분리해 sparse 변경 감지를 지원한다.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Default)]
+pub struct TileLastSeen(pub Option<u32>);
+
+/// 좌표 → TileEntity 매핑. spawn / regen 시 빌드되어 update_fov 의 sparse
+/// 갱신 (Brightness/LastSeen mut access) 의 lookup 으로 쓰인다.
+/// `Vec<Option<Entity>>` 인 이유: 인덱스 접근이 HashMap 보다 빠르고,
+/// 일부 좌표가 spawn 안 된 경우(부분 맵) 의 안전.
+#[derive(Resource, Default)]
+pub struct TileEntityGrid {
+    pub width: usize,
+    pub height: usize,
+    pub entities: Vec<Option<Entity>>,
+}
+
+impl TileEntityGrid {
+    pub fn at(&self, x: usize, y: usize) -> Option<Entity> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        self.entities[y * self.width + x]
+    }
+    pub fn reset(&mut self, width: usize, height: usize) {
+        self.width = width;
+        self.height = height;
+        self.entities = vec![None; width * height];
+    }
+    pub fn set(&mut self, x: usize, y: usize, e: Entity) {
+        if x < self.width && y < self.height {
+            self.entities[y * self.width + x] = Some(e);
+        }
+    }
+}
+
 // --- 열거형 / 타입 ---
 
 /// 타일의 종류를 나타내는 열거형.
@@ -111,44 +157,30 @@ pub fn tiles_in_radius(
     out
 }
 
-/// 맵 타일 하나의 전체 상태를 담는 구조체.
+/// 맵 타일 하나의 상태를 담는 구조체.
 /// 기존에 Map에서 별도 Vec<bool>로 관리하던 revealed/visible 상태를
 /// 타일 자체에 포함시켜 데이터 응집도를 높였다.
 ///
-/// `brightness` 는 타일의 누적 가시화 상태 (0.0~1.0). 시야가 닿을 때 FOV 시스템이
-/// `max(brightness * memory_fade(elapsed), light_factor(d))` 로 갱신한다 — 즉
-/// 망각으로 감쇠된 이전 상태와 현재 시야 강도 중 큰 값을 채택. 분기 없이 누적값
-/// 하나로 'state stays' 의도를 표현. 직렬화 default 0.0.
-///
-/// `last_seen_turn` 은 타일이 마지막으로 `visible=true` 였던 글로벌 턴.
-/// 기억 감퇴(memory fade) 의 elapsed 계산에 사용.
-/// 영원히 본 적이 없으면 `None`.
-///
-/// f32 필드(`brightness`) 가 들어가 `Eq` 는 derive 하지 않는다 — PartialEq 만.
-#[derive(Copy, Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
+/// **brightness / last_seen_turn 은 per-entity 컴포넌트**로 분리됐다
+/// (`TileBrightness`, `TileLastSeen`). Bevy 의 변경 감지를 활용해 dimming
+/// 시스템이 sparse update 하도록 — 매 turn 4000 tile 처리하던 비용을
+/// 변경된 ~50 tile 로 축소.
+#[derive(Copy, Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct MapTile {
     pub kind: TileKind,
     pub revealed: bool,
     pub visible: bool,
-    /// 마지막으로 시야에 들었던 글로벌 턴. 기억 감퇴 곡선의 기준점.
-    /// `#[serde(default)]` 로 기존 세이브(이 필드 없는 데이터) 는 `None` 으로 복원된다.
-    #[serde(default)]
-    pub last_seen_turn: Option<u32>,
-    /// 누적 가시화 상태 (0.0~1.0). FOV 시스템이 시야 닿을 때 max-갱신.
-    /// 표시는 `brightness * memory_fade(elapsed)` — visible 이면 elapsed=0 이라 그대로.
-    #[serde(default)]
-    pub brightness: f32,
 }
 
 impl Default for MapTile {
     fn default() -> Self {
-        Self { kind: TileKind::Wall, revealed: false, visible: false, last_seen_turn: None, brightness: 0.0 }
+        Self { kind: TileKind::Wall, revealed: false, visible: false }
     }
 }
 
 impl MapTile {
     pub fn new(kind: TileKind) -> Self {
-        Self { kind, revealed: false, visible: false, last_seen_turn: None, brightness: 0.0 }
+        Self { kind, revealed: false, visible: false }
     }
 }
 
@@ -400,6 +432,7 @@ impl Plugin for MapPlugin {
             .init_resource::<OccupiedTiles>()
             .init_resource::<MonsterTiles>()
             .init_resource::<UsedSpawnTiles>()
+            .init_resource::<TileEntityGrid>()
             .add_event::<RegenerateMapEvent>()
             .add_event::<ApplyMapEvent>()
             .add_event::<PlayerRespawnEvent>()
@@ -456,15 +489,17 @@ pub fn draw_map(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     map_res: Res<MapResource>,
+    mut grid: ResMut<TileEntityGrid>,
 ) {
     let font = asset_server.load("fonts/FiraMono-Medium.ttf");
     let map = map_res.map();
+    grid.reset(map.width, map.height);
     for y in 0..map.height {
         for x in 0..map.width {
             let kind = map.get_tile(x, y);
             let glyph = tile_glyph(kind);
             let coord = tile_to_world_coords(x, y);
-            commands.spawn((
+            let id = commands.spawn((
                 Text2dBundle {
                     text: Text::from_section(glyph, TextStyle {
                         font: font.clone(),
@@ -475,7 +510,10 @@ pub fn draw_map(
                     ..default()
                 },
                 TileEntity { x, y },
-            ));
+                TileBrightness::default(),
+                TileLastSeen::default(),
+            )).id();
+            grid.set(x, y, id);
         }
     }
 }
@@ -500,6 +538,7 @@ fn execute_regen(
     tile_query: Query<Entity, With<TileEntity>>,
     asset_server: Res<AssetServer>,
     registry: Res<MapGeneratorRegistry>,
+    mut grid: ResMut<TileEntityGrid>,
     mut player_respawn: EventWriter<PlayerRespawnEvent>,
     mut villager_respawn: EventWriter<VillagerRespawnEvent>,
     mut monster_respawn: EventWriter<MonsterRespawnEvent>,
@@ -517,12 +556,13 @@ fn execute_regen(
         map.algorithm = algo;
 
         let font = asset_server.load("fonts/FiraMono-Medium.ttf");
+        grid.reset(map.width, map.height);
         for y in 0..map.height {
             for x in 0..map.width {
                 let kind = map.get_tile(x, y);
                 let glyph = tile_glyph(kind);
                 let coord = tile_to_world_coords(x, y);
-                commands.spawn((
+                let id = commands.spawn((
                     Text2dBundle {
                         text: Text::from_section(glyph, TextStyle {
                             font: font.clone(),
@@ -533,7 +573,10 @@ fn execute_regen(
                         ..default()
                     },
                     TileEntity { x, y },
-                ));
+                    TileBrightness::default(),
+                    TileLastSeen::default(),
+                )).id();
+                grid.set(x, y, id);
             }
         }
 
@@ -650,6 +693,7 @@ fn execute_apply(
     mut events: EventReader<ApplyMapEvent>,
     tile_query: Query<Entity, With<TileEntity>>,
     asset_server: Res<AssetServer>,
+    mut grid: ResMut<TileEntityGrid>,
     mut player_respawn: EventWriter<PlayerRespawnEvent>,
     mut villager_respawn: EventWriter<VillagerRespawnEvent>,
     mut monster_respawn: EventWriter<MonsterRespawnEvent>,
@@ -662,12 +706,13 @@ fn execute_apply(
 
         let map = &ev.map;
         let font = asset_server.load("fonts/FiraMono-Medium.ttf");
+        grid.reset(map.width, map.height);
         for y in 0..map.height {
             for x in 0..map.width {
                 let kind = map.get_tile(x, y);
                 let glyph = tile_glyph(kind);
                 let coord = tile_to_world_coords(x, y);
-                commands.spawn((
+                let id = commands.spawn((
                     Text2dBundle {
                         text: Text::from_section(glyph, TextStyle {
                             font: font.clone(),
@@ -678,7 +723,10 @@ fn execute_apply(
                         ..default()
                     },
                     TileEntity { x, y },
-                ));
+                    TileBrightness::default(),
+                    TileLastSeen::default(),
+                )).id();
+                grid.set(x, y, id);
             }
         }
 
@@ -1664,6 +1712,8 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(bevy::asset::AssetPlugin::default());
         app.init_asset::<Font>();
+        // spawn 시스템들이 ResMut<TileEntityGrid> 를 요구하므로 테스트에서도 init.
+        app.init_resource::<TileEntityGrid>();
         app
     }
 

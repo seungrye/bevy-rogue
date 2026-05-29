@@ -4,7 +4,7 @@ use crate::modules::{
         tile_to_world_coords, world_to_tile_coords, is_in_view, is_interactable_tile, FOV_FRONT, FOV_BACK,
         MAP_HEIGHT, MAP_WIDTH, TILE_SIZE,
         MapSystemSet, PlayerRespawnEvent, PlayerActedEvent, BumpTileEvent, AttackMonsterEvent,
-        GlobalTurn,
+        GlobalTurn, TileBrightness, TileLastSeen, TileEntityGrid,
     },
     combat::{CombatStats, Defeated, Speed},
     item::EquipmentPanelOpen,
@@ -13,6 +13,7 @@ use crate::modules::{
     villager::{Villager, VillagerSystemSet},
     lighting::{LightMap, LightLevel, distance_falloff_alpha, memory_fade_factor, DARK_DIM_FACTOR},
 };
+use std::collections::HashSet;
 use bevy::input::touch::Touches;
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
@@ -815,9 +816,12 @@ pub(crate) fn update_fov_for_test(
     map_res: ResMut<MapResource>,
     global_turn: Option<Res<GlobalTurn>>,
     light_map: Option<Res<LightMap>>,
+    grid: Option<Res<TileEntityGrid>>,
+    tile_state_query: Query<(&mut TileBrightness, &mut TileLastSeen)>,
     last_pos: Local<Option<(IVec2, IVec2)>>,
+    prev_visible: Local<HashSet<(usize, usize)>>,
 ) {
-    update_fov(player_query, map_res, global_turn, light_map, last_pos);
+    update_fov(player_query, map_res, global_turn, light_map, grid, tile_state_query, last_pos, prev_visible);
 }
 
 fn update_fov(
@@ -825,11 +829,15 @@ fn update_fov(
     mut map_res: ResMut<MapResource>,
     global_turn: Option<Res<GlobalTurn>>,
     light_map: Option<Res<LightMap>>,
+    grid: Option<Res<TileEntityGrid>>,
+    mut tile_state_query: Query<(&mut TileBrightness, &mut TileLastSeen)>,
     mut last_pos: Local<Option<(IVec2, IVec2)>>,
+    mut prev_visible: Local<HashSet<(usize, usize)>>,
 ) {
     // 맵이 교체되면 강제 재계산
     if map_res.is_changed() {
         *last_pos = None;
+        prev_visible.clear();
     }
 
     let Ok((transform, facing)) = player_query.get_single() else { return };
@@ -847,6 +855,9 @@ fn update_fov(
     let map = map_res.map_mut();
     map.tiles.iter_mut().for_each(|t| t.visible = false);
 
+    // 새 시야 집합 — prev_visible 과 diff 로 '시야 빠진' 타일 마킹용.
+    let mut new_visible: HashSet<(usize, usize)> = HashSet::new();
+
     // 두-반원의 최대 탐색 범위는 max(front, back).
     let radius = FOV_FRONT.max(FOV_BACK);
     for y in (cur.y - radius)..=(cur.y + radius) {
@@ -856,30 +867,50 @@ fn update_fov(
                 let idx = map.index(x as usize, y as usize);
                 map.tiles[idx].visible = true;
                 map.tiles[idx].revealed = true;
+                new_visible.insert((x as usize, y as usize));
 
-                // brightness state 갱신 — 누적 가시화 상태.
-                // 이전 상태에 (마지막 본 이후) 망각 감쇠를 먼저 적용한 뒤, 현재 시야 강도
-                // (거리 감쇠 × 광량 분기) 와 채널별 max — 사용자 의도:
-                // '망각 30 + 시야 10 → 30' (state stays).
-                let elapsed = match map.tiles[idx].last_seen_turn {
-                    Some(t) => now_turn.saturating_sub(t),
-                    None => 0,
-                };
-                let decayed = map.tiles[idx].brightness * memory_fade_factor(elapsed);
-                let dx = (x - cur.x).abs();
-                let dy = (y - cur.y).abs();
-                let d = dx.max(dy);
-                let falloff = distance_falloff_alpha(d);
-                // LightMap 없으면(테스트 등) Bright 로 간주 — 광량 분기 없는 환경 호환.
-                let light_factor = match light_map.as_ref().map(|lm| lm.at(x as usize, y as usize)) {
-                    Some(LightLevel::Dark) => DARK_DIM_FACTOR * falloff,
-                    _ => falloff,
-                };
-                map.tiles[idx].brightness = decayed.max(light_factor);
-                map.tiles[idx].last_seen_turn = Some(now_turn);
+                // brightness state 갱신 — per-entity 컴포넌트. mut access 자체로 Bevy
+                // 의 Changed 마커가 켜져 `apply_light_dimming` 이 이 entity 만 sparse
+                // 하게 재칠한다 — 사용자 의도: 망각된 누적값과 현재 시야 강도 중 큰 값.
+                // grid 가 없으면(테스트 등) 컴포넌트 갱신 skip.
+                if let Some(entity) = grid.as_ref().and_then(|g| g.at(x as usize, y as usize)) {
+                    if let Ok((mut bright, mut last_seen)) = tile_state_query.get_mut(entity) {
+                        let elapsed = match last_seen.0 {
+                            Some(t) => now_turn.saturating_sub(t),
+                            None => 0,
+                        };
+                        let decayed = bright.0 * memory_fade_factor(elapsed);
+                        let dx = (x - cur.x).abs();
+                        let dy = (y - cur.y).abs();
+                        let d = dx.max(dy);
+                        let falloff = distance_falloff_alpha(d);
+                        // LightMap 없으면(테스트 등) Bright 로 간주 — 광량 분기 없는 환경 호환.
+                        let light_factor = match light_map.as_ref().map(|lm| lm.at(x as usize, y as usize)) {
+                            Some(LightLevel::Dark) => DARK_DIM_FACTOR * falloff,
+                            _ => falloff,
+                        };
+                        bright.0 = decayed.max(light_factor);
+                        last_seen.0 = Some(now_turn);
+                    }
+                }
             }
         }
     }
+
+    // 시야에서 빠진 타일도 dimming 이 다시 칠하도록 Changed 마킹. brightness 자체는
+    // 그대로지만 시야 빠진 직후 표시 분기(`!visible`) 가 달라져 색이 다시 계산되어야 함.
+    if let Some(g) = grid.as_ref() {
+        for &(x, y) in prev_visible.difference(&new_visible) {
+            if let Some(entity) = g.at(x, y) {
+                if let Ok((mut bright, _)) = tile_state_query.get_mut(entity) {
+                    // 값 변경 없이 set_changed — Bevy 가 다음 frame Changed<TileBrightness> 매칭.
+                    bright.set_changed();
+                }
+            }
+        }
+    }
+    *prev_visible = new_visible;
+
     // FOV 계산이 5ms 이상 걸릴 때만 찍는 성능 로그. 테스트 맵은 작아 항상 즉시
     // 끝나므로 이 분기의 True 쪽은 결정론적으로 도달 불가. // 도달 불가 방어코드
     let elapsed = start.elapsed();

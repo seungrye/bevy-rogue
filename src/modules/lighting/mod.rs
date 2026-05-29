@@ -250,32 +250,40 @@ fn update_light_map(
     light_map.levels = compute_light_levels(map.width, map.height, &sources);
 }
 
-/// 타일 스프라이트 색을 가시성 + 광량 + 플레이어 거리 + 기억 경과 시간으로 한 번에
-/// 결정해 디밍한다. 기존 map 의 `update_tile_visibility` 가 가시성/숨김을 담당하고,
-/// 여기서는 타일의 누적 `brightness` 와 `last_seen_turn` 을 `tile_render_color` 에
-/// 넘겨 색을 결정한다 — visible 인 동안엔 elapsed=0 이라 brightness 그대로,
-/// 시야가 빠지면 매 프레임 fade 가 진행. 거리/광량 결합은 FOV 시스템에서 이미 완료.
+/// 타일 색을 누적 `TileBrightness` + 시야 분기(visible/revealed) + 망각 경과 시간으로
+/// 결정한다. **per-entity Changed query** 로 실제로 brightness 가 변한 entity 만
+/// sparse 하게 재칠 — 매 turn 4000 → ~50.
+///
+/// visible/revealed 정보는 여전히 `MapResource.tiles` 에서 read (Map 데이터 일관성).
+/// brightness/last_seen 만 컴포넌트로 분리해 sparse 트리거를 얻는 절충 설계.
 fn apply_light_dimming(
     map_res: Res<MapResource>,
-    light_map: Res<LightMap>,
     global_turn: Option<Res<GlobalTurn>>,
-    mut tile_query: Query<(&crate::modules::map::TileEntity, &mut Text, &Visibility)>,
+    mut tile_query: Query<
+        (
+            &crate::modules::map::TileEntity,
+            &mut Text,
+            &crate::modules::map::TileBrightness,
+            &crate::modules::map::TileLastSeen,
+            &Visibility,
+        ),
+        Or<(
+            Changed<crate::modules::map::TileBrightness>,
+            Changed<crate::modules::map::TileLastSeen>,
+            Changed<Visibility>,
+        )>,
+    >,
 ) {
-    // 맵(가시성·brightness)·광량 둘 중 하나라도 바뀌어야 재적용한다.
-    if !map_res.is_changed() && !light_map.is_changed() {
-        return;
-    }
     let map = map_res.map();
     let now_turn: Option<u32> = global_turn.as_ref().map(|t| t.0 as u32);
-    for (tile, mut text, vis) in tile_query.iter_mut() {
+    for (tile, mut text, brightness, last_seen, vis) in tile_query.iter_mut() {
         // 숨김 타일은 색을 건드리지 않는다(가시성은 map 시스템이 결정).
         if *vis == Visibility::Hidden {
             continue;
         }
         let idx = map.index(tile.x, tile.y);
         let base = crate::modules::map::tile_base_color(map.tiles[idx].kind);
-        // Δturn = now - last_seen — 둘 중 하나라도 없으면 None(감퇴 없음).
-        let turns_since_seen: Option<u32> = match (now_turn, map.tiles[idx].last_seen_turn) {
+        let turns_since_seen: Option<u32> = match (now_turn, last_seen.0) {
             (Some(now), Some(last)) => Some(now.saturating_sub(last)),
             _ => None,
         };
@@ -283,7 +291,7 @@ fn apply_light_dimming(
             base,
             map.tiles[idx].visible,
             map.tiles[idx].revealed,
-            map.tiles[idx].brightness,
+            brightness.0,
             turns_since_seen,
         ) {
             if text.sections[0].style.color != color {
