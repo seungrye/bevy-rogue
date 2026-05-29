@@ -83,9 +83,10 @@ fn 탐지반경_보정은_0_밑으로_내려가지_않는다() {
 #[test]
 fn 미탐험_타일은_색을_정하지_않는다() {
     let base = tile_base_color(TileKind::Floor);
-    // distance 인자(d=0 / d=5)와 무관하게 미탐험은 항상 None.
-    assert_eq!(tile_render_color(base, false, false, LightLevel::Bright, 0), None);
-    assert_eq!(tile_render_color(base, false, false, LightLevel::Bright, 5), None);
+    // distance 인자(d=0 / d=5) 와 turns_since_seen 과 무관하게 미탐험은 항상 None.
+    assert_eq!(tile_render_color(base, false, false, LightLevel::Bright, 0, None), None);
+    assert_eq!(tile_render_color(base, false, false, LightLevel::Bright, 5, None), None);
+    assert_eq!(tile_render_color(base, false, false, LightLevel::Bright, 5, Some(100)), None);
 }
 
 /// 새 dim 공식(`base*factor + bg*(1-factor)`, bg=0.13)의 기대 r 값.
@@ -96,9 +97,10 @@ fn expected_dim_r(base_r: f32, factor: f32) -> f32 {
 #[test]
 fn 탐험만_된_타일은_광량과_거리와_무관하게_0_3factor로_배경_lerp된다() {
     let base = Color::rgb(1.0, 1.0, 1.0);
-    let dark   = tile_render_color(base, false, true, LightLevel::Dark,   0).unwrap();
-    let bright = tile_render_color(base, false, true, LightLevel::Bright, 0).unwrap();
-    let far    = tile_render_color(base, false, true, LightLevel::Bright, 7).unwrap();
+    // turns_since_seen=None — 기존 동작(감퇴 없음).
+    let dark   = tile_render_color(base, false, true, LightLevel::Dark,   0, None).unwrap();
+    let bright = tile_render_color(base, false, true, LightLevel::Bright, 0, None).unwrap();
+    let far    = tile_render_color(base, false, true, LightLevel::Bright, 7, None).unwrap();
     // visible=false 면 광량·거리 무관 — 세 결과가 같고 0.3 factor 로 배경 lerp.
     assert_eq!(dark, bright, "기억 타일은 광량과 무관");
     assert_eq!(bright, far, "기억 타일은 거리와도 무관");
@@ -109,14 +111,14 @@ fn 탐험만_된_타일은_광량과_거리와_무관하게_0_3factor로_배경_
 fn 보이고_밝은_타일은_거리1이면_기본색_그대로다() {
     // d=1 → falloff 1.0 → 밝음 분기는 base 그대로.
     let base = tile_base_color(TileKind::Water);
-    assert_eq!(tile_render_color(base, true, true, LightLevel::Bright, 1), Some(base));
+    assert_eq!(tile_render_color(base, true, true, LightLevel::Bright, 1, None), Some(base));
 }
 
 #[test]
 fn 보이지만_어두운_타일은_거리1이면_DARK_DIM_FACTOR로_배경_lerp된다() {
     // d=1 → falloff 1.0 → 어둠 분기는 factor = DARK_DIM_FACTOR(0.5) × 1.0 = 0.5
     let base = Color::rgb(1.0, 1.0, 1.0);
-    let dimmed = tile_render_color(base, true, true, LightLevel::Dark, 1).unwrap();
+    let dimmed = tile_render_color(base, true, true, LightLevel::Dark, 1, None).unwrap();
     let expected = expected_dim_r(1.0, DARK_DIM_FACTOR);
     assert!((dimmed.r() - expected).abs() < 1e-6, "어둠 d=1 은 DARK_DIM_FACTOR 로 배경 lerp");
     assert!(dimmed.r() < base.r(), "어둠 타일은 기본색보다 어둡다");
@@ -125,7 +127,7 @@ fn 보이지만_어두운_타일은_거리1이면_DARK_DIM_FACTOR로_배경_lerp
 #[test]
 fn 디밍은_알파값을_보존한다() {
     let base = Color::rgba(0.8, 0.6, 0.4, 0.5);
-    let dimmed = tile_render_color(base, true, true, LightLevel::Dark, 1).unwrap();
+    let dimmed = tile_render_color(base, true, true, LightLevel::Dark, 1, None).unwrap();
     assert!((dimmed.a() - 0.5).abs() < 1e-6, "알파는 유지된다");
 }
 
@@ -194,9 +196,9 @@ fn 체비쇼프거리는_8방향_한걸음을_1로_본다() {
 #[test]
 fn 보이고_밝은_타일은_거리가_늘수록_배경에_더_가까워진다() {
     let base = Color::rgb(1.0, 1.0, 1.0);
-    let r1 = tile_render_color(base, true, true, LightLevel::Bright, 1).unwrap().r();
-    let r2 = tile_render_color(base, true, true, LightLevel::Bright, 2).unwrap().r();
-    let r3 = tile_render_color(base, true, true, LightLevel::Bright, 3).unwrap().r();
+    let r1 = tile_render_color(base, true, true, LightLevel::Bright, 1, None).unwrap().r();
+    let r2 = tile_render_color(base, true, true, LightLevel::Bright, 2, None).unwrap().r();
+    let r3 = tile_render_color(base, true, true, LightLevel::Bright, 3, None).unwrap().r();
     assert!((r1 - 1.0).abs() < 1e-6);
     assert!((r2 - expected_dim_r(1.0, 0.5)).abs() < 1e-6, "d=2 → factor 0.5 로 배경 lerp");
     assert!((r3 - expected_dim_r(1.0, 1.0 / 9.0)).abs() < 1e-6, "d=3 → factor 1/9 로 배경 lerp");
@@ -206,7 +208,7 @@ fn 보이고_밝은_타일은_거리가_늘수록_배경에_더_가까워진다(
 fn 보이는_어두운_타일도_거리_감쇠를_factor에_곱해_배경_lerp한다() {
     // 어둠 factor(0.5) × 거리 감쇠(0.5) = 0.25 factor 로 배경 lerp.
     let base = Color::rgb(1.0, 1.0, 1.0);
-    let r2 = tile_render_color(base, true, true, LightLevel::Dark, 2).unwrap().r();
+    let r2 = tile_render_color(base, true, true, LightLevel::Dark, 2, None).unwrap().r();
     let expected = expected_dim_r(1.0, DARK_DIM_FACTOR * 0.5);
     assert!((r2 - expected).abs() < 1e-6, "어둠 d=2: 0.25 factor 로 배경 lerp");
 }
@@ -467,6 +469,306 @@ fn 디밍시스템은_광량이_바뀌면_색을_다시_칠한다() {
     app.update();
     assert!(tile_color(&mut app).r() < tile_base_color(TileKind::Floor).r(),
         "어둠으로 바뀌면 더 어둡게 다시 칠한다");
+}
+
+// ── memory_fade_factor (기억 감퇴 곡선) ───────────────────────────────────────
+
+#[test]
+fn 기억감퇴_델타_0턴이면_factor는_1_0이다() {
+    // exp(0) = 1.0 — 방금 본 타일은 감퇴 없음.
+    assert!((memory_fade_factor(0) - 1.0).abs() < 1e-6);
+}
+
+#[test]
+fn 기억감퇴_델타_50턴이면_factor는_약_0_3679이다() {
+    // exp(-1) ≈ 0.36788 — 50 턴이면 약 절반쯤 어두워진다.
+    let f = memory_fade_factor(50);
+    assert!((f - (-1.0f32).exp()).abs() < 1e-6);
+    assert!((f - 0.36788).abs() < 1e-3, "50턴은 약 0.37");
+}
+
+#[test]
+fn 기억감퇴_델타_100턴이면_factor는_약_0_1353이다() {
+    // exp(-2) ≈ 0.13534
+    let f = memory_fade_factor(100);
+    assert!((f - 0.13534).abs() < 1e-3, "100턴은 약 0.135");
+}
+
+#[test]
+fn 기억감퇴_델타_200턴이면_factor는_약_0_0183이다() {
+    // exp(-4) ≈ 0.01832 — 거의 배경.
+    let f = memory_fade_factor(200);
+    assert!((f - 0.01832).abs() < 1e-3, "200턴은 약 0.018");
+}
+
+#[test]
+fn 기억감퇴는_매우_큰_델타에서_0에_수렴한다() {
+    // u32 범위 안에서 큰 값들도 0 에 매끄럽게 수렴해야 한다.
+    let a = memory_fade_factor(500);
+    let b = memory_fade_factor(1_000);
+    let c = memory_fade_factor(10_000);
+    assert!(a < 1e-3, "Δ=500 이면 거의 0");
+    assert!(b < a, "Δ가 커질수록 더 작아진다");
+    assert!(c < b);
+    assert!(c >= 0.0, "음수가 되지 않는다");
+}
+
+#[test]
+fn 기억감퇴는_델타가_커질수록_단조감소한다() {
+    let mut prev = memory_fade_factor(0);
+    for d in (10..=500).step_by(10) {
+        let cur = memory_fade_factor(d);
+        assert!(cur < prev, "Δ={} 에서 단조감소 깨짐: {} >= {}", d, cur, prev);
+        prev = cur;
+    }
+}
+
+// ── tile_render_color × 기억 감퇴 통합 ────────────────────────────────────────
+
+#[test]
+fn 기억타일은_turns_since_seen_None이면_기존_0_3_factor_동작을_유지한다() {
+    let base = Color::rgb(1.0, 1.0, 1.0);
+    let none = tile_render_color(base, false, true, LightLevel::Bright, 0, None).unwrap();
+    let zero = tile_render_color(base, false, true, LightLevel::Bright, 0, Some(0)).unwrap();
+    // Δ=0 도 1.0 이라 None 과 같은 결과.
+    assert_eq!(none, zero, "None 과 Δ=0 은 동일(감퇴 없음)");
+    assert!((none.r() - expected_dim_r(1.0, 0.3)).abs() < 1e-6, "None 은 0.3 factor 그대로");
+}
+
+#[test]
+fn 기억타일은_시간이_흐를수록_배경에_더_가까워진다() {
+    let base = Color::rgb(1.0, 1.0, 1.0);
+    let r0   = tile_render_color(base, false, true, LightLevel::Bright, 0, Some(0)).unwrap().r();
+    let r50  = tile_render_color(base, false, true, LightLevel::Bright, 0, Some(50)).unwrap().r();
+    let r100 = tile_render_color(base, false, true, LightLevel::Bright, 0, Some(100)).unwrap().r();
+    let r200 = tile_render_color(base, false, true, LightLevel::Bright, 0, Some(200)).unwrap().r();
+    // 시간이 흐를수록 base(1.0) 에서 멀어져 배경(0.13) 쪽으로 단조 감소.
+    assert!(r0 > r50,  "Δ=0 > Δ=50");
+    assert!(r50 > r100, "Δ=50 > Δ=100");
+    assert!(r100 > r200, "Δ=100 > Δ=200");
+    // Δ=100 에서는 factor = 0.3 × 0.1353 ≈ 0.0406 — 거의 배경.
+    let expected_100 = expected_dim_r(1.0, 0.3 * memory_fade_factor(100));
+    assert!((r100 - expected_100).abs() < 1e-6, "Δ=100 은 0.3 × 0.135 factor");
+}
+
+#[test]
+fn 기억타일은_시간이_무한히_흐르면_정확히_배경색이_된다() {
+    // 매우 큰 Δ → memory_fade_factor → 0 → dim(base, 0.0) = BACKGROUND_COLOR.
+    let base = Color::rgb(0.8, 0.2, 0.4);
+    let faded = tile_render_color(base, false, true, LightLevel::Bright, 0, Some(10_000)).unwrap();
+    let bg = BACKGROUND_COLOR;
+    assert!((faded.r() - bg.r()).abs() < 1e-4, "R 채널이 배경");
+    assert!((faded.g() - bg.g()).abs() < 1e-4, "G 채널이 배경");
+    assert!((faded.b() - bg.b()).abs() < 1e-4, "B 채널이 배경");
+    // 검정이 아니라 배경 회색이어야 한다(중요 — 어색한 검은 페이드 회피).
+    assert!(faded.r() > 0.1, "검정이 아닌 배경 회색");
+}
+
+#[test]
+fn 기억타일은_광량과_거리는_여전히_무시한다_turns가_있어도() {
+    // turns_since_seen 이 있어도 visible=false 분기는 광량·거리 무시.
+    let base = Color::rgb(1.0, 1.0, 1.0);
+    let a = tile_render_color(base, false, true, LightLevel::Dark,   5, Some(30)).unwrap();
+    let b = tile_render_color(base, false, true, LightLevel::Bright, 0, Some(30)).unwrap();
+    assert_eq!(a, b, "기억 타일은 광량/거리 무관 (turns 만 반영)");
+}
+
+#[test]
+fn 보이는_타일은_turns_since_seen을_무시한다() {
+    // visible=true 분기는 turns_since_seen 을 안 본다 — 보는 동안엔 망각이 멈춤.
+    let base = Color::rgb(1.0, 1.0, 1.0);
+    let fresh = tile_render_color(base, true, true, LightLevel::Bright, 1, None).unwrap();
+    let stale = tile_render_color(base, true, true, LightLevel::Bright, 1, Some(10_000)).unwrap();
+    assert_eq!(fresh, stale, "visible 분기는 turns 무시");
+}
+
+// ── 시스템: update_fov 가 last_seen_turn 을 갱신 ──────────────────────────────
+
+#[test]
+fn fov는_보인_타일의_last_seen_turn을_현재_글로벌턴으로_갱신한다() {
+    use crate::modules::map::{Map, MapResource, GlobalTurn};
+    use crate::modules::player::{Facing, Player};
+    let mut map = Map::new(30, 30);
+    for y in 5..15 { for x in 5..15 { map.set_tile(x, y, TileKind::Floor); } }
+    let mut app = App::new();
+    app.insert_resource(MapResource(map));
+    app.insert_resource(GlobalTurn(42));
+    let pos = tile_to_world_coords(10, 10);
+    app.world.spawn((Player, Transform::from_xyz(pos.x, pos.y, 1.0), Facing::default()));
+    app.add_systems(Update, crate::modules::player::update_fov_for_test);
+    app.update();
+
+    let map = &app.world.resource::<MapResource>().0;
+    let idx = map.index(10, 10);
+    assert!(map.tiles[idx].visible, "플레이어 위치는 보임");
+    assert_eq!(map.tiles[idx].last_seen_turn, Some(42), "보인 타일은 GlobalTurn 으로 갱신");
+}
+
+#[test]
+fn fov는_보이지_않는_타일의_last_seen_turn을_유지한다() {
+    use crate::modules::map::{Map, MapResource, GlobalTurn};
+    use crate::modules::player::{Facing, Player};
+    let mut map = Map::new(30, 30);
+    for y in 0..30 { for x in 0..30 { map.set_tile(x, y, TileKind::Floor); } }
+    // 멀리 떨어진 타일에 이전에 본 기록을 심어 둔다.
+    let far_idx = map.index(29, 29);
+    map.tiles[far_idx].revealed = true;
+    map.tiles[far_idx].last_seen_turn = Some(10);
+    let mut app = App::new();
+    app.insert_resource(MapResource(map));
+    app.insert_resource(GlobalTurn(100));
+    let pos = tile_to_world_coords(0, 0);
+    app.world.spawn((Player, Transform::from_xyz(pos.x, pos.y, 1.0), Facing::default()));
+    app.add_systems(Update, crate::modules::player::update_fov_for_test);
+    app.update();
+
+    let map = &app.world.resource::<MapResource>().0;
+    // (29,29) 는 (0,0) 시야 밖이라 visible=false, last_seen_turn 은 이전 값 유지.
+    assert!(!map.tiles[far_idx].visible, "멀리 있는 타일은 안 보임");
+    assert_eq!(map.tiles[far_idx].last_seen_turn, Some(10),
+        "안 보이는 타일은 last_seen_turn 유지");
+}
+
+// ── 시스템: apply_light_dimming × 기억 감퇴 ──────────────────────────────────
+
+#[test]
+fn 디밍시스템은_기억타일의_경과_턴에_따라_더_어둡게_칠한다() {
+    use crate::modules::map::GlobalTurn;
+    // 1x1 맵 — visible=false, revealed=true(기억), 마지막 본 턴 0, 현재 100 → Δ=100.
+    let mut app = App::new();
+    let mut map = Map::new(1, 1);
+    map.set_tile(0, 0, TileKind::Floor);
+    map.tiles[0].visible = false;
+    map.tiles[0].revealed = true;
+    map.tiles[0].last_seen_turn = Some(0);
+    app.insert_resource(MapResource(map));
+    app.insert_resource(LightMap { width: 1, height: 1, levels: vec![LightLevel::Bright] });
+    app.insert_resource(GlobalTurn(100));
+    app.world.spawn((
+        Text::from_section("x", TextStyle { color: Color::rgb(0.0, 0.0, 0.0), ..default() }),
+        Visibility::Visible,
+        TileEntity { x: 0, y: 0 },
+    ));
+    app.add_systems(Update, apply_light_dimming);
+    app.update();
+
+    let got = tile_color(&mut app);
+    let base = tile_base_color(TileKind::Floor);
+    // factor = 0.3 × memory_fade_factor(100) ≈ 0.3 × 0.1353 ≈ 0.0406
+    let f = 0.3 * memory_fade_factor(100);
+    let lerp = |c: f32| c * f + 0.13 * (1.0 - f);
+    assert!((got.r() - lerp(base.r())).abs() < 1e-5, "R: 기억 감퇴된 lerp");
+    assert!((got.g() - lerp(base.g())).abs() < 1e-5, "G");
+    assert!((got.b() - lerp(base.b())).abs() < 1e-5, "B");
+}
+
+#[test]
+fn 디밍시스템은_last_seen_turn_None이면_기존_0_3_factor를_유지한다() {
+    use crate::modules::map::GlobalTurn;
+    // last_seen_turn=None(아직 한 번도 본 적 없지만 revealed=true 인 인공적 케이스).
+    // GlobalTurn 이 있어도 None 이면 감퇴 없음 — 기존 동작.
+    let mut app = App::new();
+    let mut map = Map::new(1, 1);
+    map.set_tile(0, 0, TileKind::Floor);
+    map.tiles[0].visible = false;
+    map.tiles[0].revealed = true;
+    map.tiles[0].last_seen_turn = None;
+    app.insert_resource(MapResource(map));
+    app.insert_resource(LightMap { width: 1, height: 1, levels: vec![LightLevel::Bright] });
+    app.insert_resource(GlobalTurn(999));
+    app.world.spawn((
+        Text::from_section("x", TextStyle { color: Color::rgb(0.0, 0.0, 0.0), ..default() }),
+        Visibility::Visible,
+        TileEntity { x: 0, y: 0 },
+    ));
+    app.add_systems(Update, apply_light_dimming);
+    app.update();
+
+    let got = tile_color(&mut app);
+    let base = tile_base_color(TileKind::Floor);
+    let f = 0.3;
+    let lerp = |c: f32| c * f + 0.13 * (1.0 - f);
+    assert!((got.r() - lerp(base.r())).abs() < 1e-6, "R: 기존 0.3 factor 그대로");
+}
+
+#[test]
+fn 디밍시스템은_GlobalTurn_리소스가_없어도_기존_0_3_factor를_유지한다() {
+    // GlobalTurn 없음 → 모든 기억 타일은 turns_since_seen=None → 감퇴 없음.
+    let mut app = App::new();
+    let mut map = Map::new(1, 1);
+    map.set_tile(0, 0, TileKind::Floor);
+    map.tiles[0].visible = false;
+    map.tiles[0].revealed = true;
+    map.tiles[0].last_seen_turn = Some(0);
+    app.insert_resource(MapResource(map));
+    app.insert_resource(LightMap { width: 1, height: 1, levels: vec![LightLevel::Bright] });
+    // GlobalTurn 의도적으로 미삽입.
+    app.world.spawn((
+        Text::from_section("x", TextStyle { color: Color::rgb(0.0, 0.0, 0.0), ..default() }),
+        Visibility::Visible,
+        TileEntity { x: 0, y: 0 },
+    ));
+    app.add_systems(Update, apply_light_dimming);
+    app.update();
+
+    let got = tile_color(&mut app);
+    let base = tile_base_color(TileKind::Floor);
+    let f = 0.3;
+    let lerp = |c: f32| c * f + 0.13 * (1.0 - f);
+    assert!((got.r() - lerp(base.r())).abs() < 1e-6, "GlobalTurn 없으면 감퇴 없음");
+}
+
+#[test]
+fn 디밍시스템은_last_seen이_현재턴보다_미래여도_방어적으로_0턴으로_본다() {
+    use crate::modules::map::GlobalTurn;
+    // saturating_sub 방어: last_seen=200 > now=100 → Δ=0 → factor 1.0 → 기존 0.3 그대로.
+    let mut app = App::new();
+    let mut map = Map::new(1, 1);
+    map.set_tile(0, 0, TileKind::Floor);
+    map.tiles[0].visible = false;
+    map.tiles[0].revealed = true;
+    map.tiles[0].last_seen_turn = Some(200);
+    app.insert_resource(MapResource(map));
+    app.insert_resource(LightMap { width: 1, height: 1, levels: vec![LightLevel::Bright] });
+    app.insert_resource(GlobalTurn(100));
+    app.world.spawn((
+        Text::from_section("x", TextStyle { color: Color::rgb(0.0, 0.0, 0.0), ..default() }),
+        Visibility::Visible,
+        TileEntity { x: 0, y: 0 },
+    ));
+    app.add_systems(Update, apply_light_dimming);
+    app.update();
+
+    let got = tile_color(&mut app);
+    let base = tile_base_color(TileKind::Floor);
+    let f = 0.3;
+    let lerp = |c: f32| c * f + 0.13 * (1.0 - f);
+    assert!((got.r() - lerp(base.r())).abs() < 1e-6, "미래 last_seen 은 Δ=0 으로 방어");
+}
+
+// ── 세이브 호환 (last_seen_turn 누락 → None) ─────────────────────────────────
+
+#[test]
+fn 기존_세이브의_MapTile_직렬화에_last_seen_turn이_없으면_None으로_복원된다() {
+    use crate::modules::map::{MapTile, TileKind};
+    // 기존 세이브 포맷(필드 3개) 모방한 JSON.
+    let legacy = r#"{"kind":"Floor","revealed":true,"visible":false}"#;
+    let tile: MapTile = serde_json::from_str(legacy)
+        .expect("기존 세이브 호환: last_seen_turn 누락도 디시리얼라이즈");
+    assert_eq!(tile.kind, TileKind::Floor);
+    assert!(tile.revealed);
+    assert!(!tile.visible);
+    assert_eq!(tile.last_seen_turn, None, "누락 시 None 으로 복원");
+}
+
+#[test]
+fn 신규_MapTile은_last_seen_turn_필드를_포함해_round_trip한다() {
+    use crate::modules::map::{MapTile, TileKind};
+    let t = MapTile { kind: TileKind::Floor, revealed: true, visible: true, last_seen_turn: Some(7) };
+    let s = serde_json::to_string(&t).unwrap();
+    let back: MapTile = serde_json::from_str(&s).unwrap();
+    assert_eq!(back, t, "round-trip 보존");
+    assert!(s.contains("last_seen_turn"), "필드가 직렬화에 포함");
 }
 
 // ── 플러그인 build ────────────────────────────────────────────────────────────

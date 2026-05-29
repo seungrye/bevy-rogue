@@ -10,7 +10,7 @@
 
 use bevy::prelude::*;
 use crate::modules::{
-    map::{MapResource, MapSystemSet, TILE_SIZE},
+    map::{GlobalTurn, MapResource, MapSystemSet, TILE_SIZE},
     player::{Player, PlayerSystemSet},
 };
 
@@ -110,30 +110,52 @@ pub fn chebyshev_distance(a: (i32, i32), b: (i32, i32)) -> i32 {
     (a.0 - b.0).abs().max((a.1 - b.1).abs())
 }
 
+/// 기억 타일의 **망각 감쇠 계수** — 시간이 흐를수록 0 에 수렴해 결국 배경에 묻힌다.
+///
+/// 곡선: `exp(-Δturn / 50)`. 즉:
+///   - Δturn = 0   → 1.0        (방금 본 — 감쇠 없음)
+///   - Δturn = 50  ≈ 0.3679     (약 절반)
+///   - Δturn = 100 ≈ 0.1353
+///   - Δturn = 200 ≈ 0.0183     (거의 배경)
+///   - Δturn → ∞   → 0.0        (배경과 완전히 동일)
+///
+/// 이 계수를 기존 기억 디밍 factor(0.3) 에 곱해 `dim` 으로 배경(`BACKGROUND_COLOR`)
+/// 쪽으로 lerp 한다 — 검정으로 페이드되지 않고 자연스럽게 배경에 녹는다.
+pub fn memory_fade_factor(turns_since_seen: u32) -> f32 {
+    (-(turns_since_seen as f32) / 50.0).exp()
+}
+
 /// 가시성(visible/revealed)과 광량·거리를 함께 받아 타일의 최종 렌더 색을 결정하는
 /// **단일 순수 함수** — 디밍은 여기 한 곳에서만 결정한다(이중 처리/예외 분기 금지).
 ///
 /// - 미탐험(`!visible && !revealed`): `None` — 숨김(색 갱신 안 함).
-/// - 탐험만 됨(`!visible`): 기존대로 0.3 배 디밍(광량/거리 무관 — 안 보이는 기억).
+/// - 탐험만 됨(`!visible`): 기존 0.3 디밍에 **기억 감퇴 factor** 를 곱해 시간이 흐를수록
+///   더 흐려진다. `turns_since_seen=None` 이면 감퇴 없음(기존 동작 보존).
 /// - 보이고 밝음: 기본 색 × `distance_falloff_alpha(distance)` (시야 거리 감쇠).
 /// - 보이고 어둠: `DARK_DIM_FACTOR` × `distance_falloff_alpha(distance)` 디밍.
 ///
 /// `distance` 는 플레이어 ↔ 타일 체비쇼프 거리. 거리가 음수/0 이면 1.0 으로 간주
 /// (플레이어 자기 타일 + 방어). 거리 감쇠는 시야 안 타일에만 적용되며, 미탐험·
 /// 기억 타일은 거리 무관(기존 동작 보존).
+///
+/// `turns_since_seen` 은 마지막으로 본 시점 이후 경과한 글로벌 턴 수. 기억 타일에만
+/// 적용되며 visible 분기에서는 무시한다(보이는 동안엔 망각이 멈춘다).
 pub fn tile_render_color(
     base: Color,
     visible: bool,
     revealed: bool,
     light: LightLevel,
     distance: i32,
+    turns_since_seen: Option<u32>,
 ) -> Option<Color> {
     if !visible && !revealed {
         return None;
     }
     if !visible {
-        // 탐험만 된(기억) 타일 — 광량·거리 무관하게 기존 0.3 디밍 유지.
-        return Some(dim(base, 0.3));
+        // 탐험만 된(기억) 타일 — 0.3 × 기억 감퇴 factor 로 배경 쪽으로 lerp.
+        // turns_since_seen 이 None 이면 감퇴 없음(기존 0.3 디밍 유지).
+        let fade = turns_since_seen.map(memory_fade_factor).unwrap_or(1.0);
+        return Some(dim(base, 0.3 * fade));
     }
     let falloff = distance_falloff_alpha(distance);
     match light {
@@ -215,15 +237,21 @@ fn update_light_map(
     light_map.levels = compute_light_levels(map.width, map.height, &sources);
 }
 
-/// 타일 스프라이트 색을 가시성 + 광량 + 플레이어 거리로 한 번에 결정해 디밍한다.
-/// 기존 map 의 `update_tile_visibility` 가 가시성/숨김을 담당하고, 여기서는
-/// 광량·거리에 따른 색만 `tile_render_color` 로 일관 적용한다 — 보이는 타일에 한해.
+/// 타일 스프라이트 색을 가시성 + 광량 + 플레이어 거리 + 기억 경과 시간으로 한 번에
+/// 결정해 디밍한다. 기존 map 의 `update_tile_visibility` 가 가시성/숨김을 담당하고,
+/// 여기서는 광량·거리·기억 감퇴를 `tile_render_color` 로 일관 적용한다 — 보이는 타일과
+/// 기억(revealed) 타일에 한해.
 ///
 /// 플레이어 위치를 받아 시야 안 타일의 체비쇼프 거리로 거리 감쇠를 곱한다.
 /// 플레이어가 없으면(테스트 등) 거리 0 으로 보아 감쇠 없음(기존 동작 보존).
+///
+/// `GlobalTurn` 으로 각 기억 타일의 `Δturn = now - last_seen_turn` 을 계산해
+/// `memory_fade_factor` 의 입력으로 넘긴다. `last_seen_turn` 이 `None` 이거나
+/// `GlobalTurn` 리소스가 없으면 기억 감퇴를 적용하지 않는다.
 fn apply_light_dimming(
     map_res: Res<MapResource>,
     light_map: Res<LightMap>,
+    global_turn: Option<Res<GlobalTurn>>,
     player_query: Query<&Transform, With<Player>>,
     mut tile_query: Query<(&crate::modules::map::TileEntity, &mut Text, &Visibility)>,
 ) {
@@ -240,6 +268,7 @@ fn apply_light_dimming(
             let (x, y) = crate::modules::map::world_to_tile_coords(t.translation);
             (x as i32, y as i32)
         });
+    let now_turn: Option<u32> = global_turn.as_ref().map(|t| t.0 as u32);
     for (tile, mut text, vis) in tile_query.iter_mut() {
         // 숨김 타일은 색을 건드리지 않는다(가시성은 map 시스템이 결정).
         if *vis == Visibility::Hidden {
@@ -252,12 +281,19 @@ fn apply_light_dimming(
             Some(p) => chebyshev_distance(p, (tile.x as i32, tile.y as i32)),
             None => 0,
         };
+        // Δturn = now - last_seen — 둘 중 하나라도 없으면 None(기존 0.3 디밍 유지).
+        // saturating_sub 로 last_seen > now (세이브 후 리셋 등) 의 음수도 방어.
+        let turns_since_seen: Option<u32> = match (now_turn, map.tiles[idx].last_seen_turn) {
+            (Some(now), Some(last)) => Some(now.saturating_sub(last)),
+            _ => None,
+        };
         if let Some(color) = tile_render_color(
             base,
             map.tiles[idx].visible,
             map.tiles[idx].revealed,
             light,
             distance,
+            turns_since_seen,
         ) {
             if text.sections[0].style.color != color {
                 text.sections[0].style.color = color;
