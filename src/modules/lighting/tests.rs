@@ -531,34 +531,36 @@ fn 기억감퇴_델타_0턴이면_factor는_1_0이다() {
 }
 
 #[test]
-fn 기억감퇴_델타_200턴이면_factor는_약_0_3679이다() {
-    // exp(-1) ≈ 0.36788 — 새 곡선(/200)에서 200 턴이면 약 절반쯤 어두워진다.
-    let f = memory_fade_factor(200);
+fn 기억감퇴_델타_100턴이면_factor는_약_0_3679이다() {
+    // exp(-1) ≈ 0.36788 — 시상수 100. 100 턴이면 절반쯤(약 37%) 까지 감쇠.
+    let f = memory_fade_factor(100);
     assert!((f - (-1.0f32).exp()).abs() < 1e-6);
-    assert!((f - 0.36788).abs() < 1e-3, "200턴은 약 0.37");
+    assert!((f - 0.36788).abs() < 1e-3, "100턴은 약 0.37");
 }
 
 #[test]
-fn 기억감퇴_델타_400턴이면_factor는_약_0_1353이다() {
-    // exp(-2) ≈ 0.13534
-    let f = memory_fade_factor(400);
-    assert!((f - 0.13534).abs() < 1e-3, "400턴은 약 0.135");
+fn 기억감퇴_델타_200턴이면_factor는_약_0_1353이다() {
+    // exp(-2) ≈ 0.13534.
+    let f = memory_fade_factor(200);
+    assert!((f - 0.13534).abs() < 1e-3, "200턴은 약 0.135");
 }
 
 #[test]
-fn 기억감퇴_델타_800턴이면_factor는_약_0_0183이다() {
-    // exp(-4) ≈ 0.01832 — 거의 배경.
-    let f = memory_fade_factor(800);
-    assert!((f - 0.01832).abs() < 1e-3, "800턴은 약 0.018");
+fn 기억감퇴_델타_500턴이면_거의_배경이다() {
+    // 사용자 디자인: '500 턴이면 거의 배경과 구분이 안될 정도'.
+    // exp(-5) ≈ 0.0067 → 1% 미만.
+    let f = memory_fade_factor(500);
+    assert!(f < 0.01, "500턴은 1% 미만 — 사실상 배경");
+    assert!(f > 0.0, "지수형이라 정확한 0 은 아님(점근)");
 }
 
 #[test]
 fn 기억감퇴는_매우_큰_델타에서_0에_수렴한다() {
     // u32 범위 안에서 큰 값들도 0 에 매끄럽게 수렴해야 한다.
-    let a = memory_fade_factor(2_000);
+    let a = memory_fade_factor(1_000);
     let b = memory_fade_factor(5_000);
     let c = memory_fade_factor(50_000);
-    assert!(a < 1e-3, "Δ=2000 이면 거의 0");
+    assert!(a < 1e-3, "Δ=1000 이면 거의 0");
     assert!(b < a, "Δ가 커질수록 더 작아진다");
     assert!(c < b);
     assert!(c >= 0.0, "음수가 되지 않는다");
