@@ -3,6 +3,8 @@
 //   id: 인벤토리/장비 슬롯에서 참조하는 안정 식별자
 //   display_name: 인벤토리/UI 표기 이름
 //   glyph_ascii / glyph_unicode / glyph_game_icon: 글리프 스타일별 표시 문자
+//     · glyph_unicode  : RPG-Awesome 폰트 (PUA U+E900~U+EAEE)
+//     · glyph_game_icon: Kenney Icon Font
 //   pickup_message: 획득 시 로그 메시지
 //   desc: 효과 설명(가이드/패널 표시 용 — 사람용 텍스트)
 //   effects: 효과 키 목록(데이터 주도). 게임 코드는 id 가 아닌 이 키로 분기.
@@ -18,7 +20,7 @@
         id: "scout_lens",
         display_name: "올빼미 안경",
         glyph_ascii: "O",
-        glyph_unicode: "\u{1F50E}",
+        glyph_unicode: "\u{E9B5}",
         glyph_game_icon: "\u{1F50E}",
         pickup_message: "올빼미 안경을 받았다. 착용하면 경비병의 시선이 붉게 비쳐 보인다.",
         desc: "잠입 전용. 착용하면 가드의 시야가 닿는 위험 타일이 붉게 표시된다.",
@@ -28,7 +30,7 @@
         id: "trap_scope",
         display_name: "광부의 등불",
         glyph_ascii: "L",
-        glyph_unicode: "\u{1F526}",
+        glyph_unicode: "\u{EA1C}",
         glyph_game_icon: "\u{1F526}",
         pickup_message: "광부의 등불을 받았다. 착용하면 깔린 함정의 위치가 빛에 드러난다.",
         desc: "함정 전용. 착용하면 시야 내 숨김 함정이 자동으로 드러난다.",

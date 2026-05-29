@@ -1404,10 +1404,17 @@ impl Plugin for ItemPlugin {
 }
 
 fn setup_glyph_fonts(mut commands: Commands, asset_server: Res<AssetServer>) {
+    // 글리프 스타일별 폰트 매핑.
+    // - Ascii    : FiraMono — 고정폭 모노스페이스.
+    // - Unicode  : RPG-Awesome — 판타지/RPG 테마 PUA(U+E900~U+EAEE) 아이콘 폰트.
+    //              이전 NotoSansSymbols2 (일반 유니코드 심볼) 에서 변경 — 게임 분위기에 더 적합.
+    // - GameIcon : Kenney Icon Font — 모던한 UI/게임 픽토그램 PUA(U+E800~).
+    //              이전엔 GameIcon 도 RPG-Awesome 을 썼지만, 두 스타일을 분리해
+    //              플레이어가 두 다른 아이콘 세트를 토글할 수 있게 한다.
     commands.insert_resource(GlyphFontHandles {
         ascii:     asset_server.load("fonts/FiraMono-Medium.ttf"),
-        unicode:   asset_server.load("fonts/NotoSansSymbols2-Regular.ttf"),
-        game_icon: asset_server.load("fonts/rpg-awesome.ttf"),
+        unicode:   asset_server.load("fonts/rpg-awesome.ttf"),
+        game_icon: asset_server.load("fonts/kenney-icon-font.ttf"),
     });
 }
 
@@ -1887,11 +1894,36 @@ mod tests {
     }
 
     #[test]
-    fn 유니코드_스타일은_심볼문자를_반환한다() {
+    fn 유니코드_스타일은_rpg어썸_pua_코드포인트를_반환한다() {
+        // GlyphStyle::Unicode 가 RPG-Awesome 폰트(PUA U+E900~U+EAEE) 로 매핑된 이후의
+        // 보장: sword(broadsword 아이콘), leather_armor(round-shield 아이콘) 가 RON 의
+        // 새 codepoint 와 정확히 일치해야 한다.
         let s = glyph_for_style(ItemKind::Weapon(WeaponKind::SWORD), GlyphStyle::Unicode, qi());
-        assert_eq!(s, "\u{1F5E1}");
+        assert_eq!(s, "\u{E946}");
         let shield = glyph_for_style(ItemKind::Armor(ArmorKind::LEATHER_ARMOR), GlyphStyle::Unicode, qi());
-        assert_eq!(shield, "\u{1F6E1}");
+        assert_eq!(shield, "\u{EA87}");
+        // 모든 weapon/armor 의 유니코드 글리프가 RPG-Awesome PUA 범위(U+E900..=U+EAEE)
+        // 또는 ASCII 안에 들어가야 한다(누락된 매핑 회귀 방지).
+        for &id in &["dagger", "sword", "spear", "bow", "axe", "crossbow", "staff",
+                     "battle_axe", "greatsword", "war_hammer", "magic_bow",
+                     "holy_sword", "dragon_spear", "thunder_bow", "club"] {
+            let meta = qi().weapons.get(id).expect("weapon meta");
+            let cp = meta.glyph_unicode.chars().next().unwrap() as u32;
+            assert!(
+                cp <= 0x7F || (0xE900..=0xEAEE).contains(&cp),
+                "weapon {id}: glyph_unicode U+{cp:04X} 가 RPG-Awesome PUA 밖"
+            );
+        }
+        for &id in &["cloth_armor", "leather_armor", "light_armor", "chain_mail",
+                     "scale_armor", "knight_armor", "plate_armor", "mercenary_armor",
+                     "paladin_armor", "dragonscale_armor"] {
+            let meta = qi().armors.get(id).expect("armor meta");
+            let cp = meta.glyph_unicode.chars().next().unwrap() as u32;
+            assert!(
+                cp <= 0x7F || (0xE900..=0xEAEE).contains(&cp),
+                "armor {id}: glyph_unicode U+{cp:04X} 가 RPG-Awesome PUA 밖"
+            );
+        }
     }
 
     #[test]
@@ -1961,13 +1993,18 @@ mod tests {
     }
 
     #[test]
-    fn 마검_퀘스트아이템들의_유니코드_글리프가_올바르다() {
-        let sword = glyph_for_style(ItemKind::QuestItem(QuestItemKind("demon_sword")), GlyphStyle::Unicode, qi());
-        assert_eq!(sword, "\u{2694}");
-        let memo = glyph_for_style(ItemKind::QuestItem(QuestItemKind("elenas_memo")), GlyphStyle::Unicode, qi());
-        assert_eq!(memo, "\u{270E}");
-        let book = glyph_for_style(ItemKind::QuestItem(QuestItemKind("ancient_ritual_book")), GlyphStyle::Unicode, qi());
-        assert_eq!(book, "\u{2720}");
+    fn 마검_퀘스트아이템들의_유니코드_글리프가_rpg어썸_pua_범위안에_있다() {
+        // RPG-Awesome 전환 이후 demon_sword/elenas_memo/ancient_ritual_book 의 유니코드
+        // 글리프가 PUA U+E900..=U+EAEE 범위로 옮겨졌는지 보장한다. (codepoint 자체는
+        // 향후 더 좋은 매핑이 발견되면 변경될 수 있어 정확한 값보다 범위/안정성을 본다.)
+        for id in ["demon_sword", "elenas_memo", "ancient_ritual_book"] {
+            let meta = qi().quest_items.get(id).expect("quest_item meta");
+            let cp = meta.glyph_unicode.chars().next().unwrap() as u32;
+            assert!(
+                (0xE900..=0xEAEE).contains(&cp),
+                "{id}: glyph_unicode U+{cp:04X} 가 RPG-Awesome PUA 밖"
+            );
+        }
     }
 
     #[test]
@@ -2794,7 +2831,8 @@ mod tests {
         app.add_systems(Update, update_item_glyphs);
         app.update();
         let text = app.world.get::<Text>(e).unwrap();
-        assert_eq!(text.sections[0].value, "\u{1F5E1}", "유니코드 글리프로 갱신");
+        // RPG-Awesome 전환 이후 sword 의 유니코드 글리프는 broadsword (\u{E946}).
+        assert_eq!(text.sections[0].value, "\u{E946}", "유니코드 글리프로 갱신 (RPG-Awesome broadsword)");
     }
 
     #[test]
@@ -2833,6 +2871,35 @@ mod tests {
         app.add_systems(Startup, setup_glyph_fonts);
         app.update();
         assert!(app.world.get_resource::<GlyphFontHandles>().is_some());
+    }
+
+    #[test]
+    fn 글리프폰트_핸들의_3개_스타일_모두_서로_다른_폰트를_가리킨다() {
+        // ascii(FiraMono) / unicode(rpg-awesome) / game_icon(kenney) 가 모두 다른
+        // 에셋 경로를 사용해야 한다. 핸들은 path 기반 id 라 동일 path 면 핸들이 같아진다.
+        let mut app = asset_app();
+        app.add_systems(Startup, setup_glyph_fonts);
+        app.update();
+        let h = app.world.get_resource::<GlyphFontHandles>().expect("핸들 리소스");
+        // 같은 폰트 파일을 두 번 load 하면 같은 핸들이 반환된다 → 세 핸들이 모두
+        // 다른지 확인하면 매핑이 의도대로 갈렸음이 보장된다.
+        assert_ne!(h.ascii.id(),     h.unicode.id(),   "ascii 와 unicode 는 다른 폰트여야 한다");
+        assert_ne!(h.unicode.id(),   h.game_icon.id(), "unicode 와 game_icon 은 다른 폰트여야 한다");
+        assert_ne!(h.ascii.id(),     h.game_icon.id(), "ascii 와 game_icon 은 다른 폰트여야 한다");
+    }
+
+    #[test]
+    fn 모든_quest_item의_유니코드_글리프가_rpg어썸_pua_범위안에_있다() {
+        // RPG-Awesome 폰트 전환 후 모든 quest item 의 glyph_unicode 가 PUA(U+E900..=U+EAEE)
+        // 안에 있어야 한다. 새 quest item 추가 시 매핑 누락을 잡는 안전망.
+        let reg = qi();
+        for (id, meta) in reg.quest_items.iter() {
+            let cp = meta.glyph_unicode.chars().next().expect("빈 glyph 금지") as u32;
+            assert!(
+                (0xE900..=0xEAEE).contains(&cp),
+                "quest_item {id}: glyph_unicode U+{cp:04X} 가 RPG-Awesome PUA 밖"
+            );
+        }
     }
 
     #[test]
