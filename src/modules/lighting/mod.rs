@@ -158,13 +158,14 @@ pub fn tile_render_color(
         let fade = turns_since_seen.map(memory_fade_factor).unwrap_or(1.0);
         return Some(dim(base, 0.3 * fade));
     }
-    // 시야 안 — 거리/광량 감쇠는 base 의 floor 로만 작동(clamp_to_base).
+    // 시야 안 — 거리/광량 감쇠 lerp 그대로 적용. clamp 없음
+    // (clamp_to_base 는 게임 타일이 모두 bg 보다 밝아 거리 감쇠를 시각적으로 무력화하는
+    //  버그가 있었음 — 처음 보는 타일조차 falloff 가 안 보이는 문제. 분기 단일 lerp 로).
     let falloff = distance_falloff_alpha(distance);
-    let dimmed = match light {
+    Some(match light {
         LightLevel::Bright => dim(base, falloff),
         LightLevel::Dark => dim(base, DARK_DIM_FACTOR * falloff),
-    };
-    Some(clamp_to_base(dimmed, base))
+    })
 }
 
 /// 게임 캔버스 배경색 (Bevy 기본 ClearColor 와 같은 짙은 회색).
@@ -188,21 +189,6 @@ fn dim(base: Color, factor: f32) -> Color {
         base.g() * t + bg.g() * (1.0 - t),
         base.b() * t + bg.b() * (1.0 - t),
         base.a(),
-    )
-}
-
-/// 채널별 `max(c, base)` — 시야 안 거리/광량 감쇠가 타일 자체 색보다 더 어두워지면
-/// base 를 그대로 살린다. 사용자 디자인: "타일 밝기 80, 거리 감쇠 10 →
-/// max(80, 10) = 80". 즉 감쇠는 **밝기의 floor (최소치)** 로만 작동.
-///
-/// 망각 분기(visible=false) 에는 적용하지 않는다 — 망각의 본질이 시간이 지나며
-/// 타일이 흐려지는 거라, 클램프를 걸면 밝은 타일이 망각 영향을 받지 못한다.
-fn clamp_to_base(c: Color, base: Color) -> Color {
-    Color::rgba(
-        c.r().max(base.r()),
-        c.g().max(base.g()),
-        c.b().max(base.b()),
-        c.a(),
     )
 }
 

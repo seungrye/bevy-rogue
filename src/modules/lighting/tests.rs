@@ -89,17 +89,15 @@ fn 미탐험_타일은_색을_정하지_않는다() {
     assert_eq!(tile_render_color(base, false, false, LightLevel::Bright, 5, Some(100)), None);
 }
 
-/// 시야 안(visible=true) 기대 r — 거리/광량 감쇠는 base 의 floor 로만 작동.
-/// `lerp = base*factor + bg*(1-factor)` (bg=0.13) 한 뒤, `max(lerp, base)`.
+/// 기대 r — 시야 안·망각 모두 클램프 없는 순수 lerp.
+/// `lerp = base*factor + bg*(1-factor)` (bg=0.13).
 fn expected_dim_r(base_r: f32, factor: f32) -> f32 {
-    let lerp = base_r * factor + 0.13 * (1.0 - factor);
-    lerp.max(base_r)
+    base_r * factor + 0.13 * (1.0 - factor)
 }
 
-/// 망각 분기(visible=false) 기대 r — 클램프 없는 순수 lerp. 시간이 흐르면
-/// 밝은 타일도 배경으로 어두워져야 하므로 base 보호를 적용하지 않는다.
+/// 망각 분기와 동일 — 가독성용 별칭.
 fn expected_lerp_r(base_r: f32, factor: f32) -> f32 {
-    base_r * factor + 0.13 * (1.0 - factor)
+    expected_dim_r(base_r, factor)
 }
 
 #[test]
@@ -129,8 +127,8 @@ fn 보이지만_어두운_타일은_거리1이면_DARK_DIM_FACTOR로_배경_lerp
     let dimmed = tile_render_color(base, true, true, LightLevel::Dark, 1, None).unwrap();
     let expected = expected_dim_r(1.0, DARK_DIM_FACTOR);
     assert!((dimmed.r() - expected).abs() < 1e-6, "어둠 d=1 은 DARK_DIM_FACTOR 로 배경 lerp");
-    // base=1.0 은 모든 채널이 bg(0.13)보다 밝아 max(lerp, base) = base 그대로 — 어두워지지 않음(타일 본연 보존).
-    assert!(dimmed.r() <= base.r() + 1e-6, "타일 본연 max-clamp — base 보다 밝지 않다");
+    // factor<1 인 lerp 는 base 보다 어둡거나 같다(배경 쪽으로 lerp).
+    assert!(dimmed.r() < base.r(), "lerp 결과는 base 보다 어둡다(배경에 가까움)");
 }
 
 #[test]
@@ -362,10 +360,10 @@ fn 디밍시스템은_보이지만_어두운_타일을_DARK_DIM_FACTOR로_배경
     app.update();
     let base = tile_base_color(TileKind::Floor);
     let f = DARK_DIM_FACTOR;
-    // 시야 안 어둠 분기 — max-clamp 적용 (base 가 lerp 보다 밝은 채널 보호).
-    let lerp = |c: f32| (c * f + 0.13 * (1.0 - f)).max(c);
+    // 시야 안 어둠 분기 — clamp 없는 순수 lerp.
+    let lerp = |c: f32| c * f + 0.13 * (1.0 - f);
     let expected = Color::rgba(lerp(base.r()), lerp(base.g()), lerp(base.b()), base.a());
-    assert_eq!(tile_color(&mut app), expected, "어둠 타일은 DARK_DIM_FACTOR 로 배경 lerp (타일 본연 max-clamp)");
+    assert_eq!(tile_color(&mut app), expected, "어둠 타일은 DARK_DIM_FACTOR 로 배경 lerp");
 }
 
 #[test]
@@ -449,7 +447,7 @@ fn 디밍시스템은_플레이어_거리에_따라_시야_안_타일을_더_어
     let got = app.world.query::<&Text>().single(&app.world).sections[0].style.color;
     let base = tile_base_color(TileKind::Floor);
     // d=2 → falloff 0.5 → 각 채널이 factor 0.5 로 배경(0.13) 과 lerp.
-    let lerp = |c: f32| (c * 0.5 + 0.13 * 0.5).max(c);
+    let lerp = |c: f32| c * 0.5 + 0.13 * 0.5;
     assert!((got.r() - lerp(base.r())).abs() < 1e-6, "d=2 R 채널 0.5 factor 로 배경 lerp");
     assert!((got.g() - lerp(base.g())).abs() < 1e-6, "G 채널도 동일");
     assert!((got.b() - lerp(base.b())).abs() < 1e-6, "B 채널도 동일");
@@ -470,14 +468,12 @@ fn 디밍시스템은_광량이_바뀌면_색을_다시_칠한다() {
     app.update();
     let bright_color = tile_color(&mut app);
 
-    // 광량을 어둠으로 바꾸면(LightMap 변경) 다시 칠해진다 — max-clamp 후에는 보통 같은 색
-    // (base 가 bg 보다 밝아 max 가 base 유지) 이라 색 자체 변경 검증은 어렵지만,
-    // 시스템이 다시 호출돼 색을 재계산함을 확인하려면 dimming 함수 호출 자체를 검증.
+    // 광량을 어둠으로 바꾸면(LightMap 변경) 다시 칠해진다.
     app.world.resource_mut::<LightMap>().levels[0] = LightLevel::Dark;
     app.update();
     let dark_color = tile_color(&mut app);
-    // 두 색은 같거나(타일 본연 보존 — base 가 bg 보다 밝음) 더 어두움(base 가 bg 보다 어두운 채널).
-    assert!(dark_color.r() <= bright_color.r() + 1e-6, "어둠 분기는 밝음보다 더 밝지 않다");
+    // clamp 없는 lerp 라 base=WHITE 도 명확히 어두워진다(어둠 factor = 0.5 → 0.565).
+    assert!(dark_color.r() < bright_color.r(), "어둠으로 바뀌면 더 어둡게 다시 칠한다");
 }
 
 // ── memory_fade_factor (기억 감퇴 곡선) ───────────────────────────────────────
