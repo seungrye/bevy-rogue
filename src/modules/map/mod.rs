@@ -500,20 +500,26 @@ pub fn draw_map(
     asset_server: Res<AssetServer>,
     map_res: Res<MapResource>,
     mut grid: ResMut<TileEntityGrid>,
+    global_turn: Option<Res<GlobalTurn>>,
 ) {
     let font = asset_server.load("fonts/FiraMono-Medium.ttf");
     let map = map_res.map();
     grid.reset(map.width, map.height);
+    // 세이브 로드 후의 revealed 타일을 '지금 시점에서 본 상태(brightness=0.3)' 로 초기화.
+    // last_seen=Some(now) 로 두면 turns_since_seen 이 처음 0 → fade=1.0 시작 후 시간
+    // 진행에 따라 0.3 × memory_fade(elapsed) 로 점진 감쇠 — 사용자 의도.
+    let now_turn: u32 = global_turn.as_ref().map(|t| t.0 as u32).unwrap_or(0);
     for y in 0..map.height {
         for x in 0..map.width {
             let kind = map.get_tile(x, y);
             let glyph = tile_glyph(kind);
             let coord = tile_to_world_coords(x, y);
-            // save/load 시 brightness 컴포넌트는 별도 저장 안 됨. revealed 정보만으로
-            // brightness 초기값을 결정: revealed 면 1.0(본 적 있음), 아니면 0.0.
-            // last_seen 정보는 없으니 None — 다음 시야 진입 시 정상 max-갱신.
             let idx = map.index(x, y);
-            let brightness = if map.tiles[idx].revealed { TileBrightness(0.3) } else { TileBrightness::default() };
+            let (brightness, last_seen) = if map.tiles[idx].revealed {
+                (TileBrightness(0.3), TileLastSeen(Some(now_turn)))
+            } else {
+                (TileBrightness::default(), TileLastSeen::default())
+            };
             let id = commands.spawn((
                 Text2dBundle {
                     text: Text::from_section(glyph, TextStyle {
@@ -526,7 +532,7 @@ pub fn draw_map(
                 },
                 TileEntity { x, y },
                 brightness,
-                TileLastSeen::default(),
+                last_seen,
             )).id();
             grid.set(x, y, id);
         }
@@ -554,6 +560,7 @@ fn execute_regen(
     asset_server: Res<AssetServer>,
     registry: Res<MapGeneratorRegistry>,
     mut grid: ResMut<TileEntityGrid>,
+    global_turn: Option<Res<GlobalTurn>>,
     mut player_respawn: EventWriter<PlayerRespawnEvent>,
     mut villager_respawn: EventWriter<VillagerRespawnEvent>,
     mut monster_respawn: EventWriter<MonsterRespawnEvent>,
@@ -578,7 +585,12 @@ fn execute_regen(
                 let glyph = tile_glyph(kind);
                 let coord = tile_to_world_coords(x, y);
                 let idx = map.index(x, y);
-                let brightness = if map.tiles[idx].revealed { TileBrightness(0.3) } else { TileBrightness::default() };
+                let now_turn: u32 = global_turn.as_ref().map(|t| t.0 as u32).unwrap_or(0);
+                let (brightness, last_seen) = if map.tiles[idx].revealed {
+                    (TileBrightness(0.3), TileLastSeen(Some(now_turn)))
+                } else {
+                    (TileBrightness::default(), TileLastSeen::default())
+                };
                 let id = commands.spawn((
                     Text2dBundle {
                         text: Text::from_section(glyph, TextStyle {
@@ -591,7 +603,7 @@ fn execute_regen(
                     },
                     TileEntity { x, y },
                     brightness,
-                    TileLastSeen::default(),
+                    last_seen,
                 )).id();
                 grid.set(x, y, id);
             }
@@ -711,6 +723,7 @@ fn execute_apply(
     tile_query: Query<Entity, With<TileEntity>>,
     asset_server: Res<AssetServer>,
     mut grid: ResMut<TileEntityGrid>,
+    global_turn: Option<Res<GlobalTurn>>,
     mut player_respawn: EventWriter<PlayerRespawnEvent>,
     mut villager_respawn: EventWriter<VillagerRespawnEvent>,
     mut monster_respawn: EventWriter<MonsterRespawnEvent>,
@@ -730,7 +743,12 @@ fn execute_apply(
                 let glyph = tile_glyph(kind);
                 let coord = tile_to_world_coords(x, y);
                 let idx = map.index(x, y);
-                let brightness = if map.tiles[idx].revealed { TileBrightness(0.3) } else { TileBrightness::default() };
+                let now_turn: u32 = global_turn.as_ref().map(|t| t.0 as u32).unwrap_or(0);
+                let (brightness, last_seen) = if map.tiles[idx].revealed {
+                    (TileBrightness(0.3), TileLastSeen(Some(now_turn)))
+                } else {
+                    (TileBrightness::default(), TileLastSeen::default())
+                };
                 let id = commands.spawn((
                     Text2dBundle {
                         text: Text::from_section(glyph, TextStyle {
@@ -743,7 +761,7 @@ fn execute_apply(
                     },
                     TileEntity { x, y },
                     brightness,
-                    TileLastSeen::default(),
+                    last_seen,
                 )).id();
                 grid.set(x, y, id);
             }
