@@ -175,10 +175,10 @@ pub(crate) const BACKGROUND_COLOR: Color = Color::rgb(0.13, 0.13, 0.13);
 /// 단순 `dim`(RGB 곱) 은 모든 색을 검은색으로 가게 해 어색하므로, 배경색(짙은 회색)
 /// 쪽으로 lerp 해 멀어질수록 타일이 배경에 자연스럽게 녹아드는 효과를 낸다.
 ///
-/// **밝아짐 방지(채널별 min)**: base 가 배경보다 어두운 채널은 lerp 결과가 base 보다
-/// 밝아질 수 있어 어색하다(예 어두운 벽돌이 멀어질수록 배경 때문에 밝아짐).
-/// 채널별로 `min(lerp, base)` 를 적용해 "디밍은 어두워질 뿐, 밝아지지 않는다" 를
-/// 보장한다.
+/// **타일 본연 보존(채널별 max)**: 사용자 디자인 — "타일 밝기 80, 거리 감쇠 10 →
+/// max(80, 10) = 80". 즉 거리 감쇠/광량 lerp 가 타일 본연 base 보다 어두워지면
+/// base 를 그대로 사용한다(타일이 자체적으로 갖는 색은 어떤 거리에서든 보존).
+/// 채널별로 `max(lerp, base)` 를 적용 — base 가 lerp 보다 더 밝은 채널은 base 그대로.
 fn dim(base: Color, factor: f32) -> Color {
     let t = factor.clamp(0.0, 1.0);
     let bg = BACKGROUND_COLOR;
@@ -186,9 +186,9 @@ fn dim(base: Color, factor: f32) -> Color {
     let lg = base.g() * t + bg.g() * (1.0 - t);
     let lb = base.b() * t + bg.b() * (1.0 - t);
     Color::rgba(
-        lr.min(base.r()),
-        lg.min(base.g()),
-        lb.min(base.b()),
+        lr.max(base.r()),
+        lg.max(base.g()),
+        lb.max(base.b()),
         base.a(),
     )
 }
