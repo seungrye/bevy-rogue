@@ -300,6 +300,41 @@ impl MapGeneratorRegistry {
             .find(|g| g.name() == algo)
             .map(|g| g.generate(width, height, seed))
     }
+    /// 등록된 모든 generator 의 이름 — 카탈로그/샘플 prebuild 용.
+    pub fn names(&self) -> Vec<&str> {
+        self.generators.iter().map(|g| g.name()).collect()
+    }
+    /// 게임에서 사용하는 모든 generator 가 등록된 기본 registry — MapPlugin 과
+    /// sample CLI 가 동일 목록을 공유해 카탈로그가 게임 안 모습과 일치한다.
+    pub fn default_registry() -> Self {
+        use generators::*;
+        let mut r = Self::new();
+        r.register(Box::new(bsp::BspGenerator));
+        r.register(Box::new(rooms::SimpleRoomsGenerator));
+        r.register(Box::new(drunkard::DrunkardWalkGenerator));
+        r.register(Box::new(cellular_automata::CellularAutomataGenerator));
+        r.register(Box::new(dla::DlaGenerator));
+        r.register(Box::new(bsp_indoor::BspIndoorGenerator));
+        r.register(Box::new(prefab::PrefabGenerator));
+        r.register(Box::new(organic_village::OrganicVillageGenerator));
+        r.register(Box::new(grid_village::GridVillageGenerator));
+        r.register(Box::new(forest::ForestGenerator));
+        r.register(Box::new(perlin::PerlinNoiseGenerator));
+        r.register(Box::new(maze::MazeGenerator));
+        r.register(Box::new(maze_prim::MazePrimGenerator));
+        r.register(Box::new(recursive_division::RecursiveDivisionGenerator));
+        r.register(Box::new(voronoi_rooms::VoronoiRoomsGenerator));
+        r.register(Box::new(walled_town::WalledTownGenerator));
+        r.register(Box::new(voronoi_districts::VoronoiDistrictsGenerator));
+        r.register(Box::new(island::IslandGenerator));
+        r.register(Box::new(archipelago::ArchipelagoGenerator));
+        r.register(Box::new(coastal::CoastalGenerator));
+        r.register(Box::new(ocean::OceanGenerator));
+        r.register(Box::new(biome_world::BiomeWorldGenerator));
+        r.register(Box::new(wfc::WfcGenerator));
+        r.register(Box::new(tinykeep::TinyKeepGenerator));
+        r
+    }
 }
 
 // --- 이벤트 ---
@@ -394,33 +429,8 @@ impl Default for MapPlugin {
 
 impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
-        use generators::*;
-
-        let mut registry = MapGeneratorRegistry::new();
-        registry.register(Box::new(bsp::BspGenerator));
-        registry.register(Box::new(rooms::SimpleRoomsGenerator));
-        registry.register(Box::new(drunkard::DrunkardWalkGenerator));
-        registry.register(Box::new(cellular_automata::CellularAutomataGenerator));
-        registry.register(Box::new(dla::DlaGenerator));
-        registry.register(Box::new(bsp_indoor::BspIndoorGenerator));
-        registry.register(Box::new(prefab::PrefabGenerator));
-        registry.register(Box::new(organic_village::OrganicVillageGenerator));
-        registry.register(Box::new(grid_village::GridVillageGenerator));
-        registry.register(Box::new(forest::ForestGenerator));
-        registry.register(Box::new(perlin::PerlinNoiseGenerator));
-        registry.register(Box::new(maze::MazeGenerator));
-        registry.register(Box::new(maze_prim::MazePrimGenerator));
-        registry.register(Box::new(recursive_division::RecursiveDivisionGenerator));
-        registry.register(Box::new(voronoi_rooms::VoronoiRoomsGenerator));
-        registry.register(Box::new(walled_town::WalledTownGenerator));
-        registry.register(Box::new(voronoi_districts::VoronoiDistrictsGenerator));
-        registry.register(Box::new(island::IslandGenerator));
-        registry.register(Box::new(archipelago::ArchipelagoGenerator));
-        registry.register(Box::new(coastal::CoastalGenerator));
-        registry.register(Box::new(ocean::OceanGenerator));
-        registry.register(Box::new(biome_world::BiomeWorldGenerator));
-        registry.register(Box::new(wfc::WfcGenerator));
-        registry.register(Box::new(tinykeep::TinyKeepGenerator));
+        // 모든 generator 등록은 default_registry 에 위임 — sample CLI 와 동일 목록 공유.
+        let mut registry = MapGeneratorRegistry::default_registry();
 
         if let Some(name) = &self.initial_algorithm {
             registry.select_by_name(name);
