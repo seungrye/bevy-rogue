@@ -121,12 +121,6 @@ pub enum PlayerSystemSet {
     /// 이동 완료 시 PlayerActedEvent 가 여기서 발행되므로,
     /// 픽업·몬스터·주민 등 턴 로직은 이 세트 이후에 실행해야 한다.
     MovementComplete,
-    /// update_fov (시야 + brightness 컴포넌트 mut access) 완료 세트.
-    /// `apply_light_dimming` 의 `Changed<TileBrightness>` query 가 같은 frame
-    /// 내에서 이 결과를 보려면 dimming 시스템이 이 set 의 *후*에 실행돼야 한다.
-    /// 명시 ordering 이 없으면 Bevy 가 임의 순서로 실행해 1 frame 지연이 발생,
-    /// 시야 빠진 entity 의 색 갱신이 안 보이는 시각 버그가 난다.
-    FovUpdate,
 }
 
 pub const LERP_SPEED: f32 = 7.5;
@@ -3012,9 +3006,7 @@ impl Plugin for PlayerPlugin {
                 refresh_follow_path
                     .after(PlayerSystemSet::MovementComplete)
                     .after(VillagerSystemSet::Turn),
-                update_fov
-                    .in_set(PlayerSystemSet::FovUpdate)
-                    .after(PlayerSystemSet::MovementComplete),
+                update_fov.after(PlayerSystemSet::MovementComplete),
                 camera_follow_player.after(update_fov),
                 update_player_bars,
                 respawn_player_on_regen.after(MapSystemSet::ExecuteRegen),
