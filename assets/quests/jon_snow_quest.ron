@@ -116,11 +116,17 @@ QuestDef(
 
     transitions: [
         // 각성(character=jon_snow) 시 잠든 퀘스트가 깨어난다
+        // Auto 트리거에서는 OpenPortal 을 실행하지 못하므로, 첫 Interact (beyond_wall) 에서 연다.
         Transition(from: "dormant", trigger: Auto,
             when: FlagIs(flag: "character", value: "jon_snow"),
             to: "beyond_wall"),
         // 원정 브리핑 → 최초인의 요새
-        Transition(from: "beyond_wall", trigger: Interact, to: "fist_of_firstmen"),
+        //   드래곤스톤 화살촉·레인저 메모(dungeon_2) 수집을 위해 forest 포탈 개방.
+        //   forest → dungeon_1 → dungeon_2 의 정적 portal 경로를 이용한다.
+        //   종료(wildling_world)에서 닫는다.
+        Transition(from: "beyond_wall", trigger: Interact,
+            actions: [OpenPortal(zone: "forest", generator: "forest", placement: Border)],
+            to: "fist_of_firstmen"),
         // 요새 정찰 → 와이트 습격
         Transition(from: "fist_of_firstmen", trigger: Interact,
             actions: [
@@ -150,7 +156,7 @@ QuestDef(
             to: "rangers_message"),
         // 레인저의 메모 회수 → 이그리트 조우
         Transition(from: "rangers_message", trigger: Auto, when: HasItem("rangers_note"), to: "ygritte_encounter"),
-        // 이그리트와 대치 → 야인의 세계 잠입
+        // 이그리트와 대치 → 야인의 세계 잠입 — 종료 시 forest 포탈 정리
         Transition(from: "ygritte_encounter", trigger: Interact,
             actions: [
                 Log("존 스노우는 손을 들었다. 단검을 땅에 내려놨다."),
@@ -160,6 +166,7 @@ QuestDef(
                 Log("\"이그리트.\" 그녀가 자신을 소개했다. \"따라와. 만스가 너희 이야기를 들을 거야.\""),
                 GiveItem("ygritte_bow"),
                 SetFlag(flag: "wildling_contact", value: "ygritte"),
+                ClosePortal("forest"),
             ],
             to: "wildling_world"),
     ],

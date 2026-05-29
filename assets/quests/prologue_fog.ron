@@ -158,7 +158,13 @@ QuestDef(
 
     transitions: [
         // 병사와 첫 대화 → 무기 탐색
-        Transition(from: "dormant", trigger: Interact, to: "weapon_hunt"),
+        // 수락 시 폐허(숲 → 던전 1층) 로 가는 forest 포탈을 마을에 연다.
+        //   - 무기·문장은 던전 1층에 스폰되며, forest 의 정적 zone_portals 에서
+        //     dungeon_1 로 자동 연결되므로 forest 가 입구가 된다.
+        //   - 종료 시 *_end 분기 각각에서 닫는다.
+        Transition(from: "dormant", trigger: Interact,
+            actions: [OpenPortal(zone: "forest", generator: "forest", placement: Border)],
+            to: "weapon_hunt"),
 
         // 무기 선택 — 집는 순간 나머지 두 무기는 월드에서 사라진다 (Auto)
         Transition(from: "weapon_hunt", trigger: Auto,
@@ -197,7 +203,7 @@ QuestDef(
             to: "targaryen_dawn"),
         Transition(from: "awakening_ready", trigger: Interact, to: "nightswatch_dawn"),
 
-        // 각성 A: 스타크
+        // 각성 A: 스타크 — 종료 시 forest 포탈 정리
         Transition(from: "stark_dawn", trigger: Interact,
             actions: [
                 Log("서릿발 같은 기억이 밀려온다. 북쪽의 바람, 회색빛 성벽, 늑대의 울음소리..."),
@@ -206,10 +212,11 @@ QuestDef(
                 GiveItem("ice_sword"),
                 SetFlag(flag: "character", value: "stark"),
                 KillNpc("wounded_soldier"),
+                ClosePortal("forest"),
             ],
             to: "stark_end"),
 
-        // 각성 B: 타르가르옌
+        // 각성 B: 타르가르옌 — 종료 시 forest 포탈 정리
         Transition(from: "targaryen_dawn", trigger: Interact,
             actions: [
                 Log("뜨거운 기억이 넘실댄다. 용의 울음, 불길 속에서 태어난 기억..."),
@@ -218,10 +225,11 @@ QuestDef(
                 GiveItem("dragon_egg"),
                 SetFlag(flag: "character", value: "targaryen"),
                 KillNpc("wounded_soldier"),
+                ClosePortal("forest"),
             ],
             to: "targaryen_end"),
 
-        // 각성 C: 나이트워치
+        // 각성 C: 나이트워치 — 종료 시 forest 포탈 정리
         Transition(from: "nightswatch_dawn", trigger: Interact,
             actions: [
                 Log("찬 바람이 불어온다. 끝없는 장벽, 검은 망토의 무게, 그리고 하얀 늑대..."),
@@ -230,6 +238,7 @@ QuestDef(
                 GiveItem("ghost_wolf"),
                 SetFlag(flag: "character", value: "jon_snow"),
                 KillNpc("wounded_soldier"),
+                ClosePortal("forest"),
             ],
             to: "nightswatch_end"),
     ],

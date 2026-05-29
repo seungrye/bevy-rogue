@@ -126,11 +126,16 @@ QuestDef(
 
     transitions: [
         // 각성(character=stark) 시 잠든 퀘스트가 깨어난다
+        // Auto 트리거에서는 OpenPortal 을 실행하지 못하므로, 첫 Interact (war_briefing→gather_lords) 에서 연다.
         Transition(from: "dormant", trigger: Auto,
             when: FlagIs(flag: "character", value: "stark"),
             to: "war_briefing"),
         // 캣린의 브리핑 → 영주 소집
-        Transition(from: "war_briefing", trigger: Interact, to: "gather_lords"),
+        //   서약서(dungeon_1) 수집을 위해 마을에 forest 포탈을 연다.
+        //   forest 의 정적 portal 이 dungeon_1 로 이어진다. 종료(king_end)에서 닫는다.
+        Transition(from: "war_briefing", trigger: Interact,
+            actions: [OpenPortal(zone: "forest", generator: "forest", placement: Border)],
+            to: "gather_lords"),
         // 충성 서약서 획득 시 자동으로 집결 완료
         Transition(from: "gather_lords", trigger: Auto, when: HasItem("lords_oath"), to: "lords_gathered"),
         // 전략 수립 → 매복 준비
@@ -157,7 +162,7 @@ QuestDef(
             to: "jaime_captured"),
         // 생포 보고 → 대관식 준비
         Transition(from: "jaime_captured", trigger: Interact, to: "coronation_prep"),
-        // 대관식 → 북부의 왕 즉위
+        // 대관식 → 북부의 왕 즉위 — 종료 시 forest 포탈 정리
         Transition(from: "coronation_prep", trigger: Interact,
             actions: [
                 Log("【대관식】 왕관이 머리 위에 올려졌다. 차갑고 무거웠다."),
@@ -165,6 +170,7 @@ QuestDef(
                 Log("아버지의 복수는 이제 시작이다. 킹스랜딩이 기다리고 있다."),
                 GiveItem("kings_north_crown"),
                 SetFlag(flag: "title", value: "king_in_the_north"),
+                ClosePortal("forest"),
             ],
             to: "king_end"),
     ],

@@ -99,12 +99,21 @@ QuestDef(
 
     transitions: [
         // ── 의뢰 수락: 준비 상태에 따라 다른 인사말 (둘 다 gathering 으로) ──
+        //   재료(용비늘=던전2, 주문서=던전1) 가 던전에 스폰되므로 마을→forest 포탈을 연다.
+        //   forest 의 정적 zone_portals 가 dungeon_1 로 이어진다.
+        //   종료 시 legendary_done / normal_done 분기에서 각각 닫는다.
         Transition(from: "not_started", trigger: Interact,
             when: Or([HasItem("health_potion"), PhaseIs(quest: "gem_quest", phase: "done")]),
-            actions: [Log("연금술사: 준비가 잘 되어있군! 잘 해낼 거야.")],
+            actions: [
+                Log("연금술사: 준비가 잘 되어있군! 잘 해낼 거야."),
+                OpenPortal(zone: "forest", generator: "forest", placement: Border),
+            ],
             to: "gathering"),
         Transition(from: "not_started", trigger: Interact,
-            actions: [Log("연금술사: 위험한 던전이니 포션이라도 챙기게.")],
+            actions: [
+                Log("연금술사: 위험한 던전이니 포션이라도 챙기게."),
+                OpenPortal(zone: "forest", generator: "forest", placement: Border),
+            ],
             to: "gathering"),
 
         // ── 수집 중 Auto 우선순위 ──
@@ -161,6 +170,7 @@ QuestDef(
                 Log("하나로 합쳐져 전설의 포션이 완성됐다!"),
                 Log("연금술사: 이것은... 내 평생의 연구가 결실을 맺었어!"),
                 Log("연금술사: 활과 특제 물약을 받게. 이건 전설의 작품이야."),
+                ClosePortal("forest"),
             ],
             to: "legendary_done"),
         // ② 정통: 두 재료만
@@ -173,6 +183,7 @@ QuestDef(
                 Log("...용비늘과 주문서가 반응하며 강력한 포션이 완성됐다."),
                 Log("연금술사: 현자의 돌까지 있었다면 더 훌륭했겠지만..."),
                 Log("연금술사: 충분히 뛰어난 결과야. 이 창을 받게."),
+                ClosePortal("forest"),
             ],
             to: "normal_done"),
         // ③ 실패: 재료가 사라진 엣지케이스 → 수집 단계로 복귀 (unconditional fallback)

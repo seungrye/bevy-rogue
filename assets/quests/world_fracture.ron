@@ -328,21 +328,31 @@ QuestDef(
 
     transitions: [
         // ── dormant ──
+        //   포탈 정책:
+        //     - 성물들은 던전 1/2층·forest 에 스폰되므로 마을→forest 포탈이 필요하다.
+        //     - Auto 트리거에서는 OpenPortal 이 실행되지 않으므로 (런타임 한계),
+        //       awakened phase 의 모든 Interact transition + dormant Interact 에 OpenPortal 추가.
+        //       이렇게 하면 Auto/Interact 어느 경로로 awakened 에 진입해도 첫 Interact 에서 열린다.
+        //     - 모든 *_ending phase 로 가는 transition 에 ClosePortal 추가.
         Transition(from: "dormant", trigger: Auto, when: PhaseIs(quest: "gem_quest", phase: "done"), to: "awakened"),
         Transition(from: "dormant", trigger: Interact,
             when: PhaseIs(quest: "gem_quest", phase: "done"),
-            actions: [Log("노인: 오! 드디어 장로의 일을 해결했군. 이제 이야기할 수 있겠어.")],
+            actions: [
+                Log("노인: 오! 드디어 장로의 일을 해결했군. 이제 이야기할 수 있겠어."),
+                OpenPortal(zone: "forest", generator: "forest", placement: Border),
+            ],
             to: "awakened"),
         Transition(from: "dormant", trigger: Interact,
             actions: [Log("노인: 장로를 먼저 만나보게. 그 일이 시작의 열쇠야.")],
             to: "dormant"),
 
-        // ── awakened ──
+        // ── awakened ── (모든 Interact 분기에 OpenPortal 보강 — Auto 진입 경로 보완)
         Transition(from: "awakened", trigger: Interact,
             when: PhaseIs(quest: "alchemist_quest", phase: "not_started"),
             actions: [
                 Log("노인: 연금술사와 아직 이야기하지 않았군. 그도 이 비밀의 일부를 알고 있어."),
                 Log("노인: 그가 연구하는 재료들 — 용비늘과 고대 주문서 — 은 봉인에 꼭 필요한 것들이야."),
+                OpenPortal(zone: "forest", generator: "forest", placement: Border),
             ],
             to: "need_alchemist"),
         Transition(from: "awakened", trigger: Interact,
@@ -350,10 +360,16 @@ QuestDef(
                 PhaseIs(quest: "alchemist_quest", phase: "normal_done"),
                 PhaseIs(quest: "alchemist_quest", phase: "legendary_done"),
             ]),
-            actions: [Log("노인: 연금술사의 작업도 끝났군! 훌륭해. 이미 많은 준비가 된 셈이야.")],
+            actions: [
+                Log("노인: 연금술사의 작업도 끝났군! 훌륭해. 이미 많은 준비가 된 셈이야."),
+                OpenPortal(zone: "forest", generator: "forest", placement: Border),
+            ],
             to: "prologue_done"),
         Transition(from: "awakened", trigger: Interact,
-            actions: [Log("노인: 연금술사와 이미 접촉했군. 좋아. 그의 작업도 도와주면 봉인이 훨씬 강해질 거야.")],
+            actions: [
+                Log("노인: 연금술사와 이미 접촉했군. 좋아. 그의 작업도 도와주면 봉인이 훨씬 강해질 거야."),
+                OpenPortal(zone: "forest", generator: "forest", placement: Border),
+            ],
             to: "prologue_done"),
 
         // ── need_alchemist ──
@@ -515,6 +531,7 @@ QuestDef(
                 Log("노인: 의식이 시작된다..."),
                 Log("노인: 영원의 보석이 빛나고, 현자의 돌이 지식을 방출하고 있어."),
                 Log("노인: 균열이 잠잠해지고 있어... 10년의 봉인이 새겨졌다."),
+                ClosePortal("forest"),
             ],
             to: "wisdom_ending"),
         Transition(from: "wisdom_ritual_choice", trigger: Interact,
@@ -554,6 +571,7 @@ QuestDef(
                 Log("노인: 용비늘의 힘이 폭발하고... 주문서의 봉인 문양이 공기를 가르고 있어!"),
                 Log("노인: 균열이 봉쇄되고 있어! 하지만 그 에너지가 자네 몸으로 흘러들어가는 게 보여..."),
                 Log("노인: 완성됐어. 25년간의 봉인이 자네에게 새겨졌다. 무겁겠지만 — 세상이 살아남았어."),
+                ClosePortal("forest"),
             ],
             to: "warrior_ending"),
         Transition(from: "warrior_ritual_choice", trigger: Interact,
@@ -612,6 +630,7 @@ QuestDef(
                 RemoveItem("ancient_scroll"),
                 Log("노인: 그래... 시작하지. 50년은 버텨줄 거야. 그 정도면 충분하겠지."),
                 Log("노인: 균열이 봉인되고 있어..."),
+                ClosePortal("forest"),
             ],
             to: "incomplete_ending"),
         Transition(from: "ritual_now_or_wait", trigger: Interact,
@@ -633,6 +652,7 @@ QuestDef(
                 Log("노인: 의식이 시작된다!"),
                 Log("노인: 연금술사의 전설적인 에너지가 봉인을 강화하고 있어!"),
                 Log("노인: 균열이 완전히 봉인되었다! 이 봉인은 1000년은 지속될 거야."),
+                ClosePortal("forest"),
             ],
             to: "legendary_ending"),
         Transition(from: "ritual_confirmation", trigger: Interact,
@@ -647,6 +667,7 @@ QuestDef(
                 RemoveItem("ancient_scroll"),
                 Log("노인: 의식이 시작된다!"),
                 Log("노인: 균열이 봉인되고 있어... 완성됐어. 100년의 평화가 찾아올 거야."),
+                ClosePortal("forest"),
             ],
             to: "normal_ending"),
         Transition(from: "ritual_confirmation", trigger: Interact,
@@ -669,6 +690,7 @@ QuestDef(
                 Log("노인: 연금술사의 포션 에너지가 모든 것을 완성시키고 있어!!"),
                 Log("노인: 균열이... 완전히 봉인되었다!! 영원히!!"),
                 Log("세계가 구원받았다. 이 봉인은 영원히 지속될 것이다."),
+                ClosePortal("forest"),
             ],
             to: "legendary_ending"),
         Transition(from: "legendary_ready", trigger: Interact,
@@ -689,6 +711,7 @@ QuestDef(
                 Log("노인: 의식이 시작된다!"),
                 Log("노인: 봉인이 새겨지고 있어... 균열이 막히고 있어!"),
                 Log("노인: 완성됐어. 100년의 평화가 찾아왔어."),
+                ClosePortal("forest"),
             ],
             to: "normal_ending"),
         Transition(from: "normal_ready", trigger: Interact,

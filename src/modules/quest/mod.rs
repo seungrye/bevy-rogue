@@ -4116,4 +4116,129 @@ SpawnGuards(count: 5, zone: Named("infiltration"))"#;
         let second = q.drain(&z);
         assert!(second.is_empty(), "두 번째 drain 은 빈 vec");
     }
+
+    // ── 포털 라이프사이클 일관성 ───────────────────────────────────────────────
+    //
+    // 마을(Town) 의 자동 포털이 제거되면서 각 quest 는 OpenPortal 로 자기 zone 을
+    // 직접 열고, 종료 transition 에서 ClosePortal 로 정리해야 한다. 아래 테스트는
+    // 실제 assets/quests 의 RON 정의를 읽어 다음 두 시맨틱 불변식을 검증한다:
+    //   1) 한 quest 의 어떤 OpenPortal 의 zone 은, 같은 quest 의 어떤 ClosePortal
+    //      과도 짝지어진다 (어딘가는 닫힌다).
+    //   2) "종료(터미널) phase" — 즉 그 phase 에서 시작하는 transition 이 하나도
+    //      없는 phase — 로 직접 들어오는 모든 transition 은, 해당 quest 가 연
+    //      모든 zone 을 ClosePortal 로 닫는다.
+    //
+    // (1) 은 분기형 보상(예 무탐지/탐지) 의 각 ClosePortal 누락 detection,
+    // (2) 는 분기 누락 / 우회 경로로 종료에 도달 시 portal leak 검출에 쓰인다.
+
+    fn open_portal_zones(def: &QuestDef) -> std::collections::HashSet<String> {
+        let mut set = std::collections::HashSet::new();
+        for t in &def.transitions {
+            for a in &t.actions {
+                if let QuestAction::OpenPortal { zone, .. } = a {
+                    set.insert(zone.clone());
+                }
+            }
+        }
+        set
+    }
+
+    fn close_portal_zones_in(actions: &[QuestAction]) -> std::collections::HashSet<String> {
+        let mut set = std::collections::HashSet::new();
+        for a in actions {
+            if let QuestAction::ClosePortal(z) = a {
+                set.insert(z.clone());
+            }
+        }
+        set
+    }
+
+    fn close_portal_zones_all(def: &QuestDef) -> std::collections::HashSet<String> {
+        let mut set = std::collections::HashSet::new();
+        for t in &def.transitions {
+            set.extend(close_portal_zones_in(&t.actions));
+        }
+        set
+    }
+
+    /// `phase` 에서 출발하는 transition 이 하나도 없으면 그 phase 는 종료 phase.
+    fn terminal_phases(def: &QuestDef) -> std::collections::HashSet<String> {
+        let all_from: std::collections::HashSet<&str> =
+            def.transitions.iter().map(|t| t.from.as_str()).collect();
+        def.phases.keys()
+            .filter(|p| !all_from.contains(p.as_str()))
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn 모든_OpenPortal의_zone은_같은_quest의_ClosePortal로_닫힌다() {
+        let defs = load_all_quest_defs();
+        assert!(!defs.is_empty(), "최소한 한 개 quest 가 로드돼야 한다");
+        for (path, def) in &defs {
+            let opens = open_portal_zones(def);
+            let closes = close_portal_zones_all(def);
+            for zone in &opens {
+                assert!(
+                    closes.contains(zone),
+                    "{} 의 OpenPortal zone '{}' 가 같은 quest 의 ClosePortal 로 닫히지 않습니다",
+                    path, zone
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn 종료phase로_가는_모든_transition은_연_모든_portal을_닫는다() {
+        let defs = load_all_quest_defs();
+        for (path, def) in &defs {
+            let opens = open_portal_zones(def);
+            if opens.is_empty() { continue; }
+            let terms = terminal_phases(def);
+            // 종료 phase 가 없으면 검사 대상 없음 (예 self-loop only quest — 사실상 없음)
+            if terms.is_empty() { continue; }
+            for t in &def.transitions {
+                if !terms.contains(&t.to) { continue; }
+                let closes_here = close_portal_zones_in(&t.actions);
+                for zone in &opens {
+                    assert!(
+                        closes_here.contains(zone),
+                        "{} 의 transition (from '{}' → 종료 '{}') 가 zone '{}' 의 ClosePortal 을 빠뜨렸습니다 — portal leak 가능",
+                        path, t.from, t.to, zone
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gem_quest는_OpenZonePortal만_쓰고_ClosePortal대상이_없다() {
+        // gem_quest 는 Town 으로 가는 OpenZonePortal(영구 마을) 만 발급하므로
+        // 동적 ClosePortal 정책 적용 대상이 아니다 — 회귀 방지용 명세.
+        let defs = load_all_quest_defs();
+        let def = defs.iter().find(|(p, _)| p.ends_with("gem_quest.ron"))
+            .map(|(_, d)| d)
+            .expect("gem_quest 로드 필수");
+        assert!(open_portal_zones(def).is_empty(),
+            "gem_quest 는 OpenPortal 을 가지지 않아야 한다 (OpenZonePortal 만 사용)");
+    }
+
+    #[test]
+    fn 누락6개_quest는_OpenPortal과_ClosePortal을_모두_가진다() {
+        // alchemist/jon_snow/prologue_fog/stark/targaryen/world_fracture 6개 quest 가
+        // 마을 자동 포털 제거 정책 이후 직접 OpenPortal+ClosePortal 책임을 진다.
+        let defs = load_all_quest_defs();
+        for filename in [
+            "alchemist_quest.ron", "jon_snow_quest.ron", "prologue_fog.ron",
+            "stark_quest.ron", "targaryen_quest.ron", "world_fracture.ron",
+        ] {
+            let def = defs.iter().find(|(p, _)| p.ends_with(filename))
+                .map(|(_, d)| d)
+                .unwrap_or_else(|| panic!("{} 로드 필수", filename));
+            assert!(!open_portal_zones(def).is_empty(),
+                "{} 는 적어도 하나의 OpenPortal 을 가져야 한다", filename);
+            assert!(!close_portal_zones_all(def).is_empty(),
+                "{} 는 적어도 하나의 ClosePortal 을 가져야 한다", filename);
+        }
+    }
 }

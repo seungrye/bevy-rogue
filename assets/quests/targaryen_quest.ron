@@ -115,11 +115,16 @@ QuestDef(
 
     transitions: [
         // 각성(character=targaryen) 시 잠든 퀘스트가 깨어난다
+        // Auto 트리거에서는 OpenPortal 을 실행하지 못하므로, 첫 Interact (exile_begins) 에서 연다.
         Transition(from: "dormant", trigger: Auto,
             when: FlagIs(flag: "character", value: "targaryen"),
             to: "exile_begins"),
         // 조라의 브리핑 → 사막 횡단
-        Transition(from: "exile_begins", trigger: Interact, to: "desert_crossing"),
+        //   불멸의 집 열쇠(warlock_key) 가 dungeon_1 에 있다 — forest 포탈 개방.
+        //   forest 의 정적 portal 이 dungeon_1 로 이어진다. 종료(conquest_begin)에서 닫는다.
+        Transition(from: "exile_begins", trigger: Interact,
+            actions: [OpenPortal(zone: "forest", generator: "forest", placement: Border)],
+            to: "desert_crossing"),
         // 사막 횡단 → 콰스 도착
         Transition(from: "desert_crossing", trigger: Interact,
             actions: [
@@ -155,7 +160,7 @@ QuestDef(
                 SetFlag(flag: "dracarys_learned", value: "true"),
             ],
             to: "qarth_plunder"),
-        // 항로도 수령 → 정복 시작
+        // 항로도 수령 → 정복 시작 — 종료 시 forest 포탈 정리
         Transition(from: "qarth_plunder", trigger: Interact,
             actions: [
                 Log("황금이 배에 실렸다. 드래곤들이 돛대 위에서 날개를 폈다."),
@@ -163,6 +168,7 @@ QuestDef(
                 Log("대너리스 타르가르옌은 에소스 대륙을 바라봤다. 그리고 처음으로 웃었다."),
                 GiveItem("essos_sail_map"),
                 SetFlag(flag: "essos_route", value: "chosen"),
+                ClosePortal("forest"),
             ],
             to: "conquest_begin"),
     ],
