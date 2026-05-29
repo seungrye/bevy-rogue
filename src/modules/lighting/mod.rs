@@ -251,29 +251,28 @@ fn update_light_map(
 }
 
 /// 타일 색을 누적 `TileBrightness` + 시야 분기(visible/revealed) + 망각 경과 시간으로
-/// 결정한다. **per-entity Changed query** 로 실제로 brightness 가 변한 entity 만
-/// sparse 하게 재칠 — 매 turn 4000 → ~50.
+/// 결정한다.
 ///
-/// visible/revealed 정보는 여전히 `MapResource.tiles` 에서 read (Map 데이터 일관성).
-/// brightness/last_seen 만 컴포넌트로 분리해 sparse 트리거를 얻는 절충 설계.
+/// **가드 + full iter**: map_res 또는 light_map 변경 시에만 매 turn 4000 tile iter.
+/// 직전에 시도했던 `Or<Changed<TileBrightness/LastSeen/Visibility>>` sparse query 는
+/// 시야 빠진 entity 가 Changed 트리거 안 돼 색이 stale 로 남는 버그를 일으켜 되돌림
+/// (망각 진행 시각화가 안 보이는 어색함). 컴포넌트 분리는 유지 — 단 dimming 은
+/// 5daf8c8 의 모든-entity-매-turn 패턴.
 fn apply_light_dimming(
     map_res: Res<MapResource>,
+    light_map: Res<LightMap>,
     global_turn: Option<Res<GlobalTurn>>,
-    mut tile_query: Query<
-        (
-            &crate::modules::map::TileEntity,
-            &mut Text,
-            &crate::modules::map::TileBrightness,
-            &crate::modules::map::TileLastSeen,
-            &Visibility,
-        ),
-        Or<(
-            Changed<crate::modules::map::TileBrightness>,
-            Changed<crate::modules::map::TileLastSeen>,
-            Changed<Visibility>,
-        )>,
-    >,
+    mut tile_query: Query<(
+        &crate::modules::map::TileEntity,
+        &mut Text,
+        &crate::modules::map::TileBrightness,
+        &crate::modules::map::TileLastSeen,
+        &Visibility,
+    )>,
 ) {
+    if !map_res.is_changed() && !light_map.is_changed() {
+        return;
+    }
     let map = map_res.map();
     let now_turn: Option<u32> = global_turn.as_ref().map(|t| t.0 as u32);
     for (tile, mut text, brightness, last_seen, vis) in tile_query.iter_mut() {

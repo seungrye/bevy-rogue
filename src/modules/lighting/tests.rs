@@ -516,9 +516,11 @@ fn 디밍시스템은_brightness가_바뀌면_색을_다시_칠한다() {
     app.update();
     let full_brightness_color = tile_color(&mut app);
 
-    // brightness 컴포넌트를 낮추면 Changed<TileBrightness> 트리거 → 다시 칠해진다.
+    // brightness 컴포넌트를 낮추고 MapResource 도 mark changed → 가드 통과 → 색 갱신.
+    // (apply_light_dimming 은 map_res/light_map 변경 시에만 full iter.)
     let entity = app.world.query_filtered::<Entity, With<TileEntity>>().single(&app.world);
     app.world.get_mut::<crate::modules::map::TileBrightness>(entity).unwrap().0 = 0.3;
+    app.world.resource_mut::<MapResource>().set_changed();
     app.update();
     let dim_color = tile_color(&mut app);
     assert!(dim_color.r() < full_brightness_color.r(), "brightness 가 낮아지면 더 어둡게 다시 칠한다");
