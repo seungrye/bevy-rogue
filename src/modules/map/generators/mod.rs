@@ -21,6 +21,7 @@ pub mod coastal;
 pub mod ocean;
 pub mod biome_world;
 pub mod wfc;
+pub mod tinykeep;
 
 use super::{Map, TileKind, MapTile, Rect};
 use noise::{NoiseFn, Perlin};
@@ -320,7 +321,7 @@ mod tests {
     use super::super::TileKind;
     use super::{bsp, rooms, drunkard, cellular_automata, dla, bsp_indoor, prefab, organic_village, grid_village, forest, perlin,
         maze, maze_prim, recursive_division, voronoi_rooms, walled_town, voronoi_districts,
-        island, archipelago, coastal, ocean, biome_world, wfc};
+        island, archipelago, coastal, ocean, biome_world, wfc, tinykeep};
 
     const W: usize = 40;
     const H: usize = 30;
@@ -613,6 +614,7 @@ mod tests {
     #[test] fn walled_town_생성기는_생성계약을_지킨다()      { check_contract(&walled_town::WalledTownGenerator); }
     #[test] fn voronoi_districts_생성기는_생성계약을_지킨다(){ check_contract(&voronoi_districts::VoronoiDistrictsGenerator); }
     #[test] fn wfc_생성기는_생성계약을_지킨다()              { check_contract(&wfc::WfcGenerator); }
+    #[test] fn tinykeep_생성기는_생성계약을_지킨다()         { check_contract(&tinykeep::TinyKeepGenerator); }
 
     #[test] fn island_생성기는_수상맵_계약을_지킨다()      { check_water_contract(&island::IslandGenerator); }
     #[test] fn archipelago_생성기는_수상맵_계약을_지킨다() { check_water_contract(&archipelago::ArchipelagoGenerator); }
@@ -646,5 +648,6 @@ mod tests {
         assert_eq!(ocean::OceanGenerator.name(),                               "ocean");
         assert_eq!(biome_world::BiomeWorldGenerator.name(),                    "biome_world");
         assert_eq!(wfc::WfcGenerator.name(),                                   "wfc");
+        assert_eq!(tinykeep::TinyKeepGenerator.name(),                         "tinykeep");
     }
 }

@@ -369,6 +369,7 @@ impl Plugin for MapPlugin {
         registry.register(Box::new(ocean::OceanGenerator));
         registry.register(Box::new(biome_world::BiomeWorldGenerator));
         registry.register(Box::new(wfc::WfcGenerator));
+        registry.register(Box::new(tinykeep::TinyKeepGenerator));
 
         if let Some(name) = &self.initial_algorithm {
             registry.select_by_name(name);

@@ -23,6 +23,7 @@ pub const HELP_TEXT: &str = "\
 사용 가능한 생성기:
   bsp               던전 - 규칙적인 방 분할, 깔끔한 복도
   simple_rooms      던전 - 크기 다양한 방들이 랜덤 배치
+  tinykeep          던전 - 들로네/MST 기반 부정형 방 배치 + 유기적 복도 네트워크
   drunkard          동굴 - 취한 듯 굴곡진 유기적 통로
   cellular_automata 동굴 - 자연 침식된 느낌의 불규칙 동굴
   dla               동굴 - 중심에서 뻗어나가는 침식 구조
@@ -509,6 +510,7 @@ mod tests {
         for gen in [
             "bsp", "simple_rooms", "drunkard", "cellular_automata", "dla",
             "bsp_indoor", "prefab", "organic_village", "grid_village", "forest", "perlin",
+            "tinykeep",
         ] {
             assert!(HELP_TEXT.contains(gen), "도움말에 생성기 {gen} 가 없다");
         }

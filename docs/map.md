@@ -31,7 +31,7 @@
 
 ## 생성 알고리즘
 
-`MapGeneratorRegistry` 리소스에 23종의 생성기가 등록된다.
+`MapGeneratorRegistry` 리소스에 24종의 생성기가 등록된다.
 모든 생성기는 `MapGenerator` 트레이트를 구현하며 `seed: u64`를 받아 결정론적으로 맵을 생성한다:
 
 ```rust
@@ -66,6 +66,7 @@ pub trait MapGenerator: Send + Sync {
 | `ocean` | 바다 | 대부분 `Water` + 드문드문 작은 섬/암초 |
 | `biome_world` | 바다 | 고도 노이즈로 `Water`→`Sand`→`Floor`→`Wall` 바이옴 대륙 |
 | `wfc` | 고급 | Wave Function Collapse(타일드 모델), 인접 제약 전파·붕괴로 구조적 던전 생성 |
+| `tinykeep` | 던전 | 들로네/MST 기반 부정형 방 배치 + 유기적 복도 네트워크 |
 
 수상 생성기(island/archipelago/coastal/ocean/biome_world)는 지상과 계약이 다르다:
 테두리가 전부 `Water`(맵 밖 이탈 방지), 통과타일(`Floor`/`Sand`) 비율 ≥ 5%,
