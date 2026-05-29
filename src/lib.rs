@@ -203,6 +203,10 @@ pub fn run(initial_algorithm: Option<String>, initial_glyph_style: GlyphStyle) {
     let asset_plugin = bevy::asset::AssetPlugin::default();
 
     App::new()
+        // 캔버스 ClearColor 를 짙은 회색으로 명시 — 거리 감쇠가 lerp 의 목적지로
+        // 쓰는 BACKGROUND_COLOR 와 동일하게(검정이면 멀리 보이는 타일이 검게 페이드
+        // 되어 어색했음). lighting::BACKGROUND_COLOR 와 동기화.
+        .insert_resource(ClearColor(Color::rgb(0.13, 0.13, 0.13)))
         .add_systems(Startup, modules::core::systems::spawn_2d_camera)
         .add_plugins(DefaultPlugins
             .set(WindowPlugin {

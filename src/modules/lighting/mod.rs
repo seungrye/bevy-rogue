@@ -142,10 +142,25 @@ pub fn tile_render_color(
     }
 }
 
-/// 색을 균일 비율로 어둡게 만든다(알파 유지). map 모듈 `dim_color` 와 동형이나
-/// 조명 디밍을 같은 규칙으로 묶기 위해 여기 둔다.
-fn dim(c: Color, factor: f32) -> Color {
-    Color::rgba(c.r() * factor, c.g() * factor, c.b() * factor, c.a())
+/// 게임 캔버스 배경색 (Bevy 기본 ClearColor 와 같은 짙은 회색).
+/// 거리 감쇠 시 타일 색을 이 배경색으로 lerp 해 자연스럽게 흐려진다.
+/// (검정 곱하기로 알파만 줄이면 검은색으로 페이드되어 어색했음.)
+pub(crate) const BACKGROUND_COLOR: Color = Color::rgb(0.13, 0.13, 0.13);
+
+/// `base` 와 배경색을 `factor` 비율로 섞는다. `factor=1.0` 이면 base 그대로,
+/// `factor=0.0` 이면 배경색 그대로. RGB 만 lerp 하고 알파는 base 그대로 유지한다.
+///
+/// 단순 `dim`(RGB 곱) 은 모든 색을 검은색으로 가게 해 어색하므로, 배경색(짙은 회색)
+/// 쪽으로 lerp 해 멀어질수록 타일이 배경에 자연스럽게 녹아드는 효과를 낸다.
+fn dim(base: Color, factor: f32) -> Color {
+    let t = factor.clamp(0.0, 1.0);
+    let bg = BACKGROUND_COLOR;
+    Color::rgba(
+        base.r() * t + bg.r() * (1.0 - t),
+        base.g() * t + bg.g() * (1.0 - t),
+        base.b() * t + bg.b() * (1.0 - t),
+        base.a(),
+    )
 }
 
 /// 맵 전체의 광량을 보관하는 리소스 — 렌더와 탐지가 공유하는 단일 정본.
