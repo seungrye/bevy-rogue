@@ -112,17 +112,16 @@ pub fn chebyshev_distance(a: (i32, i32), b: (i32, i32)) -> i32 {
 
 /// 기억 타일의 **망각 감쇠 계수** — 시간이 흐를수록 0 에 수렴해 결국 배경에 묻힌다.
 ///
-/// 곡선: `exp(-Δturn / 50)`. 즉:
-///   - Δturn = 0   → 1.0        (방금 본 — 감쇠 없음)
-///   - Δturn = 50  ≈ 0.3679     (약 절반)
-///   - Δturn = 100 ≈ 0.1353
-///   - Δturn = 200 ≈ 0.0183     (거의 배경)
-///   - Δturn → ∞   → 0.0        (배경과 완전히 동일)
-///
-/// 이 계수를 기존 기억 디밍 factor(0.3) 에 곱해 `dim` 으로 배경(`BACKGROUND_COLOR`)
-/// 쪽으로 lerp 한다 — 검정으로 페이드되지 않고 자연스럽게 배경에 녹는다.
+/// 곡선: `exp(-Δturn / 500)` — 사용자 디자인(이전 50 → 500 으로 완화, 본 타일이
+/// 너무 빨리 사라지지 않게). 즉:
+///   - Δturn = 0    → 1.0        (방금 본 — 감쇠 없음)
+///   - Δturn = 100  ≈ 0.8187     (살짝 어둑해짐)
+///   - Δturn = 500  ≈ 0.3679     (약 절반)
+///   - Δturn = 1000 ≈ 0.1353
+///   - Δturn = 2000 ≈ 0.0183     (거의 배경)
+///   - Δturn → ∞    → 0.0        (배경과 완전히 동일)
 pub fn memory_fade_factor(turns_since_seen: u32) -> f32 {
-    (-(turns_since_seen as f32) / 50.0).exp()
+    (-(turns_since_seen as f32) / 500.0).exp()
 }
 
 /// 타일의 **누적 가시화 상태(brightness)** 와 마지막 본 이후 경과 턴을 받아 최종 렌더
@@ -241,10 +240,16 @@ fn update_light_map(
 /// 여기서는 타일의 누적 `brightness` 와 `last_seen_turn` 을 `tile_render_color` 에
 /// 넘겨 색을 결정한다 — visible 인 동안엔 elapsed=0 이라 brightness 그대로,
 /// 시야가 빠지면 매 프레임 fade 가 진행. 거리/광량 결합은 FOV 시스템에서 이미 완료.
+/// 카메라(=플레이어 중심) 시야 컷오프 반경(타일). 이 범위 밖 타일은 디밍 갱신을
+/// 건너뛴다 — Bevy 렌더러가 어차피 그리지 않으므로 색을 미리 계산해도 낭비.
+/// FOV_FRONT(8) 보다 충분히 크게 — 카메라 viewport 가 시야보다 보통 넓다.
+pub(crate) const DIMMING_CULL_RADIUS: i32 = 25;
+
 fn apply_light_dimming(
     map_res: Res<MapResource>,
     light_map: Res<LightMap>,
     global_turn: Option<Res<GlobalTurn>>,
+    player_query: Query<&Transform, With<Player>>,
     mut tile_query: Query<(&crate::modules::map::TileEntity, &mut Text, &Visibility)>,
 ) {
     // 맵(가시성·brightness)·광량 둘 중 하나라도 바뀌어야 재적용한다.
@@ -253,10 +258,24 @@ fn apply_light_dimming(
     }
     let map = map_res.map();
     let now_turn: Option<u32> = global_turn.as_ref().map(|t| t.0 as u32);
+    // 플레이어 위치(타일) — 화면 밖 타일을 건너뛰는 cull 의 기준점. 없으면 cull 안 함.
+    let player_tile: Option<(i32, i32)> = player_query.get_single().ok()
+        .map(|t| {
+            let (x, y) = crate::modules::map::world_to_tile_coords(t.translation);
+            (x as i32, y as i32)
+        });
     for (tile, mut text, vis) in tile_query.iter_mut() {
         // 숨김 타일은 색을 건드리지 않는다(가시성은 map 시스템이 결정).
         if *vis == Visibility::Hidden {
             continue;
+        }
+        // viewport cull — 화면 밖 타일은 갱신 미루기.
+        if let Some((px, py)) = player_tile {
+            let dx = (tile.x as i32 - px).abs();
+            let dy = (tile.y as i32 - py).abs();
+            if dx > DIMMING_CULL_RADIUS || dy > DIMMING_CULL_RADIUS {
+                continue;
+            }
         }
         let idx = map.index(tile.x, tile.y);
         let base = crate::modules::map::tile_base_color(map.tiles[idx].kind);
