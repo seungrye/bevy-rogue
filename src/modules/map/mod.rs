@@ -550,30 +550,22 @@ fn execute_regen(
 
 pub fn update_tile_visibility(
     map_res: Res<MapResource>,
-    mut tile_query: Query<(&TileEntity, &mut Text, &mut Visibility)>,
+    mut tile_query: Query<(&TileEntity, &mut Visibility)>,
 ) {
     if !map_res.is_changed() { return; }
 
     let map = map_res.map();
-    for (tile, mut text, mut vis) in tile_query.iter_mut() {
+    // 색은 더 이상 여기서 칠하지 않는다 — 4000-tile 의 색 쓰기가
+    // 직후 `apply_light_dimming` 에서 즉시 덮어쓰여져 낭비. 이 시스템은
+    // Visibility 토글만 담당, 색은 dimming 한 곳에서만 결정.
+    for (tile, mut vis) in tile_query.iter_mut() {
         let idx = map.index(tile.x, tile.y);
         let target_vis = if map.tiles[idx].visible || map.tiles[idx].revealed {
             Visibility::Visible
         } else {
             Visibility::Hidden
         };
-
         if *vis != target_vis { *vis = target_vis; }
-
-        if target_vis == Visibility::Visible {
-            let base = tile_base_color(map.tiles[idx].kind);
-            // 보이는 타일은 기본 색, 탐험만 된 타일은 동일 색을 0.3 배로 어둡게.
-            // Wall/Floor(흰색)는 (1,1,1)→(0.3,0.3,0.3) 으로 기존 동작과 동일.
-            let new_color = if map.tiles[idx].visible { base } else { dim_color(base, 0.3) };
-            if text.sections[0].style.color != new_color {
-                text.sections[0].style.color = new_color;
-            }
-        }
     }
 }
 
@@ -1900,16 +1892,10 @@ mod tests {
         assert_eq!(vis_by_x[&1], Visibility::Visible, "탐험만 된 타일도 표시(어둡게)");
         assert_eq!(vis_by_x[&2], Visibility::Hidden, "미탐험 타일은 숨김");
 
-        // 탐험만 된 타일은 어둡게(기본색의 0.3 배), 보이는 타일은 기본색.
-        let mut color_by_x = std::collections::HashMap::new();
-        let mut q2 = app.world.query::<(&TileEntity, &Text)>();
-        for (t, txt) in q2.iter(&app.world) {
-            color_by_x.insert(t.x, txt.sections[0].style.color);
-        }
-        assert_eq!(color_by_x[&0], Color::WHITE, "보이는 바닥은 흰색");
-        assert_eq!(color_by_x[&1], dim_color(Color::WHITE, 0.3), "탐험만 된 바닥은 어둡게");
+        // 색 검증은 더 이상 이 시스템 책임이 아니다 — 분리된 `apply_light_dimming` 의 책임.
+        // 여기서는 Visibility 토글만 검증.
 
-        // 리소스를 다시 변경시켜 시스템을 한 번 더 돌린다. 이번엔 Visibility/색이
+        // 리소스를 다시 변경시켜 시스템을 한 번 더 돌린다. 이번엔 Visibility 가
         // 이미 목표값과 같으므로 변경-없음(`!=` 거짓) 분기를 탄다.
         app.world.resource_mut::<MapResource>().set_changed();
         app.update();

@@ -152,19 +152,19 @@ mod tests {
 
     #[test]
     fn storage_key는_path의_basename을_반환한다() {
-        let cfg = SaveConfig { path: "save/progress.ron".into(), tmp: "save/progress.ron.tmp".into() };
+        let cfg = SaveConfig { path: "save/progress.ron".into(), tmp: "save/progress.ron.tmp".into(), turn_interval: 1 };
         assert_eq!(cfg.storage_key(), "progress.ron");
     }
 
     #[test]
     fn storage_key는_슬래시가_없으면_path_자체를_쓴다() {
-        let cfg = SaveConfig { path: "bare.ron".into(), tmp: "bare.ron.tmp".into() };
+        let cfg = SaveConfig { path: "bare.ron".into(), tmp: "bare.ron.tmp".into(), turn_interval: 1 };
         assert_eq!(cfg.storage_key(), "bare.ron");
     }
 
     #[test]
     fn storage_key는_여러_단계의_경로에서도_마지막_컴포넌트만_쓴다() {
-        let cfg = SaveConfig { path: "a/b/c/progress.ron".into(), tmp: "a/b/c/progress.ron.tmp".into() };
+        let cfg = SaveConfig { path: "a/b/c/progress.ron".into(), tmp: "a/b/c/progress.ron.tmp".into(), turn_interval: 1 };
         assert_eq!(cfg.storage_key(), "progress.ron");
     }
 
@@ -180,6 +180,7 @@ mod tests {
         let cfg = SaveConfig {
             path: path.to_string_lossy().into_owned(),
             tmp:  tmp.to_string_lossy().into_owned(),
+            turn_interval: 1,
         };
         let be = FileBackend::from_config(&cfg);
         assert!(be.read().is_none(), "사전: 파일 없으면 None");
@@ -201,6 +202,7 @@ mod tests {
         let cfg = SaveConfig {
             path: std::env::temp_dir().join("bevy_rogue_no_such_file.ron").to_string_lossy().into_owned(),
             tmp:  std::env::temp_dir().join("bevy_rogue_no_such_file.ron.tmp").to_string_lossy().into_owned(),
+            turn_interval: 1,
         };
         let be = FileBackend::from_config(&cfg);
         be.delete(); // no-op
@@ -228,6 +230,7 @@ mod tests {
         let cfg = SaveConfig {
             path: path.to_string_lossy().into_owned(),
             tmp:  tmp.to_string_lossy().into_owned(),
+            turn_interval: 1,
         };
         let be = FileBackend::from_config(&cfg);
         let original = r#"(version: 5, global_seed: 12345, global_turn: 7)"#;

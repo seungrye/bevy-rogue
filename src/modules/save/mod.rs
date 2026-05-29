@@ -46,11 +46,19 @@ const SAVE_VERSION: u32 = 5;
 pub struct SaveConfig {
     pub path: String,
     pub tmp: String,
+    /// 자동 저장 주기 — N 턴마다 1번 저장. 0 또는 1 이면 매 턴 저장(테스트용).
+    /// 기본 3 — 4000-bool revealed pack + 전체 직렬화 + (wasm) localStorage 동기
+    /// 호출의 비용을 3 배 감쇠. 갑작스러운 종료 시 최대 N-1 턴 진행 손실 trade-off.
+    pub turn_interval: u32,
 }
 
 impl Default for SaveConfig {
     fn default() -> Self {
-        Self { path: SAVE_PATH.to_string(), tmp: SAVE_TMP.to_string() }
+        Self {
+            path: SAVE_PATH.to_string(),
+            tmp: SAVE_TMP.to_string(),
+            turn_interval: 3,
+        }
     }
 }
 
@@ -183,6 +191,7 @@ impl Plugin for SavePlugin {
 #[allow(clippy::too_many_arguments)]
 fn auto_save(
     mut events: EventReader<crate::modules::map::PlayerActedEvent>,
+    mut acted_turns: Local<u32>,
     inventory: Res<PlayerInventory>,
     equipment: Res<PlayerEquipment>,
     progress: Res<PlayerProgress>,
@@ -198,7 +207,13 @@ fn auto_save(
     player_q: Query<(&Transform, &CombatStats), (With<Player>, Without<Defeated>)>,
     blood_q: Query<(&BloodStain, &Transform), Without<Player>>,
 ) {
-    if events.read().next().is_none() { return; }
+    // 행동 턴을 카운트해 N 턴마다 1번 저장.
+    let mut acted = false;
+    for _ in events.read() { acted = true; }
+    if !acted { return; }
+    *acted_turns += 1;
+    let interval = config.turn_interval.max(1);
+    if *acted_turns % interval != 0 { return; }
     let Ok((transform, stats)) = player_q.get_single() else { return };
 
     let (tx, ty) = world_to_tile_coords(transform.translation);
@@ -424,6 +439,7 @@ fn delete_save_at(path: &str) {
     let cfg = SaveConfig {
         path: path.to_string(),
         tmp:  format!("{path}.tmp"),
+        turn_interval: 1,
     };
     backend::make_backend(&cfg).delete();
 }
@@ -1001,7 +1017,7 @@ mod tests {
     fn 행동_이벤트가_없으면_자동저장은_파일을_쓰지_않는다() {
         let path = 임시_경로("noevent");
         let tmp = format!("{path}.tmp");
-        let mut app = auto_save_앱(SaveConfig { path: path.clone(), tmp });
+        let mut app = auto_save_앱(SaveConfig { path: path.clone(), tmp, turn_interval: 1 });
         // 플레이어는 있지만 이벤트가 없음
         app.world.spawn((
             Player,
@@ -1016,7 +1032,7 @@ mod tests {
     fn 행동_이벤트가_있어도_플레이어가_없으면_자동저장은_파일을_쓰지_않는다() {
         let path = 임시_경로("noplayer");
         let tmp = format!("{path}.tmp");
-        let mut app = auto_save_앱(SaveConfig { path: path.clone(), tmp });
+        let mut app = auto_save_앱(SaveConfig { path: path.clone(), tmp, turn_interval: 1 });
         app.world.send_event(PlayerActedEvent);
         app.update();
         assert!(!std::path::Path::new(&path).exists(), "플레이어 없으면 저장 안 함");
@@ -1026,7 +1042,7 @@ mod tests {
     fn 행동_이벤트와_플레이어가_있으면_자동저장이_세이브_파일을_기록한다() {
         let path = 임시_경로("autosave_ok");
         let tmp = format!("{path}.tmp");
-        let mut app = auto_save_앱(SaveConfig { path: path.clone(), tmp: tmp.clone() });
+        let mut app = auto_save_앱(SaveConfig { path: path.clone(), tmp: tmp.clone(), turn_interval: 1 });
         // 혈흔도 하나 두어 blood_q 분기를 탄다
         app.world.spawn((
             BloodStain { alpha: 0.5, decay_per_turn: 0.1 },
@@ -1081,7 +1097,7 @@ mod tests {
     #[test]
     fn 세이브_파일이_없으면_로드는_아무것도_하지_않는다() {
         let path = 임시_경로("missing");
-        let mut app = load_앱(SaveConfig { path: path.clone(), tmp: format!("{path}.tmp") });
+        let mut app = load_앱(SaveConfig { path: path.clone(), tmp: format!("{path}.tmp"), turn_interval: 1 });
         app.world.spawn((
             Player,
             CombatStats { hp: 5, max_hp: 5, mp: 0, max_mp: 0, attack: 1, defense: 1 },
@@ -1095,7 +1111,7 @@ mod tests {
     fn 세이브_파일이_손상돼_파싱에_실패하면_로드는_무시한다() {
         let path = 임시_경로("corrupt");
         std::fs::write(&path, "this is not valid ron )(").unwrap();
-        let mut app = load_앱(SaveConfig { path: path.clone(), tmp: format!("{path}.tmp") });
+        let mut app = load_앱(SaveConfig { path: path.clone(), tmp: format!("{path}.tmp"), turn_interval: 1 });
         app.world.spawn((
             Player,
             CombatStats { hp: 5, max_hp: 5, mp: 0, max_mp: 0, attack: 1, defense: 1 },
@@ -1113,7 +1129,7 @@ mod tests {
         let content = ron::ser::to_string_pretty(&save, ron::ser::PrettyConfig::default()).unwrap();
         std::fs::write(&path, content).unwrap();
 
-        let mut app = load_앱(SaveConfig { path: path.clone(), tmp: format!("{path}.tmp") });
+        let mut app = load_앱(SaveConfig { path: path.clone(), tmp: format!("{path}.tmp"), turn_interval: 1 });
         app.world.spawn((
             Player,
             CombatStats { hp: 5, max_hp: 5, mp: 0, max_mp: 0, attack: 1, defense: 1 },
@@ -1137,7 +1153,7 @@ mod tests {
         let content = ron::ser::to_string_pretty(&save, ron::ser::PrettyConfig::default()).unwrap();
         std::fs::write(&path, content).unwrap();
 
-        let mut app = load_앱(SaveConfig { path: path.clone(), tmp: format!("{path}.tmp") });
+        let mut app = load_앱(SaveConfig { path: path.clone(), tmp: format!("{path}.tmp"), turn_interval: 1 });
         let player = app.world.spawn((
             Player,
             CombatStats { hp: 1, max_hp: 1, mp: 0, max_mp: 0, attack: 1, defense: 1 },
@@ -1190,7 +1206,7 @@ mod tests {
         let content = ron::ser::to_string_pretty(&save, ron::ser::PrettyConfig::default()).unwrap();
         std::fs::write(&path, content).unwrap();
 
-        let mut app = load_앱(SaveConfig { path: path.clone(), tmp: format!("{path}.tmp") });
+        let mut app = load_앱(SaveConfig { path: path.clone(), tmp: format!("{path}.tmp"), turn_interval: 1 });
         app.world.spawn((Player, CombatStats { hp: 1, max_hp: 1, mp: 0, max_mp: 0, attack: 1, defense: 1 }));
         app.update();
 
@@ -1213,7 +1229,7 @@ mod tests {
         let content = ron::ser::to_string_pretty(&save, ron::ser::PrettyConfig::default()).unwrap();
         std::fs::write(&path, content).unwrap();
 
-        let mut app = load_앱(SaveConfig { path: path.clone(), tmp: format!("{path}.tmp") });
+        let mut app = load_앱(SaveConfig { path: path.clone(), tmp: format!("{path}.tmp"), turn_interval: 1 });
         let player = app.world.spawn((
             Player,
             CombatStats { hp: 10, max_hp: 10, mp: 0, max_mp: 0, attack: 1, defense: 1 },
@@ -1235,7 +1251,7 @@ mod tests {
         let content = ron::ser::to_string_pretty(&save, ron::ser::PrettyConfig::default()).unwrap();
         std::fs::write(&path, content).unwrap();
 
-        let mut app = load_앱(SaveConfig { path: path.clone(), tmp: format!("{path}.tmp") });
+        let mut app = load_앱(SaveConfig { path: path.clone(), tmp: format!("{path}.tmp"), turn_interval: 1 });
         // 플레이어 엔티티를 스폰하지 않는다
         app.update();
 
@@ -1252,7 +1268,7 @@ mod tests {
         let content = ron::ser::to_string_pretty(&save, ron::ser::PrettyConfig::default()).unwrap();
         std::fs::write(&path, content).unwrap();
 
-        let mut app = load_앱(SaveConfig { path: path.clone(), tmp: format!("{path}.tmp") });
+        let mut app = load_앱(SaveConfig { path: path.clone(), tmp: format!("{path}.tmp"), turn_interval: 1 });
         app.world.resource_mut::<QuestRegistry>().active.insert("rerolled".to_string());
         app.world.spawn((
             Player,

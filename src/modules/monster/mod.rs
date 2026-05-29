@@ -277,8 +277,27 @@ fn update_guard_vision_overlay(
     items: Res<ItemRegistry>,
     light_map: Res<LightMap>,
     monster_query: Query<(&Monster, &Facing, &CombatStats)>,
+    changed_monsters: Query<
+        (),
+        (With<Monster>, Or<(Changed<Monster>, Changed<Facing>, Changed<CombatStats>)>),
+    >,
+    mut removed_monsters: RemovedComponents<Monster>,
     overlay_query: Query<Entity, With<GuardVisionOverlay>>,
 ) {
+    // **change detection 게이트** — 매 frame 4000×G Bresenham + 전체 sprite churn
+    // 의 비용을 입력 변화가 있을 때만 지불. Map / 광량 / 장착 / 가드 상태 / 가드
+    // 추가·제거 어느 하나라도 변하지 않았으면 그대로 둔다.
+    let any_monster_changed = !changed_monsters.is_empty();
+    let any_monster_removed = removed_monsters.read().next().is_some();
+    if !map_res.is_changed()
+        && !equipment.is_changed()
+        && !light_map.is_changed()
+        && !any_monster_changed
+        && !any_monster_removed
+    {
+        return;
+    }
+
     // 매번 기존 오버레이를 비우고 다시 그린다 — 이동/facing/장착 변화 반영을 단순화.
     for entity in overlay_query.iter() {
         commands.entity(entity).despawn();

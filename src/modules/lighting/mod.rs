@@ -222,12 +222,25 @@ pub fn compute_light_levels(
 }
 
 /// 모든 `LightSource` 엔티티의 현재 타일 위치를 모아 `LightMap` 을 재계산한다.
-/// 플레이어/횃불 이동, 광원 추가·제거를 매 프레임 반영해 항상 현재 광량을 유지한다.
+/// 플레이어/횃불 이동, 광원 추가·제거를 반영해 광량을 유지.
+///
+/// **change detection**: 광원 transform/radius 변화·추가·제거 또는 맵 자체 변경 시에만
+/// 재계산. 종전 매 frame 호출 + Vec<LightLevel> 재할당 (~240k alloc/sec @60fps) 의
+/// 비용을 거의 0 으로 줄임. 부수 효과로 `LightMap.is_changed()` 도 매 frame true
+/// 가 아니게 되어 `apply_light_dimming` 가드가 실제로 작동.
 fn update_light_map(
     map_res: Res<MapResource>,
     mut light_map: ResMut<LightMap>,
     source_query: Query<(&Transform, &LightSource)>,
+    changed_sources: Query<(), (With<LightSource>, Or<(Changed<Transform>, Changed<LightSource>, Added<LightSource>)>)>,
+    mut removed_sources: RemovedComponents<LightSource>,
 ) {
+    // 광원 변경(추가/제거/이동/반경변경) 또는 맵 자체 변경 시에만 재계산.
+    let any_changed = !changed_sources.is_empty();
+    let any_removed = removed_sources.read().next().is_some();
+    if !map_res.is_changed() && !any_changed && !any_removed {
+        return;
+    }
     let map = map_res.map();
     let sources: Vec<((usize, usize), i32)> = source_query.iter()
         .map(|(t, ls)| (crate::modules::map::world_to_tile_coords(t.translation), ls.radius))
