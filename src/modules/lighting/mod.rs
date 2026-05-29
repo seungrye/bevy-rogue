@@ -174,13 +174,21 @@ pub(crate) const BACKGROUND_COLOR: Color = Color::rgb(0.13, 0.13, 0.13);
 ///
 /// 단순 `dim`(RGB 곱) 은 모든 색을 검은색으로 가게 해 어색하므로, 배경색(짙은 회색)
 /// 쪽으로 lerp 해 멀어질수록 타일이 배경에 자연스럽게 녹아드는 효과를 낸다.
+///
+/// **밝아짐 방지(채널별 min)**: base 가 배경보다 어두운 채널은 lerp 결과가 base 보다
+/// 밝아질 수 있어 어색하다(예 어두운 벽돌이 멀어질수록 배경 때문에 밝아짐).
+/// 채널별로 `min(lerp, base)` 를 적용해 "디밍은 어두워질 뿐, 밝아지지 않는다" 를
+/// 보장한다.
 fn dim(base: Color, factor: f32) -> Color {
     let t = factor.clamp(0.0, 1.0);
     let bg = BACKGROUND_COLOR;
+    let lr = base.r() * t + bg.r() * (1.0 - t);
+    let lg = base.g() * t + bg.g() * (1.0 - t);
+    let lb = base.b() * t + bg.b() * (1.0 - t);
     Color::rgba(
-        base.r() * t + bg.r() * (1.0 - t),
-        base.g() * t + bg.g() * (1.0 - t),
-        base.b() * t + bg.b() * (1.0 - t),
+        lr.min(base.r()),
+        lg.min(base.g()),
+        lb.min(base.b()),
         base.a(),
     )
 }
