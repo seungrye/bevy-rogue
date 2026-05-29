@@ -154,14 +154,17 @@ pub fn tile_render_color(
     if !visible {
         // 탐험만 된(기억) 타일 — 0.3 × 기억 감퇴 factor 로 배경 쪽으로 lerp.
         // turns_since_seen 이 None 이면 감퇴 없음(기존 0.3 디밍 유지).
+        // 망각 분기는 클램프 없이 순수 lerp — 시간이 지나면 밝은 타일도 흐려져야 함.
         let fade = turns_since_seen.map(memory_fade_factor).unwrap_or(1.0);
         return Some(dim(base, 0.3 * fade));
     }
+    // 시야 안 — 거리/광량 감쇠는 base 의 floor 로만 작동(clamp_to_base).
     let falloff = distance_falloff_alpha(distance);
-    match light {
-        LightLevel::Bright => Some(dim(base, falloff)),
-        LightLevel::Dark => Some(dim(base, DARK_DIM_FACTOR * falloff)),
-    }
+    let dimmed = match light {
+        LightLevel::Bright => dim(base, falloff),
+        LightLevel::Dark => dim(base, DARK_DIM_FACTOR * falloff),
+    };
+    Some(clamp_to_base(dimmed, base))
 }
 
 /// 게임 캔버스 배경색 (Bevy 기본 ClearColor 와 같은 짙은 회색).
@@ -175,21 +178,31 @@ pub(crate) const BACKGROUND_COLOR: Color = Color::rgb(0.13, 0.13, 0.13);
 /// 단순 `dim`(RGB 곱) 은 모든 색을 검은색으로 가게 해 어색하므로, 배경색(짙은 회색)
 /// 쪽으로 lerp 해 멀어질수록 타일이 배경에 자연스럽게 녹아드는 효과를 낸다.
 ///
-/// **타일 본연 보존(채널별 max)**: 사용자 디자인 — "타일 밝기 80, 거리 감쇠 10 →
-/// max(80, 10) = 80". 즉 거리 감쇠/광량 lerp 가 타일 본연 base 보다 어두워지면
-/// base 를 그대로 사용한다(타일이 자체적으로 갖는 색은 어떤 거리에서든 보존).
-/// 채널별로 `max(lerp, base)` 를 적용 — base 가 lerp 보다 더 밝은 채널은 base 그대로.
+/// 본 함수는 클램프하지 않은 **순수 lerp** — 호출자가 의도에 맞게 `clamp_to_base`
+/// 를 덧붙인다. 망각 분기(visible=false) 는 클램프 없이 어둡게 가야 하기 때문.
 fn dim(base: Color, factor: f32) -> Color {
     let t = factor.clamp(0.0, 1.0);
     let bg = BACKGROUND_COLOR;
-    let lr = base.r() * t + bg.r() * (1.0 - t);
-    let lg = base.g() * t + bg.g() * (1.0 - t);
-    let lb = base.b() * t + bg.b() * (1.0 - t);
     Color::rgba(
-        lr.max(base.r()),
-        lg.max(base.g()),
-        lb.max(base.b()),
+        base.r() * t + bg.r() * (1.0 - t),
+        base.g() * t + bg.g() * (1.0 - t),
+        base.b() * t + bg.b() * (1.0 - t),
         base.a(),
+    )
+}
+
+/// 채널별 `max(c, base)` — 시야 안 거리/광량 감쇠가 타일 자체 색보다 더 어두워지면
+/// base 를 그대로 살린다. 사용자 디자인: "타일 밝기 80, 거리 감쇠 10 →
+/// max(80, 10) = 80". 즉 감쇠는 **밝기의 floor (최소치)** 로만 작동.
+///
+/// 망각 분기(visible=false) 에는 적용하지 않는다 — 망각의 본질이 시간이 지나며
+/// 타일이 흐려지는 거라, 클램프를 걸면 밝은 타일이 망각 영향을 받지 못한다.
+fn clamp_to_base(c: Color, base: Color) -> Color {
+    Color::rgba(
+        c.r().max(base.r()),
+        c.g().max(base.g()),
+        c.b().max(base.b()),
+        c.a(),
     )
 }
 
