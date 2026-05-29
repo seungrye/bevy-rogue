@@ -10,7 +10,7 @@ use crate::modules::{
     player::Player,
     monster::{Monster, PlayerDetectedEvent},
     elemental::{Element, ElementalApplyEvent},
-    item::{PlayerEquipment, AccessoryKind},
+    item::{PlayerEquipment, AccessoryKind, AccessoryEffect, ItemRegistry, player_has_effect},
     ui::LogMessage,
 };
 
@@ -20,7 +20,10 @@ pub const TRAP_SCOPE_ID: &str = "trap_scope";
 /// trap_scope 효과 반경 (체비쇼프). 일반 reveal_hidden_traps(인접 1) 보다 훨씬 넓다.
 pub const TRAP_SCOPE_RADIUS: i32 = 8;
 
-/// `(equipment)` 가 함정 등불(`trap_scope`)을 착용 중인지 (순수 함수).
+/// `(equipment)` 가 함정 등불(`trap_scope`)을 착용 중인지 (순수 함수, 호환용).
+///
+/// 이 함수는 id 직접 매칭으로 호환을 유지한다. 새 코드는
+/// `player_has_effect(eq, AccessoryEffect::RevealTrapsInSight, items)` 사용 권장.
 pub fn player_has_trap_scope(equipment: &PlayerEquipment) -> bool {
     equipment.accessory == Some(AccessoryKind(TRAP_SCOPE_ID))
 }
@@ -217,6 +220,9 @@ impl Plugin for TrapPlugin {
             // reveal_traps_by_lens 가 읽는 PlayerEquipment — ItemPlugin 이 보통
             // 등록하지만 단독 테스트에서도 동작하도록 여기서도 init 한다.
             .init_resource::<PlayerEquipment>()
+            // effect 키 분기에 필요한 registry. ItemPlugin 이 보통 등록하지만,
+            // trap 단독 테스트도 패닉 없이 동작하도록 보장한다.
+            .init_resource::<ItemRegistry>()
             .add_systems(Update, (
                 handle_spawn_trap,
                 trigger_traps,
@@ -426,8 +432,11 @@ fn reveal_traps_by_lens(
     mut trap_query: Query<(&mut Trap, &mut Visibility)>,
     player_query: Query<&Transform, With<Player>>,
     equipment: Res<PlayerEquipment>,
+    items: Res<ItemRegistry>,
 ) {
-    if !player_has_trap_scope(&equipment) { return; }
+    // id 가 아닌 `RevealTrapsInSight` 효과 키로 분기 — site UI 에서 effects 만 옮겨도
+    // 동일 동작이 다른 액세서리(예: 신규 부적)로 옮겨진다.
+    if !player_has_effect(&equipment, AccessoryEffect::RevealTrapsInSight, &items) { return; }
     let Ok(transform) = player_query.get_single() else { return };
     let (px, py) = world_to_tile_coords(transform.translation);
     for (mut trap, mut vis) in trap_query.iter_mut() {

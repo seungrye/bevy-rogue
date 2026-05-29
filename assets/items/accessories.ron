@@ -4,12 +4,15 @@
 //   display_name: 인벤토리/UI 표기 이름
 //   glyph_ascii / glyph_unicode / glyph_game_icon: 글리프 스타일별 표시 문자
 //   pickup_message: 획득 시 로그 메시지
-//   desc: 효과 설명(가이드/패널 표시 용, 게임 로직은 id 로 분기)
+//   desc: 효과 설명(가이드/패널 표시 용 — 사람용 텍스트)
+//   effects: 효과 키 목록(데이터 주도). 게임 코드는 id 가 아닌 이 키로 분기.
 //
-// 액세서리는 스탯에 영향을 주지 않고, 코드가 id 로 효과를 분기한다(원소·잠입·함정 등).
-// 현재 효과:
-//   - "scout_lens" (올빼미 안경, 잠입 전용): 착용 시 가드 시야 영역을 붉게 표시.
-//   - "trap_scope" (광부의 등불, 함정 전용): 착용 시 시야 내 숨김 함정을 자동으로 노출.
+// 액세서리는 스탯에 영향을 주지 않고, effects 목록의 키로 효과가 결정된다.
+// 현재 지원하는 effect 키:
+//   - RevealGuardVision : 가드 시야 영역에 빨간 오버레이 (잠입)
+//   - RevealTrapsInSight: 시야 반경 내 숨김 함정 자동 노출 (함정)
+//
+// effects 가 비어 있거나 누락된 액세서리는 효과 없는 장식용 슬롯이 된다.
 [
     AccessoryDef(
         id: "scout_lens",
@@ -19,6 +22,7 @@
         glyph_game_icon: "\u{1F50E}",
         pickup_message: "올빼미 안경을 받았다. 착용하면 경비병의 시선이 붉게 비쳐 보인다.",
         desc: "잠입 전용. 착용하면 가드의 시야가 닿는 위험 타일이 붉게 표시된다.",
+        effects: [RevealGuardVision],
     ),
     AccessoryDef(
         id: "trap_scope",
@@ -28,5 +32,6 @@
         glyph_game_icon: "\u{1F526}",
         pickup_message: "광부의 등불을 받았다. 착용하면 깔린 함정의 위치가 빛에 드러난다.",
         desc: "함정 전용. 착용하면 시야 내 숨김 함정이 자동으로 드러난다.",
+        effects: [RevealTrapsInSight],
     ),
 ]

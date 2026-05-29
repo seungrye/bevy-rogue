@@ -328,6 +328,7 @@ pub fn build_test_registry() -> ItemRegistry {
             glyph_game_icon: Box::leak(def.glyph_game_icon.into_boxed_str()),
             pickup_message:  Box::leak(def.pickup_message.into_boxed_str()),
             desc:            Box::leak(def.desc.into_boxed_str()),
+            effects:         def.effects,
         });
     }
     r
@@ -522,6 +523,22 @@ pub struct ConsumableMeta {
 }
 
 // ── Accessory: RON 정의/메타/로드 ──────────────────────────────────────────
+
+/// 액세서리의 데이터 주도 효과 키. 게임 코드가 id 가 아닌 effect 키로 분기해
+/// site UI 만으로 효과 조합을 자유롭게 바꿀 수 있게 한다.
+///
+/// 추가 시:
+///   1) 이 enum 에 variant 추가 (snake-case 아닌 PascalCase — RON serde 기본).
+///   2) 게임 코드에 `player_has_effect(eq, NewVariant, items)` 로 분기 추가.
+///   3) site 측 `types/item.ts` 의 union 타입에 같은 문자열 추가.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, serde::Serialize)]
+pub enum AccessoryEffect {
+    /// 가드 시야 영역에 빨간 오버레이 (잠입). 기존 scout_lens 효과.
+    RevealGuardVision,
+    /// 시야 반경 내 숨김 함정 자동 노출 (함정). 기존 trap_scope 효과.
+    RevealTrapsInSight,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct AccessoryDef {
     pub id: String,
@@ -531,6 +548,9 @@ pub struct AccessoryDef {
     pub glyph_game_icon: String,
     pub pickup_message: String,
     pub desc: String,
+    /// 효과 키 목록. 누락 시 빈 vec (효과 없는 장식용 액세서리도 허용).
+    #[serde(default)]
+    pub effects: Vec<AccessoryEffect>,
 }
 
 #[derive(Debug, Clone)]
@@ -541,6 +561,8 @@ pub struct AccessoryMeta {
     pub glyph_game_icon: &'static str,
     pub pickup_message: &'static str,
     pub desc: &'static str,
+    /// 런타임 효과 lookup 용. `player_has_effect` 가 착용 중 accessory 의 이 vec 를 검사.
+    pub effects: Vec<AccessoryEffect>,
 }
 
 // ── 시작 로드아웃 (assets/items/start_loadout.ron) ─────────────────────────
@@ -843,6 +865,7 @@ fn load_accessories_system(mut registry: ResMut<ItemRegistry>) {
             glyph_game_icon: Box::leak(def.glyph_game_icon.into_boxed_str()),
             pickup_message:  Box::leak(def.pickup_message.into_boxed_str()),
             desc:            Box::leak(def.desc.into_boxed_str()),
+            effects:         def.effects,
         });
     }
     info!("accessory 로드: {} 종", map.len());
@@ -1235,6 +1258,34 @@ pub struct PlayerEquipment {
     /// serde default → 구 세이브는 None (액세서리 슬롯이 없던 시절 호환).
     #[serde(default)]
     pub accessory: Option<AccessoryKind>,
+}
+
+impl PlayerEquipment {
+    /// 현재 착용 중인 액세서리가 `effect` 키를 가지고 있는지 검사.
+    ///
+    /// `ItemRegistry` 의 accessory meta 에서 effects vec 를 조회한다.
+    /// - 미착용 → false
+    /// - 착용했지만 effects 에 키 없음 → false
+    /// - 착용했고 effects 에 키 있음 → true
+    ///
+    /// 이 함수는 id 가 아니라 효과 키로 분기하기 위한 단일 진입점.
+    /// site UI 에서 effects 만 바꿔도 게임 코드 변경 없이 동작이 바뀐다.
+    pub fn has_effect(&self, effect: AccessoryEffect, items: &ItemRegistry) -> bool {
+        let Some(ak) = self.accessory else { return false };
+        items
+            .accessory(ak)
+            .map(|m| m.effects.iter().any(|e| *e == effect))
+            .unwrap_or(false)
+    }
+}
+
+/// 자유 함수 형태 — 호출부가 메서드보다 함수가 어울리는 곳(트레잇 충돌 등)에서 쓰기 위한 wrapper.
+pub fn player_has_effect(
+    equipment: &PlayerEquipment,
+    effect: AccessoryEffect,
+    items: &ItemRegistry,
+) -> bool {
+    equipment.has_effect(effect, items)
 }
 
 #[derive(Resource, Default)]
@@ -2273,6 +2324,107 @@ mod tests {
         let s = ron::ser::to_string(&eq).unwrap();
         let parsed: PlayerEquipment = ron::de::from_str(&s).unwrap();
         assert_eq!(parsed.accessory, Some(AccessoryKind::SCOUT_LENS));
+    }
+
+    // ── AccessoryEffect (데이터 주도 효과 키) ────────────────────────────────
+
+    #[test]
+    fn 액세서리효과는_serde_왕복이_보존된다() {
+        // RevealGuardVision / RevealTrapsInSight 모두 round-trip 확인.
+        let e = AccessoryEffect::RevealGuardVision;
+        let s = ron::ser::to_string(&e).unwrap();
+        let parsed: AccessoryEffect = ron::de::from_str(&s).unwrap();
+        assert_eq!(parsed, e);
+
+        let e2 = AccessoryEffect::RevealTrapsInSight;
+        let s2 = ron::ser::to_string(&e2).unwrap();
+        let parsed2: AccessoryEffect = ron::de::from_str(&s2).unwrap();
+        assert_eq!(parsed2, e2);
+    }
+
+    #[test]
+    fn 액세서리정의의_effects_누락은_빈_vec로_역직렬화된다() {
+        // 구 RON(effects 필드 없음) 호환 — serde(default) 가 빈 vec 채움.
+        let src = r#"AccessoryDef(
+            id: "ornament",
+            display_name: "장식",
+            glyph_ascii: "o",
+            glyph_unicode: "o",
+            glyph_game_icon: "o",
+            pickup_message: "장식을 얻었다.",
+            desc: "효과 없음.",
+        )"#;
+        let parsed: AccessoryDef = ron::de::from_str(src).expect("구 RON 파싱");
+        assert!(parsed.effects.is_empty(), "effects 누락 시 빈 vec");
+    }
+
+    #[test]
+    fn 액세서리정의의_effects를_포함한_RON도_정상_파싱된다() {
+        let src = r#"AccessoryDef(
+            id: "scout_lens",
+            display_name: "올빼미 안경",
+            glyph_ascii: "O",
+            glyph_unicode: "O",
+            glyph_game_icon: "O",
+            pickup_message: "획득",
+            desc: "잠입 전용.",
+            effects: [RevealGuardVision],
+        )"#;
+        let parsed: AccessoryDef = ron::de::from_str(src).expect("신규 RON 파싱");
+        assert_eq!(parsed.effects, vec![AccessoryEffect::RevealGuardVision]);
+    }
+
+    #[test]
+    fn player_has_effect는_미착용시_false를_돌려준다() {
+        let eq = PlayerEquipment::default();
+        let r = qi();
+        assert!(!player_has_effect(&eq, AccessoryEffect::RevealGuardVision, r));
+        assert!(!player_has_effect(&eq, AccessoryEffect::RevealTrapsInSight, r));
+    }
+
+    #[test]
+    fn player_has_effect는_해당_effect를_가진_액세서리_착용시_true를_돌려준다() {
+        // accessories.ron 의 scout_lens 는 RevealGuardVision 효과를 가진다.
+        let mut eq = PlayerEquipment::default();
+        eq.accessory = Some(AccessoryKind::SCOUT_LENS);
+        assert!(player_has_effect(&eq, AccessoryEffect::RevealGuardVision, qi()));
+        // 다른 effect 키는 false.
+        assert!(!player_has_effect(&eq, AccessoryEffect::RevealTrapsInSight, qi()));
+
+        // trap_scope 도 동일 패턴 — RevealTrapsInSight true, RevealGuardVision false.
+        eq.accessory = Some(AccessoryKind::TRAP_SCOPE);
+        assert!(player_has_effect(&eq, AccessoryEffect::RevealTrapsInSight, qi()));
+        assert!(!player_has_effect(&eq, AccessoryEffect::RevealGuardVision, qi()));
+    }
+
+    #[test]
+    fn 빈_effects를_가진_액세서리는_어떤_effect로도_false다() {
+        // 효과 없는 장식용 액세서리를 등록한 registry 로 검증.
+        let mut r = ItemRegistry::default();
+        let id: &'static str = "ornament";
+        r.accessories.insert(id, AccessoryMeta {
+            display_name: "장식",
+            glyph_ascii: "o",
+            glyph_unicode: "o",
+            glyph_game_icon: "o",
+            pickup_message: "획득",
+            desc: "효과 없음.",
+            effects: vec![], // 빈 vec
+        });
+        let mut eq = PlayerEquipment::default();
+        eq.accessory = Some(AccessoryKind(id));
+        assert!(!player_has_effect(&eq, AccessoryEffect::RevealGuardVision, &r));
+        assert!(!player_has_effect(&eq, AccessoryEffect::RevealTrapsInSight, &r));
+    }
+
+    #[test]
+    fn accessories_ron_의_두_액세서리에_effects가_채워진다() {
+        // 게임 정본 RON 이 데이터 주도 effects 를 가져야 한다(회귀 방지).
+        let r = qi();
+        let lens = r.accessory(AccessoryKind::SCOUT_LENS).expect("scout_lens 등록");
+        assert_eq!(lens.effects, vec![AccessoryEffect::RevealGuardVision]);
+        let scope = r.accessory(AccessoryKind::TRAP_SCOPE).expect("trap_scope 등록");
+        assert_eq!(scope.effects, vec![AccessoryEffect::RevealTrapsInSight]);
     }
 
     #[test]

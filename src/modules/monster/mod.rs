@@ -14,7 +14,7 @@ use crate::modules::{
     combat::{CombatStats, Defeated, Speed, calc_damage},
     ui::LogMessage,
     combat_feedback::CombatFeedbackEvent,
-    item::{ItemDropEvent, PlayerEquipment, ItemRegistry, PlayerInventory, AccessoryKind, effective_attack, effective_defense},
+    item::{ItemDropEvent, PlayerEquipment, ItemRegistry, PlayerInventory, AccessoryKind, AccessoryEffect, effective_attack, effective_defense, player_has_effect},
     zone::{WorldState, ZoneId, ZonePersistence, MonsterSlot},
     map::GlobalTurn,
     elemental::{Element, ElementalApplyEvent, ElementalStatus, Stunned, weapon_element},
@@ -255,8 +255,11 @@ pub fn danger_tiles(
     out
 }
 
-/// 액세서리 슬롯에 정찰 도구(`scout_lens`)를 **착용 중**인지 여부 (순수 함수).
+/// 액세서리 슬롯에 정찰 도구(`scout_lens`)를 **착용 중**인지 여부 (순수 함수, 호환용).
 /// 인벤토리에만 있고 미장착이면 false — 잠입 도구는 슬롯 점유라는 비용을 갖는다.
+///
+/// 이 함수는 id 직접 매칭으로 빠른 경로를 유지(기존 테스트·외부 호출자 호환).
+/// 새 코드는 `player_has_effect(eq, AccessoryEffect::RevealGuardVision, items)` 사용 권장.
 pub fn player_has_scout_lens(equipment: &PlayerEquipment) -> bool {
     equipment.accessory == Some(AccessoryKind(SCOUT_LENS_ID))
 }
@@ -271,6 +274,7 @@ fn update_guard_vision_overlay(
     mut commands: Commands,
     map_res: Res<MapResource>,
     equipment: Res<PlayerEquipment>,
+    items: Res<ItemRegistry>,
     light_map: Res<LightMap>,
     monster_query: Query<(&Monster, &Facing, &CombatStats)>,
     overlay_query: Query<Entity, With<GuardVisionOverlay>>,
@@ -280,8 +284,9 @@ fn update_guard_vision_overlay(
         commands.entity(entity).despawn();
     }
 
-    // 정찰 도구 미착용이면 오버레이 없음 (제거만 하고 종료).
-    if !player_has_scout_lens(&equipment) {
+    // `RevealGuardVision` 효과를 가진 액세서리를 착용하지 않았다면 오버레이 없음.
+    // id 가 아닌 effect 키로 분기하므로 site UI 에서 effects 만 옮겨도 동작 전이가 가능하다.
+    if !player_has_effect(&equipment, AccessoryEffect::RevealGuardVision, &items) {
         return;
     }
 
@@ -317,6 +322,9 @@ impl Plugin for MonsterPlugin {
             // 탐지(monster_turn)·오버레이가 읽는 광량 정본. LightingPlugin 이 이미
             // 등록하지만 monster 단독 테스트/구성에서도 동작하도록 여기서도 보장한다.
             .init_resource::<LightMap>()
+            // overlay 시스템이 effect 키로 분기하기 위해 ItemRegistry 가 필요하다.
+            // ItemPlugin 이 보통 등록하지만, monster 단독 테스트도 패닉 없이 동작하도록 보장.
+            .init_resource::<ItemRegistry>()
             .add_event::<PlayerDetectedEvent>()
             .add_event::<SpawnGuardEvent>()
             .add_event::<SpawnMonsterEvent>()
@@ -2798,6 +2806,8 @@ mod tests {
         let mut eq = PlayerEquipment::default();
         if has_lens { eq.accessory = Some(AccessoryKind(SCOUT_LENS_ID)); }
         app.insert_resource(eq);
+        // 효과 키 기반 분기를 검증하려면 accessory effects 를 가진 registry 가 필요하다.
+        app.insert_resource(crate::modules::item::build_test_registry());
         app.add_systems(Update, update_guard_vision_overlay);
         app
     }

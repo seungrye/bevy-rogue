@@ -437,6 +437,8 @@ fn lens_app(equipped: bool) -> App {
     let mut eq = PlayerEquipment::default();
     if equipped { eq.accessory = Some(AccessoryKind(TRAP_SCOPE_ID)); }
     app.insert_resource(eq);
+    // RevealTrapsInSight effect 키 조회용 — accessories.ron 의 trap_scope 효과 포함.
+    app.insert_resource(crate::modules::item::build_test_registry());
     app.add_systems(Update, reveal_traps_by_lens);
     app
 }
