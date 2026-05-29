@@ -125,47 +125,42 @@ pub fn memory_fade_factor(turns_since_seen: u32) -> f32 {
     (-(turns_since_seen as f32) / 50.0).exp()
 }
 
-/// 가시성(visible/revealed)과 광량·거리를 함께 받아 타일의 최종 렌더 색을 결정하는
-/// **단일 순수 함수** — 디밍은 여기 한 곳에서만 결정한다(이중 처리/예외 분기 금지).
+/// 타일의 **누적 가시화 상태(brightness)** 와 마지막 본 이후 경과 턴을 받아 최종 렌더
+/// 색을 결정하는 단일 순수 함수.
+///
+/// brightness 는 FOV 시스템이 시야 닿을 때마다 `max(brightness * memory_fade(elapsed),
+/// light_factor(d))` 로 갱신한 누적값 — 망각으로 감쇠된 이전 상태와 현재 시야 강도
+/// 중 큰 값. 표시는 `brightness * memory_fade(elapsed)` — visible 인 동안엔 elapsed=0
+/// 이라 brightness 그대로, 시야가 빠지면 시간 따라 부드럽게 어두워진다.
+///
+/// 이 모델은 분기(visible/!visible) 없이 누적 brightness 단일값으로 'state stays' 의도를
+/// 표현 — 망각으로 30 인 타일에 시야 falloff 10 이 닿아도 FOV 갱신 단계에서
+/// `max(30, 10) = 30` 이 되어 30 유지 (이전 분기 모델의 '시야 닿는 순간 망각 정보가
+/// 사라져 10 으로 덮어쓰여지는' 어색함 해소).
 ///
 /// - 미탐험(`!visible && !revealed`): `None` — 숨김(색 갱신 안 함).
-/// - 탐험만 됨(`!visible`): 기존 0.3 디밍에 **기억 감퇴 factor** 를 곱해 시간이 흐를수록
-///   더 흐려진다. `turns_since_seen=None` 이면 감퇴 없음(기존 동작 보존).
-/// - 보이고 밝음: 기본 색 × `distance_falloff_alpha(distance)` (시야 거리 감쇠).
-/// - 보이고 어둠: `DARK_DIM_FACTOR` × `distance_falloff_alpha(distance)` 디밍.
+/// - 그 외: `dim(base, brightness * memory_fade(turns_since_seen))`.
 ///
-/// `distance` 는 플레이어 ↔ 타일 체비쇼프 거리. 거리가 음수/0 이면 1.0 으로 간주
-/// (플레이어 자기 타일 + 방어). 거리 감쇠는 시야 안 타일에만 적용되며, 미탐험·
-/// 기억 타일은 거리 무관(기존 동작 보존).
-///
-/// `turns_since_seen` 은 마지막으로 본 시점 이후 경과한 글로벌 턴 수. 기억 타일에만
-/// 적용되며 visible 분기에서는 무시한다(보이는 동안엔 망각이 멈춘다).
+/// `turns_since_seen=None` 은 last_seen_turn 이 아직 없는 (직렬화 호환) 케이스 —
+/// 감퇴 없음으로 간주(brightness 그대로).
 pub fn tile_render_color(
     base: Color,
     visible: bool,
     revealed: bool,
-    light: LightLevel,
-    distance: i32,
+    brightness: f32,
     turns_since_seen: Option<u32>,
 ) -> Option<Color> {
     if !visible && !revealed {
         return None;
     }
-    if !visible {
-        // 탐험만 된(기억) 타일 — 0.3 × 기억 감퇴 factor 로 배경 쪽으로 lerp.
-        // turns_since_seen 이 None 이면 감퇴 없음(기존 0.3 디밍 유지).
-        // 망각 분기는 클램프 없이 순수 lerp — 시간이 지나면 밝은 타일도 흐려져야 함.
-        let fade = turns_since_seen.map(memory_fade_factor).unwrap_or(1.0);
-        return Some(dim(base, 0.3 * fade));
-    }
-    // 시야 안 — 거리/광량 감쇠 lerp 그대로 적용. clamp 없음
-    // (clamp_to_base 는 게임 타일이 모두 bg 보다 밝아 거리 감쇠를 시각적으로 무력화하는
-    //  버그가 있었음 — 처음 보는 타일조차 falloff 가 안 보이는 문제. 분기 단일 lerp 로).
-    let falloff = distance_falloff_alpha(distance);
-    Some(match light {
-        LightLevel::Bright => dim(base, falloff),
-        LightLevel::Dark => dim(base, DARK_DIM_FACTOR * falloff),
-    })
+    // 시야 안: FOV 가 brightness 를 max-갱신해 최신값을 보장 — 표시 단계 fade 생략.
+    // 시야 밖: last_seen 이후 경과 턴으로 memory_fade 진행. None 이면 감퇴 없음.
+    let fade = if visible {
+        1.0
+    } else {
+        turns_since_seen.map(memory_fade_factor).unwrap_or(1.0)
+    };
+    Some(dim(base, brightness * fade))
 }
 
 /// 게임 캔버스 배경색 (Bevy 기본 ClearColor 와 같은 짙은 회색).
@@ -178,9 +173,6 @@ pub(crate) const BACKGROUND_COLOR: Color = Color::rgb(0.13, 0.13, 0.13);
 ///
 /// 단순 `dim`(RGB 곱) 은 모든 색을 검은색으로 가게 해 어색하므로, 배경색(짙은 회색)
 /// 쪽으로 lerp 해 멀어질수록 타일이 배경에 자연스럽게 녹아드는 효과를 낸다.
-///
-/// 본 함수는 클램프하지 않은 **순수 lerp** — 호출자가 의도에 맞게 `clamp_to_base`
-/// 를 덧붙인다. 망각 분기(visible=false) 는 클램프 없이 어둡게 가야 하기 때문.
 fn dim(base: Color, factor: f32) -> Color {
     let t = factor.clamp(0.0, 1.0);
     let bg = BACKGROUND_COLOR;
@@ -246,35 +238,20 @@ fn update_light_map(
 
 /// 타일 스프라이트 색을 가시성 + 광량 + 플레이어 거리 + 기억 경과 시간으로 한 번에
 /// 결정해 디밍한다. 기존 map 의 `update_tile_visibility` 가 가시성/숨김을 담당하고,
-/// 여기서는 광량·거리·기억 감퇴를 `tile_render_color` 로 일관 적용한다 — 보이는 타일과
-/// 기억(revealed) 타일에 한해.
-///
-/// 플레이어 위치를 받아 시야 안 타일의 체비쇼프 거리로 거리 감쇠를 곱한다.
-/// 플레이어가 없으면(테스트 등) 거리 0 으로 보아 감쇠 없음(기존 동작 보존).
-///
-/// `GlobalTurn` 으로 각 기억 타일의 `Δturn = now - last_seen_turn` 을 계산해
-/// `memory_fade_factor` 의 입력으로 넘긴다. `last_seen_turn` 이 `None` 이거나
-/// `GlobalTurn` 리소스가 없으면 기억 감퇴를 적용하지 않는다.
+/// 여기서는 타일의 누적 `brightness` 와 `last_seen_turn` 을 `tile_render_color` 에
+/// 넘겨 색을 결정한다 — visible 인 동안엔 elapsed=0 이라 brightness 그대로,
+/// 시야가 빠지면 매 프레임 fade 가 진행. 거리/광량 결합은 FOV 시스템에서 이미 완료.
 fn apply_light_dimming(
     map_res: Res<MapResource>,
     light_map: Res<LightMap>,
     global_turn: Option<Res<GlobalTurn>>,
-    player_query: Query<&Transform, With<Player>>,
     mut tile_query: Query<(&crate::modules::map::TileEntity, &mut Text, &Visibility)>,
 ) {
-    // 맵(가시성)·광량 둘 중 하나라도 바뀌어야 재적용한다.
-    // 플레이어가 움직이면 LightMap 이 ensure_player_light/update_light_map 흐름으로
-    // 매 프레임 갱신되며 is_changed 가 켜져 거리 감쇠도 같이 다시 칠해진다.
+    // 맵(가시성·brightness)·광량 둘 중 하나라도 바뀌어야 재적용한다.
     if !map_res.is_changed() && !light_map.is_changed() {
         return;
     }
     let map = map_res.map();
-    // 플레이어 위치(타일) — 없으면 (-1,-1) 로 두고 거리 감쇠를 0(=알파 1.0) 으로 본다.
-    let player_tile: Option<(i32, i32)> = player_query.get_single().ok()
-        .map(|t| {
-            let (x, y) = crate::modules::map::world_to_tile_coords(t.translation);
-            (x as i32, y as i32)
-        });
     let now_turn: Option<u32> = global_turn.as_ref().map(|t| t.0 as u32);
     for (tile, mut text, vis) in tile_query.iter_mut() {
         // 숨김 타일은 색을 건드리지 않는다(가시성은 map 시스템이 결정).
@@ -283,13 +260,7 @@ fn apply_light_dimming(
         }
         let idx = map.index(tile.x, tile.y);
         let base = crate::modules::map::tile_base_color(map.tiles[idx].kind);
-        let light = light_map.at(tile.x, tile.y);
-        let distance = match player_tile {
-            Some(p) => chebyshev_distance(p, (tile.x as i32, tile.y as i32)),
-            None => 0,
-        };
-        // Δturn = now - last_seen — 둘 중 하나라도 없으면 None(기존 0.3 디밍 유지).
-        // saturating_sub 로 last_seen > now (세이브 후 리셋 등) 의 음수도 방어.
+        // Δturn = now - last_seen — 둘 중 하나라도 없으면 None(감퇴 없음).
         let turns_since_seen: Option<u32> = match (now_turn, map.tiles[idx].last_seen_turn) {
             (Some(now), Some(last)) => Some(now.saturating_sub(last)),
             _ => None,
@@ -298,8 +269,7 @@ fn apply_light_dimming(
             base,
             map.tiles[idx].visible,
             map.tiles[idx].revealed,
-            light,
-            distance,
+            map.tiles[idx].brightness,
             turns_since_seen,
         ) {
             if text.sections[0].style.color != color {

@@ -11,6 +11,7 @@ use crate::modules::{
     ui::{help::HelpPanelOpen, shop::ShopPanelOpen, guide_panel::GuidePanelOpen},
     elemental::ElementalStatus,
     villager::{Villager, VillagerSystemSet},
+    lighting::{LightMap, LightLevel, distance_falloff_alpha, memory_fade_factor, DARK_DIM_FACTOR},
 };
 use bevy::input::touch::Touches;
 use bevy::prelude::*;
@@ -813,15 +814,17 @@ pub(crate) fn update_fov_for_test(
     player_query: Query<(&Transform, &Facing), With<Player>>,
     map_res: ResMut<MapResource>,
     global_turn: Option<Res<GlobalTurn>>,
+    light_map: Option<Res<LightMap>>,
     last_pos: Local<Option<(IVec2, IVec2)>>,
 ) {
-    update_fov(player_query, map_res, global_turn, last_pos);
+    update_fov(player_query, map_res, global_turn, light_map, last_pos);
 }
 
 fn update_fov(
     player_query: Query<(&Transform, &Facing), With<Player>>,
     mut map_res: ResMut<MapResource>,
     global_turn: Option<Res<GlobalTurn>>,
+    light_map: Option<Res<LightMap>>,
     mut last_pos: Local<Option<(IVec2, IVec2)>>,
 ) {
     // 맵이 교체되면 강제 재계산
@@ -840,8 +843,6 @@ fn update_fov(
     // 성능 로그용 타이머 — web-time::Instant 는 native/wasm 양쪽에서 동작한다.
     // (std::time::Instant 는 wasm32 에서 패닉.)
     let start = web_time::Instant::now();
-    // 현재 글로벌 턴을 u32 로 캐스팅해 last_seen_turn 에 기록한다.
-    // GlobalTurn 리소스가 없으면(테스트 등) 0 으로 본다 — 기억 감퇴 곡선의 Δ가 0 부터 시작.
     let now_turn: u32 = global_turn.as_ref().map(|t| t.0 as u32).unwrap_or(0);
     let map = map_res.map_mut();
     map.tiles.iter_mut().for_each(|t| t.visible = false);
@@ -855,8 +856,26 @@ fn update_fov(
                 let idx = map.index(x as usize, y as usize);
                 map.tiles[idx].visible = true;
                 map.tiles[idx].revealed = true;
-                // 시야에 들어온 타일의 마지막 본 시점을 갱신. 기억 감퇴는 이 값과
-                // 현재 GlobalTurn 의 차이로 계산한다.
+
+                // brightness state 갱신 — 누적 가시화 상태.
+                // 이전 상태에 (마지막 본 이후) 망각 감쇠를 먼저 적용한 뒤, 현재 시야 강도
+                // (거리 감쇠 × 광량 분기) 와 채널별 max — 사용자 의도:
+                // '망각 30 + 시야 10 → 30' (state stays).
+                let elapsed = match map.tiles[idx].last_seen_turn {
+                    Some(t) => now_turn.saturating_sub(t),
+                    None => 0,
+                };
+                let decayed = map.tiles[idx].brightness * memory_fade_factor(elapsed);
+                let dx = (x - cur.x).abs();
+                let dy = (y - cur.y).abs();
+                let d = dx.max(dy);
+                let falloff = distance_falloff_alpha(d);
+                // LightMap 없으면(테스트 등) Bright 로 간주 — 광량 분기 없는 환경 호환.
+                let light_factor = match light_map.as_ref().map(|lm| lm.at(x as usize, y as usize)) {
+                    Some(LightLevel::Dark) => DARK_DIM_FACTOR * falloff,
+                    _ => falloff,
+                };
+                map.tiles[idx].brightness = decayed.max(light_factor);
                 map.tiles[idx].last_seen_turn = Some(now_turn);
             }
         }

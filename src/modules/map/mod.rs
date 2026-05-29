@@ -115,11 +115,17 @@ pub fn tiles_in_radius(
 /// 기존에 Map에서 별도 Vec<bool>로 관리하던 revealed/visible 상태를
 /// 타일 자체에 포함시켜 데이터 응집도를 높였다.
 ///
+/// `brightness` 는 타일의 누적 가시화 상태 (0.0~1.0). 시야가 닿을 때 FOV 시스템이
+/// `max(brightness * memory_fade(elapsed), light_factor(d))` 로 갱신한다 — 즉
+/// 망각으로 감쇠된 이전 상태와 현재 시야 강도 중 큰 값을 채택. 분기 없이 누적값
+/// 하나로 'state stays' 의도를 표현. 직렬화 default 0.0.
+///
 /// `last_seen_turn` 은 타일이 마지막으로 `visible=true` 였던 글로벌 턴.
-/// 기억 감퇴(memory fade) — `revealed`(기억)된 타일이 시야에서 벗어난 뒤
-/// 시간이 흐를수록 점점 흐려져 배경에 묻히는 효과의 입력값이다.
+/// 기억 감퇴(memory fade) 의 elapsed 계산에 사용.
 /// 영원히 본 적이 없으면 `None`.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+///
+/// f32 필드(`brightness`) 가 들어가 `Eq` 는 derive 하지 않는다 — PartialEq 만.
+#[derive(Copy, Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct MapTile {
     pub kind: TileKind,
     pub revealed: bool,
@@ -128,17 +134,21 @@ pub struct MapTile {
     /// `#[serde(default)]` 로 기존 세이브(이 필드 없는 데이터) 는 `None` 으로 복원된다.
     #[serde(default)]
     pub last_seen_turn: Option<u32>,
+    /// 누적 가시화 상태 (0.0~1.0). FOV 시스템이 시야 닿을 때 max-갱신.
+    /// 표시는 `brightness * memory_fade(elapsed)` — visible 이면 elapsed=0 이라 그대로.
+    #[serde(default)]
+    pub brightness: f32,
 }
 
 impl Default for MapTile {
     fn default() -> Self {
-        Self { kind: TileKind::Wall, revealed: false, visible: false, last_seen_turn: None }
+        Self { kind: TileKind::Wall, revealed: false, visible: false, last_seen_turn: None, brightness: 0.0 }
     }
 }
 
 impl MapTile {
     pub fn new(kind: TileKind) -> Self {
-        Self { kind, revealed: false, visible: false, last_seen_turn: None }
+        Self { kind, revealed: false, visible: false, last_seen_turn: None, brightness: 0.0 }
     }
 }
 
