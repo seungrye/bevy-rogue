@@ -513,7 +513,7 @@ pub fn draw_map(
             // brightness 초기값을 결정: revealed 면 1.0(본 적 있음), 아니면 0.0.
             // last_seen 정보는 없으니 None — 다음 시야 진입 시 정상 max-갱신.
             let idx = map.index(x, y);
-            let brightness = if map.tiles[idx].revealed { TileBrightness(1.0) } else { TileBrightness::default() };
+            let brightness = if map.tiles[idx].revealed { TileBrightness(0.3) } else { TileBrightness::default() };
             let id = commands.spawn((
                 Text2dBundle {
                     text: Text::from_section(glyph, TextStyle {
@@ -578,7 +578,7 @@ fn execute_regen(
                 let glyph = tile_glyph(kind);
                 let coord = tile_to_world_coords(x, y);
                 let idx = map.index(x, y);
-                let brightness = if map.tiles[idx].revealed { TileBrightness(1.0) } else { TileBrightness::default() };
+                let brightness = if map.tiles[idx].revealed { TileBrightness(0.3) } else { TileBrightness::default() };
                 let id = commands.spawn((
                     Text2dBundle {
                         text: Text::from_section(glyph, TextStyle {
@@ -730,7 +730,7 @@ fn execute_apply(
                 let glyph = tile_glyph(kind);
                 let coord = tile_to_world_coords(x, y);
                 let idx = map.index(x, y);
-                let brightness = if map.tiles[idx].revealed { TileBrightness(1.0) } else { TileBrightness::default() };
+                let brightness = if map.tiles[idx].revealed { TileBrightness(0.3) } else { TileBrightness::default() };
                 let id = commands.spawn((
                     Text2dBundle {
                         text: Text::from_section(glyph, TextStyle {
