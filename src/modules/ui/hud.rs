@@ -151,7 +151,7 @@ mod tests {
     #[test]
     fn HUD_문자열은_존_턴_레벨_스탯_골드_장비를_한_줄에_담는다() {
         let mut world = WorldState::default();
-        world.current = ZoneId::Dungeon(2);
+        world.current = ZoneId::dungeon(2);
         let mut map = Map::new(10, 10);
         map.algorithm = "bsp".to_string();
         let inventory = PlayerInventory { gold: 75, ..Default::default() };

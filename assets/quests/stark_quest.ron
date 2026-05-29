@@ -170,6 +170,6 @@ QuestDef(
     ],
 
     spawns: [
-        QuestSpawn(phase: "gather_lords", item: "lords_oath", zone: Dungeon(1)),
+        QuestSpawn(phase: "gather_lords", item: "lords_oath", zone: Named("dungeon_1")),
     ],
 )

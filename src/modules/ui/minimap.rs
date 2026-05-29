@@ -952,7 +952,7 @@ mod tests {
     fn 같은_위치종류라도_존이_다르면_각각_추가된다() {
         let mut dm = DiscoveredMarkers::default();
         dm.add(5, 5, MarkerKind::Portal, ZoneId::Town);
-        dm.add(5, 5, MarkerKind::Portal, ZoneId::Forest);
+        dm.add(5, 5, MarkerKind::Portal, ZoneId::forest());
         assert_eq!(dm.0.len(), 2);
     }
 
@@ -1453,7 +1453,7 @@ mod tests {
         let mut app = 미니맵갱신_하네스((40, 25));
         // 현재 존은 Town. Forest 마커는 무시되어야 한다.
         app.world.resource_mut::<DiscoveredMarkers>()
-            .add(41, 25, MarkerKind::Portal, ZoneId::Forest);
+            .add(41, 25, MarkerKind::Portal, ZoneId::forest());
         app.update();
         let res = app.world.resource::<MinimapImage>().0.clone();
         let images = app.world.resource::<Assets<Image>>();

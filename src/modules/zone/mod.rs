@@ -13,62 +13,145 @@ use crate::modules::{
 
 // ── ZoneId ──────────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+/// 게임의 zone 식별자.
+///
+/// 단순화: 시작 마을(`Town`) 만 정적 enum variant 로 남기고, 나머지 모든 zone
+/// 은 `Named(String)` 로 통일한다. 데이터 주도성 강화 + site 카탈로그에서 모든
+/// zone 편집 가능.
+///
+/// 표준 Named id (예전 정적 variant 와 1:1 매핑):
+///   - `forest` (이전 `Forest`)
+///   - `dungeon_<N>` (이전 `Dungeon(N)`)
+///   - `mountain_village` (이전 `MountainVillage`)
+///   - `seaside_harbor` (이전 `SeasideHarbor`)
+///
+/// 세이브 호환: 옛 저장의 텍스트 표현(`Forest`, `Dungeon(2)`, `MountainVillage`,
+/// `SeasideHarbor`) 도 자동으로 Named 로 변환된다 — 커스텀 deserializer 참고.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize)]
 pub enum ZoneId {
     Town,
-    /// 산속 마을 — 사냥꾼·광부·전사 NPC 들의 거주지. organic_village 와 다른
-    /// 격자형 도로망 generator(grid_village) 를 써서 시각적으로 구분된다.
-    /// 퀘스트 보상 OpenPortal 또는 quest 던전 출구로만 도달 가능.
-    MountainVillage,
-    /// 항구 마을 — 탐험가·신비주의 NPC 들의 거주지. 성벽 마을 generator
-    /// (walled_town) 로 도시 분위기. 퀘스트 보상으로만 portal 이 열린다.
-    SeasideHarbor,
-    Forest,
-    Dungeon(u32),
-    /// 퀘스트가 동적으로 생성하는 명명된 존 (ex: Named("desert"))
+    /// 퀘스트가 동적으로 생성하는 명명된 존 (ex: Named("forest"), Named("dungeon_1"),
+    /// Named("herb_glade") 등). Town 을 제외한 모든 zone 의 단일 표현.
     Named(String),
 }
 
 impl ZoneId {
-    pub fn display_name(&self) -> String {
+    /// 옛 정적 `Forest` variant 와 동등한 Named id (`forest`).
+    pub fn forest() -> Self { Self::Named("forest".to_string()) }
+
+    /// 옛 정적 `Dungeon(n)` variant 와 동등한 Named id (`dungeon_<n>`).
+    pub fn dungeon(n: u32) -> Self { Self::Named(format!("dungeon_{}", n)) }
+
+    /// 옛 정적 `MountainVillage` variant 와 동등한 Named id (`mountain_village`).
+    pub fn mountain_village() -> Self { Self::Named("mountain_village".to_string()) }
+
+    /// 옛 정적 `SeasideHarbor` variant 와 동등한 Named id (`seaside_harbor`).
+    pub fn seaside_harbor() -> Self { Self::Named("seaside_harbor".to_string()) }
+
+    /// Named id 가 `dungeon_<n>` 형태면 n 을 파싱해서 돌려준다.
+    /// Town / 다른 Named 는 None.
+    pub fn dungeon_level(&self) -> Option<u32> {
         match self {
-            ZoneId::Town            => "마을".into(),
-            ZoneId::MountainVillage => "산속 마을".into(),
-            ZoneId::SeasideHarbor   => "항구 마을".into(),
-            ZoneId::Forest          => "숲".into(),
-            ZoneId::Dungeon(n)      => format!("던전 {}층", n),
-            ZoneId::Named(n)        => n.clone(),
+            ZoneId::Named(s) => s.strip_prefix("dungeon_").and_then(|t| t.parse().ok()),
+            _ => None,
         }
     }
 
+    pub fn display_name(&self) -> String {
+        match self {
+            ZoneId::Town       => "마을".into(),
+            ZoneId::Named(n) => {
+                match n.as_str() {
+                    "forest"           => "숲".into(),
+                    "mountain_village" => "산속 마을".into(),
+                    "seaside_harbor"   => "항구 마을".into(),
+                    other => {
+                        if let Some(level) = other.strip_prefix("dungeon_").and_then(|t| t.parse::<u32>().ok()) {
+                            format!("던전 {}층", level)
+                        } else {
+                            // 알 수 없는 Named — id 의 underscore 를 공백으로 정리해서 표시.
+                            other.replace('_', " ")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// 정적 매핑 표 — Named id 에 대응하는 기본 맵 생성기 이름.
+    /// NamedZoneConfig 에 등록된 동적 zone 은 그쪽 generator 가 우선.
     pub fn algorithm(&self) -> &'static str {
         match self {
-            ZoneId::Town            => "organic_village",
-            ZoneId::MountainVillage => "grid_village",
-            ZoneId::SeasideHarbor   => "walled_town",
-            ZoneId::Forest          => "forest",
-            ZoneId::Dungeon(_)      => "bsp",
-            ZoneId::Named(_)        => "bsp", // 실제 생성기는 NamedZoneConfig에서 조회
+            ZoneId::Town     => "organic_village",
+            ZoneId::Named(n) => {
+                match n.as_str() {
+                    "forest"           => "forest",
+                    "mountain_village" => "grid_village",
+                    "seaside_harbor"   => "walled_town",
+                    s if s.starts_with("dungeon_") => "bsp",
+                    _ => "bsp", // 알 수 없는 Named — fallback. 실제 생성기는 NamedZoneConfig 우선.
+                }
+            }
         }
+    }
+}
+
+/// 옛 표현(`Forest`/`Dungeon(N)`/`MountainVillage`/`SeasideHarbor`) 도
+/// Named 로 자동 흡수하는 커스텀 deserializer — 세이브 호환.
+/// 새 직렬화 형태(`Town`/`Named("...")`) 는 그대로 받는다.
+///
+/// 내부 구현: 정적 `ZoneIdRepr` 라는 호환 enum 으로 일단 받아서 ZoneId 로 매핑.
+/// 직접 EnumAccess 구현은 RON 처럼 deserialize_enum 호출 직후 visit_str 폴백을
+/// 안 거치는 백엔드에서 깨지기 쉬워서 우회한다.
+impl<'de> serde::Deserialize<'de> for ZoneId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        enum ZoneIdRepr {
+            Town,
+            Named(String),
+            // ── legacy variants (옛 세이브/RON 호환) ──────────────────────────
+            Forest,
+            MountainVillage,
+            SeasideHarbor,
+            Dungeon(u32),
+        }
+
+        let repr = ZoneIdRepr::deserialize(deserializer)?;
+        Ok(match repr {
+            ZoneIdRepr::Town => ZoneId::Town,
+            ZoneIdRepr::Named(s) => ZoneId::Named(s),
+            ZoneIdRepr::Forest => ZoneId::forest(),
+            ZoneIdRepr::MountainVillage => ZoneId::mountain_village(),
+            ZoneIdRepr::SeasideHarbor => ZoneId::seaside_harbor(),
+            ZoneIdRepr::Dungeon(n) => ZoneId::dungeon(n),
+        })
     }
 }
 
 /// global_seed 와 ZoneId 로부터 해당 존의 맵 시드를 파생한다.
 pub fn zone_seed(global_seed: u64, zone_id: &ZoneId) -> u64 {
     let idx: u64 = match zone_id {
-        ZoneId::Town            => 0,
-        ZoneId::Forest          => 1,
-        ZoneId::MountainVillage  => 2,
-        ZoneId::SeasideHarbor    => 3,
-        ZoneId::Dungeon(n)      => 100 + *n as u64,
-        ZoneId::Named(s)        => {
-            // FNV-1a — 안정적이고 표준 해시
-            let mut h: u64 = 0xcbf29ce484222325;
-            for b in s.bytes() {
-                h ^= b as u64;
-                h = h.wrapping_mul(0x100000001b3);
+        ZoneId::Town     => 0,
+        ZoneId::Named(s) => {
+            // 표준 Named id 는 옛 정적 variant 의 결정론적 시드를 유지한다.
+            // 그 외 Named 는 FNV-1a 해시.
+            match s.as_str() {
+                "forest"           => 1,
+                "mountain_village" => 2,
+                "seaside_harbor"   => 3,
+                other => {
+                    if let Some(n) = other.strip_prefix("dungeon_").and_then(|t| t.parse::<u64>().ok()) {
+                        100 + n
+                    } else {
+                        let mut h: u64 = 0xcbf29ce484222325;
+                        for b in other.bytes() {
+                            h ^= b as u64;
+                            h = h.wrapping_mul(0x100000001b3);
+                        }
+                        h
+                    }
+                }
             }
-            h
         }
     };
     zone_seed_from_idx(global_seed, idx)
@@ -105,11 +188,11 @@ pub struct CloseQuestPortalEvent {
     pub zone: String,
 }
 
-/// 정적 zone(Town/MountainVillage/SeasideHarbor 등) 으로 가는 portal 을
-/// 현재 zone 에 즉시 스폰한다. `QuestAction::OpenZonePortal` 이 발행한다.
-/// `SpawnQuestPortalEvent` 와 달리 NamedZoneConfig 등록을 건너뛰며, 게임
-/// 시작 시 portal 이 없는 마을 zone 에 quest 보상으로 다른 마을 portal 을
-/// 자연스럽게 여는 용도다.
+/// 임의 zone(Town/Named) 으로 가는 portal 을 현재 zone 에 즉시 스폰한다.
+/// `QuestAction::OpenZonePortal` 이 발행한다. `SpawnQuestPortalEvent` 와 달리
+/// NamedZoneConfig 등록을 건너뛰며, 카탈로그/기본 Named zone(예 mountain_village,
+/// seaside_harbor) 에 portal 만 연다. 시작 마을에 quest 보상으로 다른 마을 portal
+/// 을 자연스럽게 여는 용도다.
 #[derive(Event)]
 pub struct SpawnZonePortalEvent {
     pub target: ZoneId,
@@ -333,11 +416,13 @@ fn handle_zone_transition(
         let map = if let Some(cached) = world.maps.get(&target) {
             cached.clone()
         } else {
-            // Named 존은 NamedZoneConfig 에서 생성기를 조회한다
+            // 동적 등록된 Named 존은 NamedZoneConfig 의 generator 가 우선.
+            // 그 외(Town, 표준 Named: forest/dungeon_n/mountain_village/seaside_harbor)
+            // 는 ZoneId::algorithm() 의 정적 매핑 표를 쓴다.
             let algo = if let ZoneId::Named(ref name) = target {
                 named_config.zones.get(name)
                     .map(|e| e.generator.clone())
-                    .unwrap_or_else(|| "bsp".to_string())
+                    .unwrap_or_else(|| target.algorithm().to_string())
             } else {
                 target.algorithm().to_string()
             };
@@ -405,6 +490,7 @@ fn spawn_portals_after_apply(
                 &mut commands, &font,
                 saved.tile_x, saved.tile_y,
                 saved.arrive_from.clone(), saved.target.clone(),
+                Some(&named_config),
             );
         }
     }
@@ -449,7 +535,11 @@ fn ensure_zone_portals_persisted(
     persistence.0.entry(zone.clone()).or_default().portals = placed;
 }
 
-/// ZonePortal 엔티티 한 개를 지정 좌표에 스폰한다 — saved/random 양쪽 경로에서 공유
+/// ZonePortal 엔티티 한 개를 지정 좌표에 스폰한다 — saved/random 양쪽 경로에서 공유.
+///
+/// `named_config` 가 주어지면 — target 이 NamedZoneConfig 에 등록된 동적 퀘스트
+/// zone 이면 보라색 (퀘스트 portal), 그 외(Town/표준 Named) 는 방향별 색상.
+/// `None` 이면 모두 방향별 색상 (saved portal 복원 단순 경로).
 fn spawn_portal_entity(
     commands: &mut Commands,
     font: &Handle<Font>,
@@ -457,10 +547,12 @@ fn spawn_portal_entity(
     tile_y: usize,
     dir: PortalDirection,
     target: ZoneId,
+    named_config: Option<&NamedZoneConfig>,
 ) {
     let coord = tile_to_world_coords(tile_x, tile_y);
     let glyph = dir.glyph();
-    let is_quest_portal = matches!(target, ZoneId::Named(_));
+    let is_quest_portal = matches!(&target, ZoneId::Named(name)
+        if named_config.map(|c| c.zones.contains_key(name)).unwrap_or(false));
     let color = if is_quest_portal {
         Color::rgb(0.8, 0.2, 0.8)  // 퀘스트 포탈 — 보라색
     } else {
@@ -547,12 +639,13 @@ fn handle_spawn_quest_portal(
     }
 }
 
-/// `SpawnZonePortalEvent` 를 받아 정적 zone(MountainVillage/SeasideHarbor 등) 으로
-/// 가는 portal 을 현재 zone 에 즉시 스폰한다.
+/// `SpawnZonePortalEvent` 를 받아 임의 zone(Town/Named) 으로 가는 portal 을
+/// 현재 zone 에 즉시 스폰한다. 카탈로그에 이미 있는 표준 Named id
+/// (mountain_village/seaside_harbor) 도 같은 경로로 처리된다.
 ///
 /// `handle_spawn_quest_portal` 과 다른 점:
-///   - NamedZoneConfig 에 등록하지 않는다 (target 이 이미 정적 ZoneId enum 변형).
-///   - portal entity 의 target 이 `ZoneId::Named(...)` 가 아니라 `event.target` 그대로.
+///   - NamedZoneConfig 에 등록하지 않는다 (target 은 일반 ZoneId 그대로).
+///   - portal entity 의 target 이 `event.target` 그대로.
 ///   - 동일한 target 의 portal 이 이미 현재 zone 의 persistence 에 있으면 no-op (중복 방지).
 ///   - 같은 zone 안에 한 번 열린 portal 은 `handle_zone_transition` 의 leave 단계에서
 ///     자동으로 persistence 에 저장되어 재방문 시 복원된다 (기존 메커니즘 재사용).
@@ -725,38 +818,45 @@ fn zone_portals(zone: &ZoneId) -> Vec<(PortalDirection, ZoneId)> {
         // 마을(Town)은 신규 게임 시작 시 어떤 기본 포털도 두지 않는다.
         //   - 사용자 혼란 방지: 시작하자마자 정체불명 포털이 보이지 않게 한다.
         //   - 퀘스트가 발급하는 OpenPortal 만 마을에 포털을 만든다.
-        //   - 다른 zone(Forest 등) 에서 마을로 되돌아오는 return portal 은
+        //   - 다른 zone(forest 등) 에서 마을로 되돌아오는 return portal 은
         //     그 zone 의 `zone_portals` 에서 정의하므로 유지된다.
         ZoneId::Town => vec![],
-        // 산속·항구 마을은 시작 마을(Town) 로 돌아가는 return portal 만 가진다.
-        //   - 외부에서는 quest 보상 OpenPortal 로만 도달하므로, 들어온 뒤
-        //     원래 마을로 안전하게 복귀할 길은 마련해 둔다.
-        //   - Forest/Dungeon 으로 가는 자동 포털은 두지 않는다(혼동 방지).
-        ZoneId::MountainVillage => vec![
-            (PortalDirection::StairUp, ZoneId::Town),
-        ],
-        ZoneId::SeasideHarbor => vec![
-            (PortalDirection::StairUp, ZoneId::Town),
-        ],
-        ZoneId::Forest => vec![
-            (PortalDirection::North, ZoneId::Town),
-            (PortalDirection::South, ZoneId::Dungeon(1)),
-        ],
-        ZoneId::Dungeon(1) => vec![
-            (PortalDirection::North, ZoneId::Forest),
-            (PortalDirection::StairDown, ZoneId::Dungeon(2)),
-        ],
-        ZoneId::Dungeon(2) => vec![
-            (PortalDirection::StairUp, ZoneId::Dungeon(1)),
-        ],
-        ZoneId::Dungeon(n) => {
-            let n = *n;
-            vec![
-                (PortalDirection::StairUp, ZoneId::Dungeon(n - 1)),
-                (PortalDirection::StairDown, ZoneId::Dungeon(n + 1)),
-            ]
+        ZoneId::Named(name) => {
+            match name.as_str() {
+                // 산속·항구 마을은 시작 마을(Town) 로 돌아가는 return portal 만 가진다.
+                //   - 외부에서는 quest 보상 OpenPortal 로만 도달하므로, 들어온 뒤
+                //     원래 마을로 안전하게 복귀할 길은 마련해 둔다.
+                "mountain_village" | "seaside_harbor" => vec![
+                    (PortalDirection::StairUp, ZoneId::Town),
+                ],
+                "forest" => vec![
+                    (PortalDirection::North, ZoneId::Town),
+                    (PortalDirection::South, ZoneId::dungeon(1)),
+                ],
+                s if s.starts_with("dungeon_") => {
+                    let level = s.strip_prefix("dungeon_")
+                        .and_then(|t| t.parse::<u32>().ok())
+                        .unwrap_or(1);
+                    match level {
+                        1 => vec![
+                            (PortalDirection::North, ZoneId::forest()),
+                            (PortalDirection::StairDown, ZoneId::dungeon(2)),
+                        ],
+                        2 => vec![
+                            (PortalDirection::StairUp, ZoneId::dungeon(1)),
+                        ],
+                        n => vec![
+                            (PortalDirection::StairUp, ZoneId::dungeon(n - 1)),
+                            (PortalDirection::StairDown, ZoneId::dungeon(n + 1)),
+                        ],
+                    }
+                }
+                // 알 수 없는 Named — 기본적으로 Town 으로 가는 return portal 만 부여.
+                // (퀘스트 OpenPortal 로 생성된 Named 는 NamedZoneConfig 의 origin
+                //  쪽 portal 이 ensure_zone_portals_persisted 에서 별도 추가된다.)
+                _ => vec![],
+            }
         }
-        ZoneId::Named(_) => vec![],
     }
 }
 
@@ -943,15 +1043,15 @@ mod tests {
     #[test]
     fn 존ID는_종류별로_한글_표시이름을_반환한다() {
         assert_eq!(ZoneId::Town.display_name(), "마을");
-        assert_eq!(ZoneId::Forest.display_name(), "숲");
-        assert_eq!(ZoneId::Dungeon(2).display_name(), "던전 2층");
+        assert_eq!(ZoneId::forest().display_name(), "숲");
+        assert_eq!(ZoneId::dungeon(2).display_name(), "던전 2층");
     }
 
     #[test]
     fn 존ID는_종류별로_맵생성기_알고리즘_이름을_반환한다() {
         assert_eq!(ZoneId::Town.algorithm(), "organic_village");
-        assert_eq!(ZoneId::Forest.algorithm(), "forest");
-        assert_eq!(ZoneId::Dungeon(1).algorithm(), "bsp");
+        assert_eq!(ZoneId::forest().algorithm(), "forest");
+        assert_eq!(ZoneId::dungeon(1).algorithm(), "bsp");
     }
 
     #[test]
@@ -960,15 +1060,15 @@ mod tests {
         let map = Map::new(10, 10);
         ws.cache_current(map);
         assert!(ws.get_cached(&ZoneId::Town).is_some());
-        assert!(ws.get_cached(&ZoneId::Forest).is_none());
+        assert!(ws.get_cached(&ZoneId::forest()).is_none());
     }
 
     #[test]
     fn 던전2층은_위로_올라가는_계단_포탈_하나만_가진다() {
-        let portals = zone_portals(&ZoneId::Dungeon(2));
+        let portals = zone_portals(&ZoneId::dungeon(2));
         assert_eq!(portals.len(), 1);
         assert!(matches!(portals[0].0, PortalDirection::StairUp));
-        assert_eq!(portals[0].1, ZoneId::Dungeon(1));
+        assert_eq!(portals[0].1, ZoneId::dungeon(1));
     }
 
     #[test]
@@ -1086,9 +1186,9 @@ mod tests {
         let mut persistence = ZonePersistence::default();
         let named = NamedZoneConfig::default();
         let mut used = std::collections::HashSet::new();
-        ensure_zone_portals_persisted(&ZoneId::Forest, &map, &named, &mut persistence, &mut used);
+        ensure_zone_portals_persisted(&ZoneId::forest(), &map, &named, &mut persistence, &mut used);
 
-        let snap = persistence.0.get(&ZoneId::Forest).expect("snapshot 생성됨");
+        let snap = persistence.0.get(&ZoneId::forest()).expect("snapshot 생성됨");
         assert!(!snap.portals.is_empty(), "Forest 존은 기본 포털이 있어야 한다");
     }
 
@@ -1105,13 +1205,13 @@ mod tests {
             target: ZoneId::Town,
             arrive_from: PortalDirection::StairUp,
         }];
-        persistence.0.entry(ZoneId::Forest).or_default().portals = original.clone();
+        persistence.0.entry(ZoneId::forest()).or_default().portals = original.clone();
 
         let named = NamedZoneConfig::default();
         let mut used = std::collections::HashSet::new();
-        ensure_zone_portals_persisted(&ZoneId::Forest, &map, &named, &mut persistence, &mut used);
+        ensure_zone_portals_persisted(&ZoneId::forest(), &map, &named, &mut persistence, &mut used);
 
-        let snap = persistence.0.get(&ZoneId::Forest).unwrap();
+        let snap = persistence.0.get(&ZoneId::forest()).unwrap();
         assert_eq!(snap.portals.len(), original.len(), "기존 portal 보존");
         assert_eq!(snap.portals[0].tile_x, 5);
         assert_eq!(snap.portals[0].tile_y, 7);
@@ -1148,14 +1248,14 @@ mod tests {
         });
         snap.portals.push(SavedPortal {
             tile_x: 30, tile_y: 18,
-            target: ZoneId::Forest,
+            target: ZoneId::forest(),
             arrive_from: PortalDirection::North,
         });
         let s = ron::ser::to_string(&snap).unwrap();
         let parsed: ZoneSnapshot = ron::de::from_str(&s).unwrap();
         assert_eq!(parsed.portals.len(), 2);
         assert_eq!(parsed.portals[0].tile_x, 5);
-        assert_eq!(parsed.portals[1].target, ZoneId::Forest);
+        assert_eq!(parsed.portals[1].target, ZoneId::forest());
     }
 
     #[test]
@@ -1171,14 +1271,14 @@ mod tests {
 
     #[test]
     fn 존시드는_종류별로_서로_다른_안정적_시드를_파생한다() {
-        // Town(0)/Forest(1)/MountainVillage(2)/SeasideHarbor(3)/Dungeon(n)/Named(FNV) 각 분기.
+        // Town(0)/forest(1)/mountain_village(2)/seaside_harbor(3)/dungeon_n/Named(FNV) 각 분기.
         let g = 12345u64;
         let town = zone_seed(g, &ZoneId::Town);
-        let forest = zone_seed(g, &ZoneId::Forest);
-        let mountain = zone_seed(g, &ZoneId::MountainVillage);
-        let harbor = zone_seed(g, &ZoneId::SeasideHarbor);
-        let d1 = zone_seed(g, &ZoneId::Dungeon(1));
-        let d2 = zone_seed(g, &ZoneId::Dungeon(2));
+        let forest = zone_seed(g, &ZoneId::forest());
+        let mountain = zone_seed(g, &ZoneId::mountain_village());
+        let harbor = zone_seed(g, &ZoneId::seaside_harbor());
+        let d1 = zone_seed(g, &ZoneId::dungeon(1));
+        let d2 = zone_seed(g, &ZoneId::dungeon(2));
         let named = zone_seed(g, &ZoneId::Named("desert".to_string()));
         // 같은 입력이면 시드는 안정적이다
         assert_eq!(named, zone_seed(g, &ZoneId::Named("desert".to_string())));
@@ -1193,21 +1293,21 @@ mod tests {
     #[test]
     fn 산속마을과_항구마을은_고유한_표시이름과_생성기를_가진다() {
         // 새 마을 zone 들이 display_name·algorithm 의 분기를 가진다.
-        assert_eq!(ZoneId::MountainVillage.display_name(), "산속 마을");
-        assert_eq!(ZoneId::SeasideHarbor.display_name(), "항구 마을");
-        assert_eq!(ZoneId::MountainVillage.algorithm(), "grid_village");
-        assert_eq!(ZoneId::SeasideHarbor.algorithm(), "walled_town");
+        assert_eq!(ZoneId::mountain_village().display_name(), "산속 마을");
+        assert_eq!(ZoneId::seaside_harbor().display_name(), "항구 마을");
+        assert_eq!(ZoneId::mountain_village().algorithm(), "grid_village");
+        assert_eq!(ZoneId::seaside_harbor().algorithm(), "walled_town");
     }
 
     #[test]
     fn 산속마을과_항구마을은_시작_마을로_돌아가는_복귀_포탈을_가진다() {
         // 두 새 마을 모두 Town 으로 가는 단 하나의 복귀 포탈만 갖는다.
-        let mountain = zone_portals(&ZoneId::MountainVillage);
+        let mountain = zone_portals(&ZoneId::mountain_village());
         assert_eq!(mountain.len(), 1, "산속 마을은 Town 복귀 포탈 1개");
         assert!(matches!(mountain[0].0, PortalDirection::StairUp));
         assert_eq!(mountain[0].1, ZoneId::Town);
 
-        let harbor = zone_portals(&ZoneId::SeasideHarbor);
+        let harbor = zone_portals(&ZoneId::seaside_harbor());
         assert_eq!(harbor.len(), 1, "항구 마을은 Town 복귀 포탈 1개");
         assert!(matches!(harbor[0].0, PortalDirection::StairUp));
         assert_eq!(harbor[0].1, ZoneId::Town);
@@ -1220,13 +1320,13 @@ mod tests {
 
     #[test]
     fn 일반_던전층은_위아래_두_계단_포탈을_가진다() {
-        // Dungeon(3) 은 와일드카드 arm(n) 으로 StairUp(2)/StairDown(4) 두 개를 만든다.
-        let portals = zone_portals(&ZoneId::Dungeon(3));
+        // dungeon_3 은 와일드카드 arm(n) 으로 StairUp(2)/StairDown(4) 두 개를 만든다.
+        let portals = zone_portals(&ZoneId::dungeon(3));
         assert_eq!(portals.len(), 2);
         assert!(matches!(portals[0].0, PortalDirection::StairUp));
-        assert_eq!(portals[0].1, ZoneId::Dungeon(2));
+        assert_eq!(portals[0].1, ZoneId::dungeon(2));
         assert!(matches!(portals[1].0, PortalDirection::StairDown));
-        assert_eq!(portals[1].1, ZoneId::Dungeon(4));
+        assert_eq!(portals[1].1, ZoneId::dungeon(4));
     }
 
     #[test]
@@ -1235,20 +1335,60 @@ mod tests {
         //   - 퀘스트 OpenPortal 로만 생기고, 다른 zone 의 return 포털은 그쪽 정의에 있다.
         let town = zone_portals(&ZoneId::Town);
         assert!(town.is_empty(), "마을은 기본 자동 포털이 없어야 한다");
-        let d1 = zone_portals(&ZoneId::Dungeon(1));
+        let d1 = zone_portals(&ZoneId::dungeon(1));
         assert_eq!(d1.len(), 2);
-        assert_eq!(d1[0].1, ZoneId::Forest);
-        assert_eq!(d1[1].1, ZoneId::Dungeon(2));
+        assert_eq!(d1[0].1, ZoneId::forest());
+        assert_eq!(d1[1].1, ZoneId::dungeon(2));
     }
 
     #[test]
     fn 숲은_마을로_돌아가는_복귀_포털을_여전히_가진다() {
         // 다른 zone(여기서는 Forest) 에서 마을로 돌아오는 return 포털은 유지된다.
-        let forest = zone_portals(&ZoneId::Forest);
+        let forest = zone_portals(&ZoneId::forest());
         assert!(
             forest.iter().any(|(_, target)| *target == ZoneId::Town),
             "숲에서 마을로 돌아가는 포털은 살아 있어야 한다 (마을에 갇히지 않게)",
         );
+    }
+
+    #[test]
+    fn 레거시_세이브의_옛_정적_variant는_Named로_변환되어_역직렬화된다() {
+        // 옛 ZoneId::forest()/Dungeon(N)/MountainVillage/SeasideHarbor RON 텍스트가
+        // 호환 deserializer 를 통해 Named 로 자동 변환된다.
+        let forest: ZoneId = ron::from_str("Forest").unwrap();
+        assert_eq!(forest, ZoneId::forest());
+
+        let mountain: ZoneId = ron::from_str("MountainVillage").unwrap();
+        assert_eq!(mountain, ZoneId::mountain_village());
+
+        let harbor: ZoneId = ron::from_str("SeasideHarbor").unwrap();
+        assert_eq!(harbor, ZoneId::seaside_harbor());
+
+        let d2: ZoneId = ron::from_str("Dungeon(2)").unwrap();
+        assert_eq!(d2, ZoneId::dungeon(2));
+
+        // 새 형태도 그대로 받는다
+        let town: ZoneId = ron::from_str("Town").unwrap();
+        assert_eq!(town, ZoneId::Town);
+
+        let named: ZoneId = ron::from_str("Named(\"herb_glade\")").unwrap();
+        assert_eq!(named, ZoneId::Named("herb_glade".into()));
+    }
+
+    #[test]
+    fn 던전레벨_파싱은_dungeon_접두사_id에서_숫자를_돌려준다() {
+        assert_eq!(ZoneId::dungeon(3).dungeon_level(), Some(3));
+        assert_eq!(ZoneId::Named("dungeon_12".into()).dungeon_level(), Some(12));
+        assert_eq!(ZoneId::Town.dungeon_level(), None);
+        assert_eq!(ZoneId::forest().dungeon_level(), None);
+        assert_eq!(ZoneId::Named("not_dungeon".into()).dungeon_level(), None);
+    }
+
+    #[test]
+    fn 알수없는_Named의_표시이름은_id의_언더스코어를_공백으로_바꾼다() {
+        // 표준 매핑 없는 Named — id 가 그대로 보이되 underscore → space.
+        assert_eq!(ZoneId::Named("crystal_cave".into()).display_name(), "crystal cave");
+        assert_eq!(ZoneId::Named("desert".into()).display_name(), "desert");
     }
 
     #[test]
@@ -1524,8 +1664,8 @@ mod tests {
         let named = NamedZoneConfig::default();
         let mut p = ZonePersistence::default();
         let mut used = std::collections::HashSet::new();
-        ensure_zone_portals_persisted(&ZoneId::Dungeon(3), &map, &named, &mut p, &mut used);
-        let snap = p.0.get(&ZoneId::Dungeon(3)).unwrap();
+        ensure_zone_portals_persisted(&ZoneId::dungeon(3), &map, &named, &mut p, &mut used);
+        let snap = p.0.get(&ZoneId::dungeon(3)).unwrap();
         // 두 계단 포탈이 각 방 중앙에 배치된다.
         assert_eq!(snap.portals.len(), 2);
         let up = map.rooms.first().unwrap().center();
@@ -1560,7 +1700,7 @@ mod tests {
         let mut named = NamedZoneConfig::default();
         named.zones.insert("herb_glade".to_string(), NamedZoneEntry {
             generator: "bsp".to_string(),
-            origin: ZoneId::Forest,
+            origin: ZoneId::forest(),
         });
 
         // (1) Named 존 안: origin(Forest) 로 돌아가는 StairUp 포탈이 생성된다.
@@ -1569,14 +1709,14 @@ mod tests {
         ensure_zone_portals_persisted(
             &ZoneId::Named("herb_glade".to_string()), &map, &named, &mut p1, &mut used1);
         let snap = p1.0.get(&ZoneId::Named("herb_glade".to_string())).unwrap();
-        assert!(snap.portals.iter().any(|p| p.target == ZoneId::Forest
+        assert!(snap.portals.iter().any(|p| p.target == ZoneId::forest()
             && matches!(p.arrive_from, PortalDirection::StairUp)));
 
         // (2) origin(Forest) 안: Named 존으로 가는 StairDown 진입 포탈이 추가된다.
         let mut p2 = ZonePersistence::default();
         let mut used2 = std::collections::HashSet::new();
-        ensure_zone_portals_persisted(&ZoneId::Forest, &map, &named, &mut p2, &mut used2);
-        let fsnap = p2.0.get(&ZoneId::Forest).unwrap();
+        ensure_zone_portals_persisted(&ZoneId::forest(), &map, &named, &mut p2, &mut used2);
+        let fsnap = p2.0.get(&ZoneId::forest()).unwrap();
         assert!(fsnap.portals.iter().any(|p|
             p.target == ZoneId::Named("herb_glade".to_string())
             && matches!(p.arrive_from, PortalDirection::StairDown)));
@@ -1682,7 +1822,7 @@ mod tests {
         ));
         app.world.spawn((
             Transform::from_xyz(coord.x, coord.y, 1.5),
-            ZonePortal { target: ZoneId::Forest, arrive_from: PortalDirection::South },
+            ZonePortal { target: ZoneId::forest(), arrive_from: PortalDirection::South },
         ));
         app.world.send_event(crate::modules::map::PlayerActedEvent);
         app.update();
@@ -1691,7 +1831,7 @@ mod tests {
         let mut reader = ev.get_reader();
         let sent: Vec<_> = reader.read(ev).collect();
         assert_eq!(sent.len(), 1);
-        assert_eq!(sent[0].target, ZoneId::Forest);
+        assert_eq!(sent[0].target, ZoneId::forest());
     }
 
     #[test]
@@ -1708,7 +1848,7 @@ mod tests {
         ));
         app.world.spawn((
             Transform::from_xyz(coord.x, coord.y, 1.5),
-            ZonePortal { target: ZoneId::Forest, arrive_from: PortalDirection::South },
+            ZonePortal { target: ZoneId::forest(), arrive_from: PortalDirection::South },
         ));
         // 첫 update: 발동
         app.world.send_event(crate::modules::map::PlayerActedEvent);
@@ -1737,7 +1877,7 @@ mod tests {
         ));
         app.world.spawn((
             Transform::from_xyz(portal_c.x, portal_c.y, 1.5),
-            ZonePortal { target: ZoneId::Forest, arrive_from: PortalDirection::South },
+            ZonePortal { target: ZoneId::forest(), arrive_from: PortalDirection::South },
         ));
         app.world.send_event(crate::modules::map::PlayerActedEvent);
         app.update();
@@ -1746,11 +1886,20 @@ mod tests {
 
     #[test]
     fn 맵적용_후_포탈스폰은_Named대상_포탈을_퀘스트색으로_복원한다() {
-        // spawn_portal_entity 의 is_quest_portal True 경로 (435:20).
-        let mut app = harness(ZoneId::Forest, floor_map(40, 30));
+        // spawn_portal_entity 의 is_quest_portal True 경로:
+        // target 이 NamedZoneConfig 에 등록된 동적 zone 일 때.
+        let mut app = harness(ZoneId::forest(), floor_map(40, 30));
+        {
+            // 동적 등록: herb_glade 가 NamedZoneConfig 에 있어야 보라색 분기.
+            let mut cfg = app.world.resource_mut::<NamedZoneConfig>();
+            cfg.zones.insert("herb_glade".to_string(), NamedZoneEntry {
+                generator: "bsp".to_string(),
+                origin: ZoneId::forest(),
+            });
+        }
         {
             let mut per = app.world.resource_mut::<ZonePersistence>();
-            per.0.entry(ZoneId::Forest).or_default().portals = vec![
+            per.0.entry(ZoneId::forest()).or_default().portals = vec![
                 SavedPortal { tile_x: 5, tile_y: 6,
                     target: ZoneId::Named("herb_glade".to_string()),
                     arrive_from: PortalDirection::StairDown },
@@ -1784,7 +1933,7 @@ mod tests {
         let coord = tile_to_world_coords(5, 5);
         app.world.spawn((
             Transform::from_xyz(coord.x, coord.y, 1.5),
-            ZonePortal { target: ZoneId::Forest, arrive_from: PortalDirection::South },
+            ZonePortal { target: ZoneId::forest(), arrive_from: PortalDirection::South },
         ));
         app.world.send_event(crate::modules::map::PlayerActedEvent);
         app.update();
@@ -1807,11 +1956,11 @@ mod tests {
         let pcoord = tile_to_world_coords(4, 4);
         let portal_e = app.world.spawn((
             Transform::from_xyz(pcoord.x, pcoord.y, 1.5),
-            ZonePortal { target: ZoneId::Forest, arrive_from: PortalDirection::South },
+            ZonePortal { target: ZoneId::forest(), arrive_from: PortalDirection::South },
         )).id();
 
         app.world.send_event(ZoneTransitionEvent {
-            target: ZoneId::Forest,
+            target: ZoneId::forest(),
             arrive_from: PortalDirection::South,
         });
         app.update();
@@ -1823,7 +1972,7 @@ mod tests {
         assert_eq!(app.world.resource::<Events<crate::modules::ui::LogMessage>>().len(), 1);
         // 현재 존이 Forest 로 바뀌고, 떠난 존 스냅샷에 혈흔/포탈 저장됨
         let ws = app.world.resource::<WorldState>();
-        assert_eq!(ws.current, ZoneId::Forest);
+        assert_eq!(ws.current, ZoneId::forest());
         let per = app.world.resource::<ZonePersistence>();
         let town_snap = per.0.get(&ZoneId::Town).unwrap();
         assert_eq!(town_snap.blood_stains.len(), 1);
@@ -1838,20 +1987,20 @@ mod tests {
         cached.algorithm = "cached_marker".to_string();
         let mut app = harness(ZoneId::Town, floor_map(40, 30));
         // Forest 를 미리 캐시
-        app.world.resource_mut::<WorldState>().maps.insert(ZoneId::Forest, cached);
+        app.world.resource_mut::<WorldState>().maps.insert(ZoneId::forest(), cached);
         app.add_event::<ZoneTransitionEvent>();
         app.add_event::<ApplyMapEvent>();
         app.add_event::<crate::modules::ui::LogMessage>();
         app.add_systems(Update, handle_zone_transition);
 
         app.world.send_event(ZoneTransitionEvent {
-            target: ZoneId::Forest,
+            target: ZoneId::forest(),
             arrive_from: PortalDirection::South,
         });
         app.update();
 
         let ws = app.world.resource::<WorldState>();
-        assert_eq!(ws.maps.get(&ZoneId::Forest).unwrap().algorithm, "cached_marker",
+        assert_eq!(ws.maps.get(&ZoneId::forest()).unwrap().algorithm, "cached_marker",
             "캐시된 맵을 그대로 재사용해야 한다");
     }
 
@@ -1908,7 +2057,7 @@ mod tests {
         app.add_event::<crate::modules::ui::LogMessage>();
         {
             let mut per = app.world.resource_mut::<ZonePersistence>();
-            per.0.entry(ZoneId::Forest).or_default().portals = vec![SavedPortal {
+            per.0.entry(ZoneId::forest()).or_default().portals = vec![SavedPortal {
                 tile_x: 7, tile_y: 9,
                 target: ZoneId::Town,
                 arrive_from: PortalDirection::North,
@@ -1916,7 +2065,7 @@ mod tests {
         }
         app.add_systems(Update, handle_zone_transition);
         app.world.send_event(ZoneTransitionEvent {
-            target: ZoneId::Forest,
+            target: ZoneId::forest(),
             arrive_from: PortalDirection::South,
         });
         app.update();
@@ -1929,12 +2078,12 @@ mod tests {
 
     #[test]
     fn 맵적용_후_포탈스폰_시스템은_영속화된_포탈을_엔티티로_복원한다() {
-        let mut app = harness(ZoneId::Forest, floor_map(40, 30));
+        let mut app = harness(ZoneId::forest(), floor_map(40, 30));
         {
             let mut per = app.world.resource_mut::<ZonePersistence>();
-            per.0.entry(ZoneId::Forest).or_default().portals = vec![
+            per.0.entry(ZoneId::forest()).or_default().portals = vec![
                 SavedPortal { tile_x: 5, tile_y: 6, target: ZoneId::Town, arrive_from: PortalDirection::North },
-                SavedPortal { tile_x: 9, tile_y: 9, target: ZoneId::Dungeon(1), arrive_from: PortalDirection::South },
+                SavedPortal { tile_x: 9, tile_y: 9, target: ZoneId::dungeon(1), arrive_from: PortalDirection::South },
             ];
         }
         app.add_systems(Update, spawn_portals_after_apply);
@@ -1948,10 +2097,10 @@ mod tests {
 
     #[test]
     fn 포탈스폰_시스템은_맵이_바뀌지_않았으면_아무것도_하지_않는다() {
-        let mut app = harness(ZoneId::Forest, floor_map(40, 30));
+        let mut app = harness(ZoneId::forest(), floor_map(40, 30));
         {
             let mut per = app.world.resource_mut::<ZonePersistence>();
-            per.0.entry(ZoneId::Forest).or_default().portals = vec![
+            per.0.entry(ZoneId::forest()).or_default().portals = vec![
                 SavedPortal { tile_x: 5, tile_y: 6, target: ZoneId::Town, arrive_from: PortalDirection::North },
             ];
         }
@@ -1966,10 +2115,10 @@ mod tests {
 
     #[test]
     fn 포탈스폰_시스템은_이미_포탈이_있으면_재스폰하지_않는다() {
-        let mut app = harness(ZoneId::Forest, floor_map(40, 30));
+        let mut app = harness(ZoneId::forest(), floor_map(40, 30));
         {
             let mut per = app.world.resource_mut::<ZonePersistence>();
-            per.0.entry(ZoneId::Forest).or_default().portals = vec![
+            per.0.entry(ZoneId::forest()).or_default().portals = vec![
                 SavedPortal { tile_x: 5, tile_y: 6, target: ZoneId::Town, arrive_from: PortalDirection::North },
             ];
         }
@@ -1986,12 +2135,12 @@ mod tests {
     #[test]
     fn 포탈스폰_시스템은_영속화가_비어있으면_새로_생성하여_스폰한다() {
         // persistence 가 비어있는 첫 방문 경로 — ensure_zone_portals_persisted 가 채운다.
-        let mut app = harness(ZoneId::Forest, floor_map(40, 30));
+        let mut app = harness(ZoneId::forest(), floor_map(40, 30));
         app.add_systems(Update, spawn_portals_after_apply);
         app.world.resource_mut::<MapResource>().set_changed();
         app.update();
         let per = app.world.resource::<ZonePersistence>();
-        assert!(per.0.get(&ZoneId::Forest).map(|s| !s.portals.is_empty()).unwrap_or(false));
+        assert!(per.0.get(&ZoneId::forest()).map(|s| !s.portals.is_empty()).unwrap_or(false));
         let n = app.world.query::<&ZonePortal>().iter(&app.world).count();
         assert!(n >= 1, "Forest 기본 포탈이 스폰됨");
     }
@@ -2288,7 +2437,7 @@ mod tests {
             let mut per = app.world.resource_mut::<ZonePersistence>();
             per.0.entry(ZoneId::Town).or_default().portals = vec![
                 SavedPortal { tile_x: 5, tile_y: 5, target: target.clone(), arrive_from: PortalDirection::StairDown },
-                SavedPortal { tile_x: 1, tile_y: 1, target: ZoneId::Forest, arrive_from: PortalDirection::South },
+                SavedPortal { tile_x: 1, tile_y: 1, target: ZoneId::forest(), arrive_from: PortalDirection::South },
             ];
         }
         let coord = tile_to_world_coords(5, 5);
@@ -2298,7 +2447,7 @@ mod tests {
         app.world.spawn((Transform::from_xyz(coord.x, coord.y, 1.5),
             ZonePortal { target: target.clone(), arrive_from: PortalDirection::StairDown }));
         app.world.spawn((Transform::default(),
-            ZonePortal { target: ZoneId::Forest, arrive_from: PortalDirection::South }));
+            ZonePortal { target: ZoneId::forest(), arrive_from: PortalDirection::South }));
 
         app.add_systems(Update, handle_close_quest_portal);
         app.world.send_event(CloseQuestPortalEvent { zone: "herb_glade".to_string() });
@@ -2307,25 +2456,25 @@ mod tests {
         // 대상 포탈 엔티티만 제거 (다른 포탈은 유지)
         let mut remaining = app.world.query::<&ZonePortal>();
         let kinds: Vec<_> = remaining.iter(&app.world).map(|p| p.target.clone()).collect();
-        assert_eq!(kinds, vec![ZoneId::Forest]);
+        assert_eq!(kinds, vec![ZoneId::forest()]);
         // 등록 제거
         assert!(!app.world.resource::<NamedZoneConfig>().zones.contains_key("herb_glade"));
         // 영속화에서 대상 포탈 제거 (Forest 포탈은 유지)
         let per = app.world.resource::<ZonePersistence>();
         let town = per.0.get(&ZoneId::Town).unwrap();
         assert_eq!(town.portals.len(), 1);
-        assert_eq!(town.portals[0].target, ZoneId::Forest);
+        assert_eq!(town.portals[0].target, ZoneId::forest());
         // 마커 제거
         assert!(app.world.resource::<crate::modules::ui::minimap::DiscoveredMarkers>().0.is_empty());
     }
 
     #[test]
     fn 존복귀_시스템은_경과턴만큼_혈흔을_감소시켜_복원한다() {
-        let mut app = harness(ZoneId::Forest, floor_map(40, 30));
+        let mut app = harness(ZoneId::forest(), floor_map(40, 30));
         app.world.resource_mut::<GlobalTurn>().0 = 10;
         {
             let mut per = app.world.resource_mut::<ZonePersistence>();
-            let snap = per.0.entry(ZoneId::Forest).or_default();
+            let snap = per.0.entry(ZoneId::forest()).or_default();
             snap.last_visited_turn = 5; // 5턴 경과
             snap.blood_stains = vec![
                 // 5턴 * 0.1 = 0.5 감소 → 0.4 남음 (복원)
@@ -2343,12 +2492,12 @@ mod tests {
         let alpha = app.world.query::<&BloodStain>().iter(&app.world).next().unwrap().alpha;
         assert!((alpha - 0.4).abs() < 1e-5, "alpha={}", alpha);
         // drain 으로 스냅샷 혈흔은 비워진다
-        assert!(app.world.resource::<ZonePersistence>().0.get(&ZoneId::Forest).unwrap().blood_stains.is_empty());
+        assert!(app.world.resource::<ZonePersistence>().0.get(&ZoneId::forest()).unwrap().blood_stains.is_empty());
     }
 
     #[test]
     fn 존복귀_시스템은_맵이_바뀌지_않았으면_아무것도_하지_않는다() {
-        let mut app = harness(ZoneId::Forest, floor_map(40, 30));
+        let mut app = harness(ZoneId::forest(), floor_map(40, 30));
         app.add_systems(Update, restore_zone_state);
         // 첫 프레임은 changed 로 간주되므로, 한 번 돌린 뒤 두번째 프레임에서 미변경 경로를 탄다.
         app.update();
@@ -2359,7 +2508,7 @@ mod tests {
 
     #[test]
     fn 존복귀_시스템은_현재존_스냅샷이_없으면_조기_종료한다() {
-        let mut app = harness(ZoneId::Forest, floor_map(40, 30));
+        let mut app = harness(ZoneId::forest(), floor_map(40, 30));
         // persistence 에 Forest 스냅샷 없음 → get_mut None 경로
         app.add_systems(Update, restore_zone_state);
         app.world.resource_mut::<MapResource>().set_changed();
@@ -2375,7 +2524,7 @@ mod tests {
             let idx = map.index(x, y);
             map.tiles[idx].visible = true;
         }
-        let mut app = harness(ZoneId::Forest, map);
+        let mut app = harness(ZoneId::forest(), map);
         // StairDown / StairUp / 그외(North) → 각각 다른 MarkerKind
         for (dir, (x, y)) in [
             (PortalDirection::StairDown, (3, 3)),
@@ -2399,7 +2548,7 @@ mod tests {
     #[test]
     fn 시야안_포탈탐색은_보이지_않거나_범위밖_포탈은_마커로_등록하지_않는다() {
         let map = floor_map(40, 30); // 모든 타일 visible=false
-        let mut app = harness(ZoneId::Forest, map);
+        let mut app = harness(ZoneId::forest(), map);
         // 보이지 않는 포탈
         let c = tile_to_world_coords(3, 3);
         app.world.spawn((Transform::from_xyz(c.x, c.y, 1.5),
@@ -2417,7 +2566,7 @@ mod tests {
     fn 시야안_포탈탐색은_x는_맵안이지만_y가_맵밖이면_등록하지_않는다() {
         // tx < width 이고 ty >= height 인 경로 (604:31 True). 좌표 클램프는 [0,79].
         let map = floor_map(40, 30);
-        let mut app = harness(ZoneId::Forest, map);
+        let mut app = harness(ZoneId::forest(), map);
         let c = tile_to_world_coords(5, 35); // x=5(<40), y=35(>=30, <80)
         app.world.spawn((Transform::from_xyz(c.x, c.y, 1.5),
             ZonePortal { target: ZoneId::Town, arrive_from: PortalDirection::North }));
@@ -2438,27 +2587,27 @@ mod tests {
         app.add_systems(Update, handle_spawn_zone_portal);
 
         app.world.send_event(SpawnZonePortalEvent {
-            target: ZoneId::MountainVillage,
+            target: ZoneId::mountain_village(),
             placement: PortalPlacement::InsideRoom,
             quest_id: "q1".to_string(),
         });
         app.update();
 
-        // portal entity 가 정확히 하나, target 은 MountainVillage 변형 그대로
+        // portal entity 가 정확히 하나, target 은 mountain_village Named id 그대로
         let portals: Vec<ZoneId> = app.world.query::<&ZonePortal>()
             .iter(&app.world).map(|p| p.target.clone()).collect();
         assert_eq!(portals.len(), 1, "포탈 1개 스폰");
-        assert_eq!(portals[0], ZoneId::MountainVillage, "Named 가 아닌 정적 enum");
-        // NamedZoneConfig 에는 등록되지 않는다 (정적 zone 이므로)
+        assert_eq!(portals[0], ZoneId::mountain_village(), "target Named id 그대로 보존");
+        // NamedZoneConfig 에는 등록되지 않는다 (SpawnQuestPortal 과 달리 카탈로그 등록 안 함)
         let cfg = app.world.resource::<NamedZoneConfig>();
-        assert!(cfg.zones.is_empty(), "정적 zone 은 NamedZoneConfig 등록 X");
+        assert!(cfg.zones.is_empty(), "OpenZonePortal 은 NamedZoneConfig 등록 X");
         // 미니맵 마커도 등록
         assert!(!app.world.resource::<crate::modules::ui::minimap::DiscoveredMarkers>().0.is_empty());
         // persistence 에 같은 target 으로 SavedPortal 1개 저장됨 — 재방문 일관성 보장
         let saved = &app.world.resource::<ZonePersistence>().0.get(&ZoneId::Town)
             .expect("Town snapshot").portals;
         assert_eq!(saved.len(), 1);
-        assert_eq!(saved[0].target, ZoneId::MountainVillage);
+        assert_eq!(saved[0].target, ZoneId::mountain_village());
     }
 
     #[test]
@@ -2470,11 +2619,11 @@ mod tests {
         // 기존 portal 하나 미리 배치
         let c = tile_to_world_coords(5, 5);
         app.world.spawn((Transform::from_xyz(c.x, c.y, 1.5),
-            ZonePortal { target: ZoneId::SeasideHarbor, arrive_from: PortalDirection::StairDown }));
+            ZonePortal { target: ZoneId::seaside_harbor(), arrive_from: PortalDirection::StairDown }));
         app.add_systems(Update, handle_spawn_zone_portal);
 
         app.world.send_event(SpawnZonePortalEvent {
-            target: ZoneId::SeasideHarbor,
+            target: ZoneId::seaside_harbor(),
             placement: PortalPlacement::InsideRoom,
             quest_id: "q1".to_string(),
         });
@@ -2493,13 +2642,13 @@ mod tests {
         app.world.resource_mut::<ZonePersistence>().0.entry(ZoneId::Town).or_default()
             .portals.push(SavedPortal {
                 tile_x: 3, tile_y: 4,
-                target: ZoneId::MountainVillage,
+                target: ZoneId::mountain_village(),
                 arrive_from: PortalDirection::StairDown,
             });
         app.add_systems(Update, handle_spawn_zone_portal);
 
         app.world.send_event(SpawnZonePortalEvent {
-            target: ZoneId::MountainVillage,
+            target: ZoneId::mountain_village(),
             placement: PortalPlacement::InsideRoom,
             quest_id: "q1".to_string(),
         });

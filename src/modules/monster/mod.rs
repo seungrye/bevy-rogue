@@ -1169,7 +1169,7 @@ mod tests {
     #[test]
     fn 포탈이_먼저_엔트리를_만들어도_슬롯이_비면_몬스터를_초기화한다() {
         let mut persistence = ZonePersistence::default();
-        let zone = crate::modules::zone::ZoneId::Dungeon(1);
+        let zone = crate::modules::zone::ZoneId::dungeon(1);
 
         // portal-position-persistence 가 entry 를 먼저 만들고 portals 만 채운 상태
         let snap = persistence.0.entry(zone.clone()).or_default();
@@ -1191,7 +1191,7 @@ mod tests {
     #[test]
     fn 슬롯이_이미_채워진_재방문_존은_몬스터를_초기화하지_않는다() {
         let mut persistence = ZonePersistence::default();
-        let zone = crate::modules::zone::ZoneId::Dungeon(1);
+        let zone = crate::modules::zone::ZoneId::dungeon(1);
         // 이미 monster_slots 채워진 상태 — 두 번째 방문
         persistence.0.entry(zone.clone()).or_default().monster_slots = vec![
             MonsterSlot { data_idx: 0, respawn_at_turn: None },
@@ -2555,22 +2555,22 @@ mod tests {
     fn 자연스폰후보는_zones가_비면_모든_존에서_나온다() {
         let reg = registry_of(vec![def("a", "A", None, 1.0)]);
         let (inv, world, qs, items) = spawn_ctx();
-        let cands = natural_spawn_candidates(&reg, &ZoneId::Dungeon(3), &inv, &world, &qs, &items);
+        let cands = natural_spawn_candidates(&reg, &ZoneId::dungeon(3), &inv, &world, &qs, &items);
         assert_eq!(cands, vec![0], "zones 비면 어느 존이든 후보");
     }
 
     #[test]
     fn 자연스폰후보는_현재존이_zones에_포함될때만_나온다() {
         let mut d = def("a", "A", None, 1.0);
-        d.zones = vec![ZoneId::Dungeon(1)];
+        d.zones = vec![ZoneId::dungeon(1)];
         let reg = registry_of(vec![d]);
         let (inv, world, qs, items) = spawn_ctx();
         assert_eq!(
-            natural_spawn_candidates(&reg, &ZoneId::Dungeon(1), &inv, &world, &qs, &items),
+            natural_spawn_candidates(&reg, &ZoneId::dungeon(1), &inv, &world, &qs, &items),
             vec![0], "지정 존이면 후보"
         );
         assert!(
-            natural_spawn_candidates(&reg, &ZoneId::Dungeon(2), &inv, &world, &qs, &items).is_empty(),
+            natural_spawn_candidates(&reg, &ZoneId::dungeon(2), &inv, &world, &qs, &items).is_empty(),
             "다른 존이면 제외"
         );
     }

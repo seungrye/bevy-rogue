@@ -236,10 +236,10 @@ QuestDef(
 
     spawns: [
         // weapon_hunt 페이즈: 무기 선택 3종
-        QuestSpawn(phase: "weapon_hunt", item: "prologue_greatsword", zone: Dungeon(1)),
-        QuestSpawn(phase: "weapon_hunt", item: "prologue_daggers",    zone: Dungeon(1)),
-        QuestSpawn(phase: "weapon_hunt", item: "prologue_bowtorch",   zone: Dungeon(1)),
+        QuestSpawn(phase: "weapon_hunt", item: "prologue_greatsword", zone: Named("dungeon_1")),
+        QuestSpawn(phase: "weapon_hunt", item: "prologue_daggers",    zone: Named("dungeon_1")),
+        QuestSpawn(phase: "weapon_hunt", item: "prologue_bowtorch",   zone: Named("dungeon_1")),
         // crest_hunt 페이즈: 가문 문장
-        QuestSpawn(phase: "crest_hunt",  item: "family_crest",        zone: Dungeon(1)),
+        QuestSpawn(phase: "crest_hunt",  item: "family_crest",        zone: Named("dungeon_1")),
     ],
 )

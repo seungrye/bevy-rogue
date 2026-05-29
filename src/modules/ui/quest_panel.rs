@@ -407,7 +407,7 @@ mod tests {
             spawns: vec![QuestSpawn {
                 phase: "active".into(),
                 item: "eternal_gem".into(),
-                zone: ZoneId::Dungeon(2),
+                zone: ZoneId::dungeon(2),
                 count: 1,
                 condition: None,
             }],
@@ -472,7 +472,7 @@ mod tests {
     fn 대상존이_현재위치와_같으면_현재위치로_표시한다() {
         let (reg, st) = make_registry_and_state("active");
         let mut world = default_world();
-        world.current = ZoneId::Dungeon(2);
+        world.current = ZoneId::dungeon(2);
         let sections = build_quest_sections(&reg, &st, &default_inventory(), &world, &DiscoveredMarkers::default(), &Handle::default(), qi());
         let all_text = all_text(sections);
         assert!(all_text.contains("위치: 던전 2층 / 현재 위치"));
@@ -717,24 +717,24 @@ mod tests {
     #[test]
     fn 중첩된_존_조건은_중복없이_한번씩만_수집된다() {
         let condition = QuestCondition::And(vec![
-            QuestCondition::InZone(ZoneId::Forest),
+            QuestCondition::InZone(ZoneId::forest()),
             QuestCondition::Or(vec![
-                QuestCondition::InZone(ZoneId::Forest),
-                QuestCondition::InZone(ZoneId::Dungeon(1)),
+                QuestCondition::InZone(ZoneId::forest()),
+                QuestCondition::InZone(ZoneId::dungeon(1)),
             ]),
         ]);
         let mut zones = Vec::new();
         collect_condition_zones(&condition, &mut zones);
-        assert_eq!(zones, vec![ZoneId::Forest, ZoneId::Dungeon(1)]);
+        assert_eq!(zones, vec![ZoneId::forest(), ZoneId::dungeon(1)]);
     }
 
     #[test]
     fn Not조건_안의_존도_수집된다() {
         // collect_condition_zones 의 Not arm 도달.
-        let condition = QuestCondition::Not(Box::new(QuestCondition::InZone(ZoneId::Forest)));
+        let condition = QuestCondition::Not(Box::new(QuestCondition::InZone(ZoneId::forest())));
         let mut zones = Vec::new();
         collect_condition_zones(&condition, &mut zones);
-        assert_eq!(zones, vec![ZoneId::Forest]);
+        assert_eq!(zones, vec![ZoneId::forest()]);
     }
 
     #[test]
@@ -761,7 +761,7 @@ mod tests {
                 QuestTransition {
                     from: "travel".into(),
                     trigger: TriggerKind::Auto,
-                    when: Some(QuestCondition::InZone(ZoneId::Forest)),
+                    when: Some(QuestCondition::InZone(ZoneId::forest())),
                     actions: vec![],
                     to: "done".into(),
                 },
@@ -897,7 +897,7 @@ mod tests {
         };
         let mut markers = DiscoveredMarkers::default();
         // 현재 존(Town)이 아닌 다른 존의 제공자 마커.
-        markers.add(2, 2, MarkerKind::QuestGiver, ZoneId::Forest);
+        markers.add(2, 2, MarkerKind::QuestGiver, ZoneId::forest());
         let hint = quest_giver_marker_hint(&def, &default_world(), &markers);
         assert_eq!(hint, "");
     }
@@ -1111,7 +1111,7 @@ mod tests {
             let mut text = app.world.query_filtered::<&mut Text, With<QuestPanelContent>>().single_mut(&mut app.world);
             text.sections.clear();
         }
-        app.world.resource_mut::<WorldState>().current = ZoneId::Forest;
+        app.world.resource_mut::<WorldState>().current = ZoneId::forest();
         app.update();
         let text = app.world.query_filtered::<&Text, With<QuestPanelContent>>().single(&app.world);
         assert!(!text.sections.is_empty());

@@ -168,6 +168,6 @@ QuestDef(
     ],
 
     spawns: [
-        QuestSpawn(phase: "tower_assault", item: "warlock_key", zone: Dungeon(1)),
+        QuestSpawn(phase: "tower_assault", item: "warlock_key", zone: Named("dungeon_1")),
     ],
 )

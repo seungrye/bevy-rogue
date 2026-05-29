@@ -1223,7 +1223,7 @@ mod tests {
     fn 존스폰을_마크하면_다른_퀘스트의_같은_존아이템도_중복스폰되지_않는다() {
         use crate::modules::zone::ZoneId;
         let mut state = QuestState::default();
-        let dungeon2 = ZoneId::Dungeon(2);
+        let dungeon2 = ZoneId::dungeon(2);
         assert!(!state.is_zone_spawn_done(&dungeon2, "eternal_gem"));
         // gem_quest 가 먼저 spawn — zone 마크.
         state.mark_zone_spawned(&dungeon2, "eternal_gem");
@@ -1235,19 +1235,19 @@ mod tests {
     fn 같은_아이템이라도_존이_다르면_존스폰은_별개로_추적된다() {
         use crate::modules::zone::ZoneId;
         let mut state = QuestState::default();
-        state.mark_zone_spawned(&ZoneId::Dungeon(1), "ancient_scroll");
+        state.mark_zone_spawned(&ZoneId::dungeon(1), "ancient_scroll");
         // 같은 item 이라도 다른 zone 은 별도.
-        assert!(state.is_zone_spawn_done(&ZoneId::Dungeon(1), "ancient_scroll"));
-        assert!(!state.is_zone_spawn_done(&ZoneId::Forest, "ancient_scroll"));
+        assert!(state.is_zone_spawn_done(&ZoneId::dungeon(1), "ancient_scroll"));
+        assert!(!state.is_zone_spawn_done(&ZoneId::forest(), "ancient_scroll"));
     }
 
     #[test]
     fn 같은_존이라도_아이템이_다르면_존스폰은_별개로_추적된다() {
         use crate::modules::zone::ZoneId;
         let mut state = QuestState::default();
-        state.mark_zone_spawned(&ZoneId::Dungeon(2), "eternal_gem");
+        state.mark_zone_spawned(&ZoneId::dungeon(2), "eternal_gem");
         // 같은 zone 이라도 다른 item 은 별도.
-        assert!(!state.is_zone_spawn_done(&ZoneId::Dungeon(2), "dragon_scale"));
+        assert!(!state.is_zone_spawn_done(&ZoneId::dungeon(2), "dragon_scale"));
     }
 
     fn make_world() -> crate::modules::zone::WorldState {
@@ -1765,9 +1765,9 @@ mod tests {
         let inv = PlayerInventory::default();
         let state = QuestState::default();
         let mut world = make_world(); // 기본 current = Town
-        let cond = QuestCondition::InZone(ZoneId::Dungeon(2));
+        let cond = QuestCondition::InZone(ZoneId::dungeon(2));
         assert!(!eval_condition(&cond, &inv, &world, &state, qi()), "다른 존이면 거짓");
-        world.current = ZoneId::Dungeon(2);
+        world.current = ZoneId::dungeon(2);
         assert!(eval_condition(&cond, &inv, &world, &state, qi()), "같은 존이면 참");
     }
 
@@ -2009,7 +2009,7 @@ mod tests {
         let mut ok_reg = make_registry_with_gem_quest();
         ok_reg.quests.get_mut("gem_quest").unwrap().spawns.push(QuestSpawn {
             phase: "active".into(), item: "eternal_gem".into(),
-            zone: crate::modules::zone::ZoneId::Dungeon(2), count: 1, condition: None,
+            zone: crate::modules::zone::ZoneId::dungeon(2), count: 1, condition: None,
         });
         assert!(collect_quest_item_ref_errors(&ok_reg, qi()).is_empty(), "정상이면 빈 목록");
 
@@ -2301,7 +2301,7 @@ mod tests {
     fn OpenZonePortal액션은_정적zone_포탈스폰_이벤트와_로그를_발생시킨다() {
         // 정적 zone(MountainVillage) 으로 가는 portal 액션 → SpawnZonePortalEvent.
         let mut app = execute_actions_app(vec![QuestAction::OpenZonePortal {
-            target: ZoneId::MountainVillage,
+            target: ZoneId::mountain_village(),
             placement: PortalPlacement::Border,
         }]);
         app.update();
@@ -2317,7 +2317,7 @@ mod tests {
         let parsed: QuestAction = ron::de::from_str(ron).expect("placement 생략 호환");
         match parsed {
             QuestAction::OpenZonePortal { target, placement } => {
-                assert_eq!(target, ZoneId::SeasideHarbor);
+                assert_eq!(target, ZoneId::seaside_harbor());
                 assert!(matches!(placement, PortalPlacement::Border));
             }
             _ => panic!("OpenZonePortal 아님"),
@@ -2706,11 +2706,11 @@ SpawnGuards(count: 5, zone: Named("infiltration"))"#;
     #[test]
     fn 활성_퀘스트의_현재페이즈_현재존_조건이_맞으면_아이템과_마커가_생성된다() {
         use crate::modules::zone::ZoneId;
-        let reg = make_registry_with_spawn("eternal_gem", ZoneId::Dungeon(2), 1, None);
+        let reg = make_registry_with_spawn("eternal_gem", ZoneId::dungeon(2), 1, None);
         let mut state = QuestState::default();
         state.set_phase("sq", "spawn_phase");
         let mut world = crate::modules::zone::WorldState::default();
-        world.current = ZoneId::Dungeon(2);
+        world.current = ZoneId::dungeon(2);
         let mut app = spawn_app(reg, state, world);
         app.update();
         assert_eq!(count_items(&mut app), 1, "조건 일치 시 1개 스폰");
@@ -2718,7 +2718,7 @@ SpawnGuards(count: 5, zone: Named("infiltration"))"#;
         // dedup 키 마킹 확인
         let st = app.world.resource::<QuestState>();
         assert!(st.is_spawn_done("sq", "eternal_gem"));
-        assert!(st.is_zone_spawn_done(&ZoneId::Dungeon(2), "eternal_gem"));
+        assert!(st.is_zone_spawn_done(&ZoneId::dungeon(2), "eternal_gem"));
     }
 
     #[test]
@@ -2736,7 +2736,7 @@ SpawnGuards(count: 5, zone: Named("infiltration"))"#;
     fn 스폰은_페이즈가_다르거나_존이_다르면_건너뛴다() {
         use crate::modules::zone::ZoneId;
         // 존 불일치: spawn zone=Dungeon(2), world=Town
-        let reg = make_registry_with_spawn("eternal_gem", ZoneId::Dungeon(2), 1, None);
+        let reg = make_registry_with_spawn("eternal_gem", ZoneId::dungeon(2), 1, None);
         let mut state = QuestState::default();
         state.set_phase("sq", "spawn_phase");
         let mut app = spawn_app(reg, state, crate::modules::zone::WorldState::default());
@@ -2804,7 +2804,7 @@ SpawnGuards(count: 5, zone: Named("infiltration"))"#;
         // 조건: InZone(Dungeon(2)). world=Town → 미충족
         let reg = make_registry_with_spawn(
             "eternal_gem", ZoneId::Town, 1,
-            Some(QuestCondition::InZone(ZoneId::Dungeon(2))),
+            Some(QuestCondition::InZone(ZoneId::dungeon(2))),
         );
         let mut state = QuestState::default();
         state.set_phase("sq", "spawn_phase");

@@ -39,15 +39,15 @@ QuestDef(
         // 보석을 얻으면 자동으로 반납 준비 단계로
         Transition(from: "active", trigger: Auto, when: HasItem("eternal_gem"), to: "ready"),
         // 장로에게 보석 반납 → 현자의 돌 수령.
-        // 보상으로 산속 마을(MountainVillage) 로 가는 portal 이 시작 마을에 열린다.
+        // 보상으로 산속 마을(Named("mountain_village")) 로 가는 portal 이 시작 마을에 열린다.
         //   - 잃어버린 보석은 첫 quest 류 — 완료 시 새 마을이 자연스럽게 해금된다.
-        //   - OpenZonePortal 은 정적 ZoneId 변형으로 가는 portal 을 만든다 (Named 등록 X).
+        //   - OpenZonePortal 은 임의 ZoneId(Town/Named) 로 가는 portal 을 만든다 (NamedZoneConfig 등록 X).
         //   - placement: Border — 시작 마을 외곽에 배치되어 입구로 자연스럽게 보인다.
         Transition(from: "ready", trigger: Interact,
             actions: [
                 RemoveItem("eternal_gem"),
                 GiveItem("philosophers_stone"),
-                OpenZonePortal(target: MountainVillage, placement: Border),
+                OpenZonePortal(target: Named("mountain_village"), placement: Border),
             ],
             to: "done"),
     ],
@@ -56,7 +56,7 @@ QuestDef(
         QuestSpawn(
             phase: "active",
             item: "eternal_gem",
-            zone: Dungeon(2),
+            zone: Named("dungeon_2"),
         ),
     ],
 )

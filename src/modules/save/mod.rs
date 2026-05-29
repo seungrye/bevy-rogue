@@ -306,10 +306,13 @@ fn restore_player_stats(stats: &mut CombatStats, save: &SaveData) {
 // ── 자동 로드 (PostStartup) ──────────────────────────────────────────────────
 
 fn get_algo(zone_id: &ZoneId, named_config: &NamedZoneConfig) -> String {
+    // 동적 등록된 Named 존은 NamedZoneConfig 가 우선. 그 외(Town, 표준 Named:
+    // forest/dungeon_n/mountain_village/seaside_harbor) 는 ZoneId::algorithm()
+    // 의 정적 매핑 표.
     match zone_id {
         ZoneId::Named(name) => named_config.zones.get(name)
             .map(|e| e.generator.clone())
-            .unwrap_or_else(|| "bsp".to_string()),
+            .unwrap_or_else(|| zone_id.algorithm().to_string()),
         _ => zone_id.algorithm().to_string(),
     }
 }
@@ -580,8 +583,8 @@ mod tests {
         use crate::modules::zone::zone_seed;
         let gs = 0x1234567890abcdefu64;
         assert_eq!(zone_seed(gs, &ZoneId::Town), zone_seed(gs, &ZoneId::Town));
-        assert_ne!(zone_seed(gs, &ZoneId::Town), zone_seed(gs, &ZoneId::Forest));
-        assert_ne!(zone_seed(gs, &ZoneId::Dungeon(1)), zone_seed(gs, &ZoneId::Dungeon(2)));
+        assert_ne!(zone_seed(gs, &ZoneId::Town), zone_seed(gs, &ZoneId::forest()));
+        assert_ne!(zone_seed(gs, &ZoneId::dungeon(1)), zone_seed(gs, &ZoneId::dungeon(2)));
     }
 
     #[test]
@@ -739,8 +742,8 @@ mod tests {
     fn 명명존이_아니면_존_자체의_기본_생성기를_쓴다() {
         let cfg = NamedZoneConfig::default();
         assert_eq!(get_algo(&ZoneId::Town, &cfg), "organic_village");
-        assert_eq!(get_algo(&ZoneId::Forest, &cfg), "forest");
-        assert_eq!(get_algo(&ZoneId::Dungeon(1), &cfg), "bsp");
+        assert_eq!(get_algo(&ZoneId::forest(), &cfg), "forest");
+        assert_eq!(get_algo(&ZoneId::dungeon(1), &cfg), "bsp");
     }
 
     // ── 순수 헬퍼: restore_player_stats ───────────────────────────────────────
@@ -765,19 +768,19 @@ mod tests {
         let mut other = Map::new(10, 10);
         other.tiles = 타일_벡터(&[2], 100);
         let mut maps = HashMap::new();
-        maps.insert(ZoneId::Forest, other);
+        maps.insert(ZoneId::forest(), other);
         let world = WorldState { current: ZoneId::Town, maps };
 
         let mut current = Map::new(10, 10);
         current.tiles = 타일_벡터(&[9], 100);
 
         let result = collect_revealed_by_zone(&world, &current);
-        assert!(result.contains_key(&ZoneId::Forest));
+        assert!(result.contains_key(&ZoneId::forest()));
         assert!(result.contains_key(&ZoneId::Town));
         // 현재 존(Town)의 탐험기록은 current_map 기준
         let town_unpacked = unpack_b64(result.get(&ZoneId::Town).unwrap(), 100);
         assert!(town_unpacked[9]);
-        let forest_unpacked = unpack_b64(result.get(&ZoneId::Forest).unwrap(), 100);
+        let forest_unpacked = unpack_b64(result.get(&ZoneId::forest()).unwrap(), 100);
         assert!(forest_unpacked[2]);
     }
 
@@ -810,9 +813,9 @@ mod tests {
         bools[7] = true;
         let encoded = pack_b64(&bools);
 
-        let map = restore_map_for_zone(&registry, &cfg, 12345, &ZoneId::Forest, Some(&encoded));
+        let map = restore_map_for_zone(&registry, &cfg, 12345, &ZoneId::forest(), Some(&encoded));
         assert_eq!(map.algorithm, "forest");
-        assert_eq!(map.seed, crate::modules::zone::zone_seed(12345, &ZoneId::Forest));
+        assert_eq!(map.seed, crate::modules::zone::zone_seed(12345, &ZoneId::forest()));
         assert!(map.tiles[7].revealed, "탐험기록이 적용돼야 한다");
         assert!(map.tiles.iter().all(|t| !t.visible), "모든 타일의 가시성이 꺼져야 한다");
     }
@@ -1130,7 +1133,7 @@ mod tests {
         // 다른 존을 zone_revealed 에 추가 — current(Town) 이 아닌 항목 → filter 분기 True
         let mut bools = vec![false; MAP_WIDTH * MAP_HEIGHT];
         bools[3] = true;
-        save.zone_revealed.insert(ZoneId::Forest, pack_b64(&bools));
+        save.zone_revealed.insert(ZoneId::forest(), pack_b64(&bools));
         let content = ron::ser::to_string_pretty(&save, ron::ser::PrettyConfig::default()).unwrap();
         std::fs::write(&path, content).unwrap();
 
@@ -1154,7 +1157,7 @@ mod tests {
         // WorldState 의 current 와 이전 존 캐시 (Forest) 검증 — filter 가 Forest 만 남김
         let ws = app.world.resource::<WorldState>();
         assert_eq!(ws.current, ZoneId::Town);
-        assert!(ws.maps.contains_key(&ZoneId::Forest), "현재 존이 아닌 존만 캐시돼야 한다");
+        assert!(ws.maps.contains_key(&ZoneId::forest()), "현재 존이 아닌 존만 캐시돼야 한다");
         assert!(!ws.maps.contains_key(&ZoneId::Town), "현재 존은 캐시 맵에 없음 (apply 로 전달)");
         // ApplyMapEvent 발행 검증
         let events = app.world.resource::<bevy::ecs::event::Events<ApplyMapEvent>>();

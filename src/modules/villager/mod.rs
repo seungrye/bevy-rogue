@@ -364,7 +364,10 @@ fn sync_occupied_tiles(
 /// `MapType::Dungeon` 이라 villager 가 안 깔리지만, 안전을 위해 zone 검사도 함께 적용한다.
 pub fn villager_spawn_allowed(zone: &crate::modules::zone::ZoneId) -> bool {
     use crate::modules::zone::ZoneId;
-    matches!(zone, ZoneId::Town | ZoneId::MountainVillage | ZoneId::SeasideHarbor)
+    match zone {
+        ZoneId::Town => true,
+        ZoneId::Named(n) => matches!(n.as_str(), "mountain_village" | "seaside_harbor"),
+    }
 }
 
 fn spawn_on_startup(
@@ -3128,8 +3131,8 @@ mod tests {
     fn villager_스폰허용_zone은_Town뿐이다() {
         use crate::modules::zone::ZoneId;
         assert!(villager_spawn_allowed(&ZoneId::Town), "Town 은 허용");
-        assert!(!villager_spawn_allowed(&ZoneId::Forest), "Forest 는 불허");
-        assert!(!villager_spawn_allowed(&ZoneId::Dungeon(1)), "Dungeon 은 불허");
+        assert!(!villager_spawn_allowed(&ZoneId::forest()), "Forest 는 불허");
+        assert!(!villager_spawn_allowed(&ZoneId::dungeon(1)), "Dungeon 은 불허");
         assert!(!villager_spawn_allowed(&ZoneId::Named("infiltration".into())),
             "Named quest zone(잠입구역)은 불허 — 빌리저 자동 스폰 금지");
         assert!(!villager_spawn_allowed(&ZoneId::Named("dreadfort_vault".into())),
@@ -3194,8 +3197,8 @@ mod tests {
     fn 산속마을과_항구마을도_villager_스폰을_허용한다() {
         // ZoneId 분산 도입 — 시작 마을 외 두 신규 마을 zone 도 스폰 화이트리스트.
         use crate::modules::zone::ZoneId;
-        assert!(villager_spawn_allowed(&ZoneId::MountainVillage), "산속 마을 허용");
-        assert!(villager_spawn_allowed(&ZoneId::SeasideHarbor), "항구 마을 허용");
+        assert!(villager_spawn_allowed(&ZoneId::mountain_village()), "산속 마을 허용");
+        assert!(villager_spawn_allowed(&ZoneId::seaside_harbor()), "항구 마을 허용");
     }
 
     #[test]
@@ -3209,7 +3212,7 @@ mod tests {
         app.insert_resource(MapResource(map));
         app.insert_resource(QuestRegistry::default());
         let mut vreg = VillagerRegistry::default();
-        vreg.villagers.push(vdef_with_home("mountain_a", "산악", ZoneId::MountainVillage));
+        vreg.villagers.push(vdef_with_home("mountain_a", "산악", ZoneId::mountain_village()));
         app.insert_resource(vreg);
         app.insert_resource(WorldState::default()); // 기본 Town
         app.add_systems(Update, spawn_on_startup);
@@ -3230,11 +3233,11 @@ mod tests {
         app.insert_resource(QuestRegistry::default());
         let mut vreg = VillagerRegistry::default();
         vreg.villagers.push(vdef_with_home("town_a", "마을갑", ZoneId::Town));
-        vreg.villagers.push(vdef_with_home("mountain_a", "산악", ZoneId::MountainVillage));
-        vreg.villagers.push(vdef_with_home("mountain_b", "광부", ZoneId::MountainVillage));
+        vreg.villagers.push(vdef_with_home("mountain_a", "산악", ZoneId::mountain_village()));
+        vreg.villagers.push(vdef_with_home("mountain_b", "광부", ZoneId::mountain_village()));
         app.insert_resource(vreg);
         let mut world = WorldState::default();
-        world.current = ZoneId::MountainVillage;
+        world.current = ZoneId::mountain_village();
         app.insert_resource(world);
         app.add_systems(Update, spawn_on_startup);
         app.update();
@@ -3259,11 +3262,11 @@ mod tests {
         use crate::modules::zone::ZoneId;
         let ron = r#"(id: "a", name: "갑", color: (0.5, 0.5, 0.5), dialogs: [], speed: 1.0, home_zone: MountainVillage)"#;
         let def: VillagerDef = ron::de::from_str(ron).expect("MountainVillage 파싱 실패");
-        assert_eq!(def.home_zone, ZoneId::MountainVillage);
+        assert_eq!(def.home_zone, ZoneId::mountain_village());
 
         let ron2 = r#"(id: "b", name: "을", color: (0.5, 0.5, 0.5), dialogs: [], speed: 1.0, home_zone: SeasideHarbor)"#;
         let def2: VillagerDef = ron::de::from_str(ron2).expect("SeasideHarbor 파싱 실패");
-        assert_eq!(def2.home_zone, ZoneId::SeasideHarbor);
+        assert_eq!(def2.home_zone, ZoneId::seaside_harbor());
     }
 }
 

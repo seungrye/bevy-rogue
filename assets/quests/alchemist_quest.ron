@@ -185,22 +185,22 @@ QuestDef(
         QuestSpawn(
             phase: "gathering",
             item: "dragon_scale",
-            zone: Dungeon(2),
+            zone: Named("dungeon_2"),
         ),
         QuestSpawn(
             phase: "gathering",
             item: "ancient_scroll",
-            zone: Dungeon(1),
+            zone: Named("dungeon_1"),
         ),
         QuestSpawn(
             phase: "has_scale_hint",
             item: "ancient_scroll",
-            zone: Dungeon(1),
+            zone: Named("dungeon_1"),
         ),
         QuestSpawn(
             phase: "has_scroll_hint",
             item: "dragon_scale",
-            zone: Dungeon(2),
+            zone: Named("dungeon_2"),
         ),
     ],
 )

@@ -165,7 +165,7 @@ QuestDef(
     ],
 
     spawns: [
-        QuestSpawn(phase: "dragonglass_search", item: "dragonglass_arrows", zone: Dungeon(2)),
-        QuestSpawn(phase: "rangers_message",    item: "rangers_note",       zone: Dungeon(2)),
+        QuestSpawn(phase: "dragonglass_search", item: "dragonglass_arrows", zone: Named("dungeon_2")),
+        QuestSpawn(phase: "rangers_message",    item: "rangers_note",       zone: Named("dungeon_2")),
     ],
 )

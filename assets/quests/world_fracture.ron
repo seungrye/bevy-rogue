@@ -444,7 +444,7 @@ QuestDef(
         // 10순위: 던전 2층 탐험 중이고 용비늘 없음
         Transition(from: "gathering_all", trigger: Auto,
             when: And([
-                InZone(Dungeon(2)), Not(HasItem("dragon_scale")), HasItem("philosophers_stone"),
+                InZone(Named("dungeon_2")), Not(HasItem("dragon_scale")), HasItem("philosophers_stone"),
             ]),
             to: "deep_dungeon_hint"),
         // 11순위: 현자의 돌 없이 보석만 있음
@@ -477,7 +477,7 @@ QuestDef(
         Transition(from: "missing_gem_hint", trigger: Auto, when: HasItem("eternal_gem"), to: "gathering_all"),
         Transition(from: "missing_scale_hint", trigger: Auto, when: HasItem("dragon_scale"), to: "gathering_all"),
         Transition(from: "deep_dungeon_hint", trigger: Auto, when: HasItem("dragon_scale"), to: "gathering_all"),
-        Transition(from: "deep_dungeon_hint", trigger: Auto, when: Not(InZone(Dungeon(2))), to: "gathering_all"),
+        Transition(from: "deep_dungeon_hint", trigger: Auto, when: Not(InZone(Named("dungeon_2"))), to: "gathering_all"),
         Transition(from: "get_stone_hint", trigger: Auto, when: HasItem("philosophers_stone"), to: "gathering_all"),
 
         // ── wisdom_path_entry ──
@@ -701,29 +701,29 @@ QuestDef(
         QuestSpawn(
             phase: "gathering_all",
             item: "eternal_gem",
-            zone: Dungeon(2),
+            zone: Named("dungeon_2"),
         ),
         QuestSpawn(
             phase: "gathering_all",
             item: "dragon_scale",
-            zone: Dungeon(2),
+            zone: Named("dungeon_2"),
         ),
         QuestSpawn(
             phase: "gathering_all",
             item: "ancient_scroll",
-            zone: Dungeon(1),
+            zone: Named("dungeon_1"),
         ),
         // 전사의 길 진입 시: 던전 1층에 용비늘 추가 스폰 (대안 위치)
         QuestSpawn(
             phase: "warrior_path_entry",
             item: "ancient_scroll",
-            zone: Forest,
+            zone: Named("forest"),
         ),
         // 힌트 단계: 던전 2층에 용비늘 보강 스폰
         QuestSpawn(
             phase: "missing_scale_hint",
             item: "dragon_scale",
-            zone: Dungeon(1),
+            zone: Named("dungeon_1"),
         ),
     ],
 )
