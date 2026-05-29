@@ -227,7 +227,10 @@ QuestDef(
                 SetFlag(flag: "ellen_gave_hint", value: "true"),
             ],
             to: "done_with_hint"),
-        // ⑥ !A & !B & !C: 기본 보상 (독초술사 정리) — unconditional fallback
+        // ⑥ !A & !B & !C: 기본 보상 (독초술사 정리) — unconditional fallback.
+        // herb_quest 완료 보상으로 항구 마을(SeasideHarbor) portal 도 함께 열린다.
+        //   - 엘렌이 약초·해독제를 다루는 인연으로 '항구 마을의 신비주의자' 와 연결.
+        //   - OpenZonePortal 은 정적 ZoneId 변형(SeasideHarbor) 으로 portal 을 만든다.
         Transition(from: "collected", trigger: Interact,
             actions: [
                 RemoveItem("silver_bell_root"),
@@ -240,6 +243,7 @@ QuestDef(
                 KillNpc("poison_herbalist"),
                 Log("숲속 공터의 독초술사가 사라졌다."),
                 ClosePortal("herb_glade"),
+                OpenZonePortal(target: SeasideHarbor, placement: Border),
             ],
             to: "done"),
     ],

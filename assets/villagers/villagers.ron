@@ -6,6 +6,16 @@
 //   color: (r, g, b) 0.0~1.0
 //   dialogs: 일반 대사 (퀘스트 NPC 는 빈 배열)
 //   speed: 이동 속도 배율
+//   home_zone: NPC 거주 마을 zone — Town / MountainVillage / SeasideHarbor /
+//       Forest / Dungeon(N) / Named("..."). 생략 시 기본 Town.
+//       마을 분산 — 17명 NPC 가 시작 마을 한 곳에 몰리지 않게 함.
+//   분포:
+//     Town(7)        : elder, alchemist, burgomaster, merchant, child,
+//                      ellen, wounded_soldier — 시작 마을의 의뢰·상점·prologue
+//     MountainVillage(6): farmer, huntmaster, jorah, catelyn, samwell, bastian
+//                      — 사냥꾼·광부·전사·북부 가문, 산속 마을 테마
+//     SeasideHarbor(4) : grace, battlemage, treasure_hunter, old_man
+//                      — 검사·마법사·보물사냥꾼·노인의 비밀, 항구 마을 테마
 [
     VillagerDef(
         id: "elder",
@@ -13,6 +23,7 @@
         color: (0.9, 0.8, 0.5),
         dialogs: [],
         speed: 0.5,
+        home_zone: Town,
     ),
     VillagerDef(
         id: "alchemist",
@@ -20,6 +31,7 @@
         color: (0.4, 0.9, 0.8),
         dialogs: [],
         speed: 0.75,
+        home_zone: Town,
     ),
     VillagerDef(
         id: "burgomaster",
@@ -60,6 +72,7 @@
             "다음 계절 전에 창고 지붕을 손봐야 할 것 같아.",
         ],
         speed: 1.0,
+        home_zone: Town,
     ),
     VillagerDef(
         id: "merchant",
@@ -104,6 +117,7 @@
             "오랜 단골분이 소개해 주신다면 특별 가격 드리지요.",
         ],
         speed: 1.0,
+        home_zone: Town,
     ),
     VillagerDef(
         id: "farmer",
@@ -144,6 +158,7 @@
             "농부 손은 거칠어도, 이 손에 이 마을이 달려 있다네.",
         ],
         speed: 0.75,
+        home_zone: MountainVillage,
     ),
     VillagerDef(
         id: "child",
@@ -184,6 +199,7 @@
             "엄마가 늦게까지 놀면 안 된다고 했는데... 조금만 더 놀래요.",
         ],
         speed: 1.5,
+        home_zone: Town,
     ),
     VillagerDef(
         id: "wounded_soldier",
@@ -191,6 +207,7 @@
         color: (0.75, 0.60, 0.55),
         dialogs: [],
         speed: 0.3,
+        home_zone: Town,
     ),
     VillagerDef(
         id: "catelyn",
@@ -198,6 +215,7 @@
         color: (0.70, 0.50, 0.80),
         dialogs: [],
         speed: 0.6,
+        home_zone: MountainVillage,
     ),
     VillagerDef(
         id: "jorah",
@@ -205,6 +223,7 @@
         color: (0.40, 0.55, 0.85),
         dialogs: [],
         speed: 0.6,
+        home_zone: MountainVillage,
     ),
     VillagerDef(
         id: "samwell",
@@ -212,6 +231,7 @@
         color: (0.80, 0.70, 0.50),
         dialogs: [],
         speed: 0.5,
+        home_zone: MountainVillage,
     ),
     VillagerDef(
         id: "bastian",
@@ -219,6 +239,7 @@
         color: (0.85, 0.75, 0.60),
         dialogs: [],
         speed: 0.4,
+        home_zone: MountainVillage,
     ),
     VillagerDef(
         id: "grace",
@@ -226,6 +247,7 @@
         color: (0.55, 0.70, 0.90),
         dialogs: [],
         speed: 0.6,
+        home_zone: SeasideHarbor,
     ),
     VillagerDef(
         id: "ellen",
@@ -233,6 +255,7 @@
         color: (0.55, 0.85, 0.55),
         dialogs: [],
         speed: 0.5,
+        home_zone: Town,
     ),
     VillagerDef(
         id: "huntmaster",
@@ -242,6 +265,7 @@
         // 꾸리는 노련한 사냥꾼. 퀘스트 NPC 이므로 일반 대사는 비운다.
         dialogs: [],
         speed: 0.6,
+        home_zone: MountainVillage,
     ),
     VillagerDef(
         id: "old_man",
@@ -282,6 +306,7 @@
             "내가 떠난 뒤에도 이 비밀을 기억해줄 이가 필요해.",
         ],
         speed: 0.5,
+        home_zone: SeasideHarbor,
     ),
     VillagerDef(
         id: "battlemage",
@@ -292,6 +317,7 @@
         // 일반 대사는 비운다. 기존 어떤 퀘스트의 giver 도 아니다(겹침 없음).
         dialogs: [],
         speed: 0.6,
+        home_zone: SeasideHarbor,
     ),
     VillagerDef(
         id: "treasure_hunter",
@@ -302,5 +328,6 @@
         // 비운다. 기존 어떤 퀘스트의 giver 도 아니다(겹침 없음).
         dialogs: [],
         speed: 0.7,
+        home_zone: SeasideHarbor,
     ),
 ]

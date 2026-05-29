@@ -16,7 +16,7 @@ use crate::modules::{
     monster::{SpawnGuardEvent, SpawnMonsterEvent},
     trap::SpawnTrapEvent,
     item::{PlayerInventory},
-    zone::{WorldState, SpawnQuestPortalEvent},
+    zone::{WorldState, SpawnQuestPortalEvent, SpawnZonePortalEvent},
     combat::Speed,
 };
 
@@ -27,6 +27,7 @@ pub struct QuestActionWriters<'w> {
     pub kill_npc: EventWriter<'w, KillNpcEvent>,
     pub open_portal: EventWriter<'w, SpawnQuestPortalEvent>,
     pub close_portal: EventWriter<'w, crate::modules::zone::CloseQuestPortalEvent>,
+    pub open_zone_portal: EventWriter<'w, SpawnZonePortalEvent>,
     pub despawn_item: EventWriter<'w, DespawnWorldItemEvent>,
     pub spawn_guards: EventWriter<'w, SpawnGuardEvent>,
     pub spawn_monster: EventWriter<'w, SpawnMonsterEvent>,
@@ -58,6 +59,18 @@ pub struct VillagerDef {
     /// `#[serde(default)]` 로 기존 RON 과 호환된다(기본 false).
     #[serde(default)]
     pub vendor: bool,
+    /// NPC 거주 zone — 이 zone 의 마을 맵에서만 do_spawn 이 이 NPC 를 스폰한다.
+    /// 기본값은 `Town` 으로, 기존 RON 과 100% 호환된다(분산 미설정 시 시작 마을).
+    /// MountainVillage / SeasideHarbor 같은 신규 마을 zone 으로 분산하려면
+    /// villagers.ron 에서 `home_zone: MountainVillage` 등으로 지정한다.
+    #[serde(default = "default_home_zone")]
+    pub home_zone: crate::modules::zone::ZoneId,
+}
+
+/// `VillagerDef.home_zone` 의 `#[serde(default)]` 값 — 기존 RON 호환.
+/// 필드를 명시하지 않은 villager 는 시작 마을(Town) 에 거주한다.
+fn default_home_zone() -> crate::modules::zone::ZoneId {
+    crate::modules::zone::ZoneId::Town
 }
 
 /// 게임 시작 시 RON 에서 불러온 villager 정의 모음
@@ -344,13 +357,14 @@ fn sync_occupied_tiles(
 
 /// 일반 villager 스폰을 허용하는 zone 인지 판정하는 순수 함수.
 ///
-/// `ZoneId::Town` 만 허용한다. infiltration / dreadfort_vault 등 퀘스트가 동적으로
-/// 등록한 `ZoneId::Named` zone 은 walled_town/bsp_indoor 같은 Village 계열 생성기를
-/// 써서 `map_type == Village` 이지만 그곳에는 NPC(잠입 대상 가드만) 만 둬야 한다.
-/// Forest/Dungeon 등은 원래 `MapType::Dungeon` 이라 villager 가 안 깔리지만, 안전을
-/// 위해 zone 검사도 함께 적용한다.
+/// `Town` / `MountainVillage` / `SeasideHarbor` 등 게임의 마을 zone 만 허용한다.
+/// infiltration / dreadfort_vault 등 퀘스트가 동적으로 등록한 `ZoneId::Named` zone
+/// 은 walled_town/bsp_indoor 같은 Village 계열 generator 를 써서 `map_type == Village`
+/// 이지만 그곳에는 NPC(잠입 대상 가드만) 만 둬야 한다. Forest/Dungeon 등은 원래
+/// `MapType::Dungeon` 이라 villager 가 안 깔리지만, 안전을 위해 zone 검사도 함께 적용한다.
 pub fn villager_spawn_allowed(zone: &crate::modules::zone::ZoneId) -> bool {
-    matches!(zone, crate::modules::zone::ZoneId::Town)
+    use crate::modules::zone::ZoneId;
+    matches!(zone, ZoneId::Town | ZoneId::MountainVillage | ZoneId::SeasideHarbor)
 }
 
 fn spawn_on_startup(
@@ -364,14 +378,19 @@ fn spawn_on_startup(
     world_state: Option<Res<crate::modules::zone::WorldState>>,
 ) {
     let map = map_res.map();
-    // 시작 zone(Town)에서만 villager 스폰 — 단, WorldState 미등록 테스트에서는
-    // 기존 동작(map_type=Village 이면 무조건 스폰)을 유지.
+    // 시작 zone(Town/MountainVillage/SeasideHarbor) 에서만 villager 스폰.
+    // WorldState 미등록 테스트에서는 기존 동작(map_type=Village 이면 무조건 스폰)을 유지.
     let zone_allowed = world_state
         .as_ref()
         .map(|w| villager_spawn_allowed(&w.current))
         .unwrap_or(true);
     if map.map_type == MapType::Village && zone_allowed {
-        do_spawn(&mut commands, &map.rooms.clone(), map.shop_vendor, &asset_server, &quest_registry, &villager_registry);
+        let current_zone = world_state.as_ref().map(|w| w.current.clone());
+        do_spawn(
+            &mut commands, &map.rooms.clone(), map.shop_vendor,
+            &asset_server, &quest_registry, &villager_registry,
+            current_zone.as_ref(),
+        );
     }
 }
 
@@ -396,7 +415,12 @@ fn respawn_on_regen(
         // map_type=Village 라도 quest 전용 Named zone(infiltration/dreadfort_vault 등)
         // 에는 villager 를 스폰하지 않는다 — 두 번째 가드(zone 화이트리스트) 적용.
         if event.map_type == MapType::Village && zone_allowed {
-            do_spawn(&mut commands, &event.rooms, map_res.map().shop_vendor, &asset_server, &quest_registry, &villager_registry);
+            let current_zone = world_state.as_ref().map(|w| w.current.clone());
+            do_spawn(
+                &mut commands, &event.rooms, map_res.map().shop_vendor,
+                &asset_server, &quest_registry, &villager_registry,
+                current_zone.as_ref(),
+            );
         }
     }
 }
@@ -457,6 +481,8 @@ fn spawn_villager_entity(
     ));
 }
 
+/// 현재 zone 의 home_zone 기반 villager 후보 필터링은 `current_zone` 매개변수로 결정된다.
+/// `current_zone == None` 이면 home_zone 필터를 끄고 모두 스폰(WorldState 미등록 단독 테스트 호환).
 fn do_spawn(
     commands: &mut Commands,
     rooms: &[Rect],
@@ -464,15 +490,22 @@ fn do_spawn(
     asset_server: &AssetServer,
     quest_registry: &QuestRegistry,
     villager_registry: &VillagerRegistry,
+    current_zone: Option<&crate::modules::zone::ZoneId>,
 ) {
     if rooms.is_empty() { return; }
     let font = asset_server.load("fonts/FiraMono-Medium.ttf");
 
+    // home_zone 매칭 클로저 — current_zone 이 None 이면 무조건 매칭(레거시).
+    let home_match = |d: &VillagerDef| -> bool {
+        current_zone.map(|z| &d.home_zone == z).unwrap_or(true)
+    };
+
     // 상점이 있으면 vendor 주민을 가판대 뒤 고정 위치에 먼저 스폰한다.
     // 이 vendor 는 방 배치 루프에서 제외해 중복 스폰을 막는다.
+    // vendor 도 home_zone 매칭을 따른다 — 현재 zone 에 vendor 없으면 가판대만 비어 있음.
     let mut vendor_id: Option<String> = None;
     if let Some(tile) = shop_vendor {
-        if let Some(vdef) = villager_registry.villagers.iter().find(|d| d.vendor) {
+        if let Some(vdef) = villager_registry.villagers.iter().find(|d| d.vendor && home_match(d)) {
             vendor_id = Some(vdef.id.clone());
             spawn_villager_entity(commands, &font, vdef, tile, quest_registry, None);
         }
@@ -480,12 +513,15 @@ fn do_spawn(
 
     // 퀘스트 NPC와 일반 NPC 를 분리: 퀘스트 NPC 는 활성 퀘스트인 것만 스폰.
     // 이미 가판대에 스폰한 vendor 는 양쪽 후보에서 제외한다(일관 적용).
+    // home_zone 이 현재 zone 과 일치하는 NPC 만 후보에 포함된다 — 마을별 분산.
     let quest_npcs: Vec<&VillagerDef> = villager_registry.villagers.iter()
         .filter(|d| Some(&d.id) != vendor_id.as_ref())
+        .filter(|d| home_match(d))
         .filter(|d| quest_registry.active_quest_for_giver(&d.id).is_some())
         .collect();
     let regular_npcs: Vec<&VillagerDef> = villager_registry.villagers.iter()
         .filter(|d| Some(&d.id) != vendor_id.as_ref())
+        .filter(|d| home_match(d))
         .filter(|d| quest_registry.quest_for_giver(&d.id).is_none())
         .collect();
 
@@ -643,6 +679,7 @@ fn show_quest_dialog(
             execute_actions(
                 &t.actions, quest_id, trigger_pos, state, inventory, log,
                 &mut writers.kill_npc, &mut writers.open_portal, &mut writers.close_portal,
+                &mut writers.open_zone_portal,
                 &mut writers.despawn_item, &mut writers.spawn_guards, &mut writers.spawn_monster,
                 &mut writers.explode, &mut writers.place_traps, quest_items, deferred,
             );
@@ -1586,6 +1623,7 @@ mod tests {
             id: "elder".to_string(), name: "장로".to_string(),
             color: [1.0, 1.0, 1.0], dialogs: vec![], speed: 1.0,
             stationary: false, vendor: false,
+            home_zone: crate::modules::zone::ZoneId::Town,
         });
         assert!(collect_missing_giver_refs(&qreg, &vreg).is_empty());
     }
@@ -1664,7 +1702,15 @@ mod tests {
             dialogs: vec!["안녕".to_string(), "또 봐".to_string()],
             speed: 1.0,
             stationary: false, vendor: false,
+            home_zone: crate::modules::zone::ZoneId::Town,
         }
+    }
+
+    /// 임의 home_zone 을 지정한 vdef — 마을별 분산 테스트에서 사용.
+    fn vdef_with_home(id: &str, name: &str, home: crate::modules::zone::ZoneId) -> VillagerDef {
+        let mut d = vdef(id, name);
+        d.home_zone = home;
+        d
     }
 
     /// vendor/stationary 플래그를 지정한 VillagerDef (상점 테스트용).
@@ -1675,6 +1721,7 @@ mod tests {
             dialogs: vec!["좋은 물건 있소".to_string()],
             speed: 1.0,
             stationary: true, vendor: true,
+            home_zone: crate::modules::zone::ZoneId::Town,
         }
     }
 
@@ -2238,6 +2285,7 @@ mod tests {
             .add_event::<KillNpcEvent>()
             .add_event::<SpawnQuestPortalEvent>()
             .add_event::<CloseQuestPortalEvent>()
+            .add_event::<crate::modules::zone::SpawnZonePortalEvent>()
             .add_event::<DespawnWorldItemEvent>()
             .add_event::<SpawnGuardEvent>()
             .add_event::<SpawnMonsterEvent>()
@@ -2643,6 +2691,7 @@ mod tests {
             .add_event::<KillNpcEvent>()
             .add_event::<SpawnQuestPortalEvent>()
             .add_event::<CloseQuestPortalEvent>()
+            .add_event::<crate::modules::zone::SpawnZonePortalEvent>()
             .add_event::<DespawnWorldItemEvent>()
             .add_event::<SpawnGuardEvent>()
             .add_event::<SpawnMonsterEvent>()
@@ -3139,6 +3188,82 @@ mod tests {
         app.update();
         let count = app.world.query::<&Villager>().iter(&app.world).count();
         assert_eq!(count, 0, "Named quest zone 으로 시작해도 빌리저 스폰 X");
+    }
+
+    #[test]
+    fn 산속마을과_항구마을도_villager_스폰을_허용한다() {
+        // ZoneId 분산 도입 — 시작 마을 외 두 신규 마을 zone 도 스폰 화이트리스트.
+        use crate::modules::zone::ZoneId;
+        assert!(villager_spawn_allowed(&ZoneId::MountainVillage), "산속 마을 허용");
+        assert!(villager_spawn_allowed(&ZoneId::SeasideHarbor), "항구 마을 허용");
+    }
+
+    #[test]
+    fn home_zone이_현재_zone과_다른_villager는_스폰되지_않는다() {
+        // 현재 zone=Town, villager home_zone=MountainVillage → 후보에서 제외.
+        use crate::modules::zone::{WorldState, ZoneId};
+        let mut app = asset_app();
+        let mut map = full_floor_map();
+        map.map_type = MapType::Village;
+        map.rooms = rooms_with(2);
+        app.insert_resource(MapResource(map));
+        app.insert_resource(QuestRegistry::default());
+        let mut vreg = VillagerRegistry::default();
+        vreg.villagers.push(vdef_with_home("mountain_a", "산악", ZoneId::MountainVillage));
+        app.insert_resource(vreg);
+        app.insert_resource(WorldState::default()); // 기본 Town
+        app.add_systems(Update, spawn_on_startup);
+        app.update();
+        let count = app.world.query::<&Villager>().iter(&app.world).count();
+        assert_eq!(count, 0, "Town 에서 MountainVillage 주민은 스폰 X");
+    }
+
+    #[test]
+    fn home_zone이_현재_zone과_같은_villager만_스폰된다() {
+        // 산속 마을 진입 시 home_zone=MountainVillage 만 후보가 된다.
+        use crate::modules::zone::{WorldState, ZoneId};
+        let mut app = asset_app();
+        let mut map = full_floor_map();
+        map.map_type = MapType::Village;
+        map.rooms = rooms_with(3);
+        app.insert_resource(MapResource(map));
+        app.insert_resource(QuestRegistry::default());
+        let mut vreg = VillagerRegistry::default();
+        vreg.villagers.push(vdef_with_home("town_a", "마을갑", ZoneId::Town));
+        vreg.villagers.push(vdef_with_home("mountain_a", "산악", ZoneId::MountainVillage));
+        vreg.villagers.push(vdef_with_home("mountain_b", "광부", ZoneId::MountainVillage));
+        app.insert_resource(vreg);
+        let mut world = WorldState::default();
+        world.current = ZoneId::MountainVillage;
+        app.insert_resource(world);
+        app.add_systems(Update, spawn_on_startup);
+        app.update();
+        let names: Vec<String> = app.world.query::<&Villager>()
+            .iter(&app.world).map(|v| v.id.clone()).collect();
+        assert!(!names.contains(&"town_a".to_string()), "Town 주민은 산속마을에 스폰 X");
+        assert!(names.iter().all(|n| n.starts_with("mountain_")),
+            "산속 마을엔 home_zone=MountainVillage 주민만: {:?}", names);
+    }
+
+    #[test]
+    fn 기본_home_zone_없는_정의는_Town으로_역직렬화된다() {
+        // home_zone 필드를 생략한 기존 RON 도 default = Town 으로 호환.
+        use crate::modules::zone::ZoneId;
+        let ron = r#"(id: "a", name: "갑", color: (0.5, 0.5, 0.5), dialogs: [], speed: 1.0)"#;
+        let def: VillagerDef = ron::de::from_str(ron).expect("legacy 호환 파싱 실패");
+        assert_eq!(def.home_zone, ZoneId::Town, "필드 누락 시 기본은 Town");
+    }
+
+    #[test]
+    fn home_zone_명시한_정의는_지정_zone으로_역직렬화된다() {
+        use crate::modules::zone::ZoneId;
+        let ron = r#"(id: "a", name: "갑", color: (0.5, 0.5, 0.5), dialogs: [], speed: 1.0, home_zone: MountainVillage)"#;
+        let def: VillagerDef = ron::de::from_str(ron).expect("MountainVillage 파싱 실패");
+        assert_eq!(def.home_zone, ZoneId::MountainVillage);
+
+        let ron2 = r#"(id: "b", name: "을", color: (0.5, 0.5, 0.5), dialogs: [], speed: 1.0, home_zone: SeasideHarbor)"#;
+        let def2: VillagerDef = ron::de::from_str(ron2).expect("SeasideHarbor 파싱 실패");
+        assert_eq!(def2.home_zone, ZoneId::SeasideHarbor);
     }
 }
 

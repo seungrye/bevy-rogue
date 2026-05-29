@@ -107,6 +107,16 @@ pub enum QuestAction {
         #[serde(default)]
         placement: PortalPlacement,
     },
+    /// 정적 zone(Town/MountainVillage/SeasideHarbor 등) 으로 가는 portal 을
+    /// 현재 zone 에 스폰한다. NamedZoneConfig 등록 없이 enum 변형을 그대로 쓴다.
+    /// 시작 마을(Town) 에서 다른 마을(MountainVillage/SeasideHarbor) 로 가는
+    /// 보상 portal 을 자연스럽게 여는 데 쓰인다 — quest 완료 시 새 마을 해금.
+    /// `placement` 미지정 시 `Border` (기본) — 마을 입구로 자연스럽게.
+    OpenZonePortal {
+        target: ZoneId,
+        #[serde(default = "default_zone_portal_placement")]
+        placement: PortalPlacement,
+    },
     /// Named 존으로 가는 포탈과 그 zone 등록을 모두 닫는다 (퀘스트 종료 시 정리)
     ClosePortal(String),
     /// 아이템을 수량 지정하여 지급
@@ -150,6 +160,9 @@ pub enum QuestAction {
 }
 
 fn default_trap_hidden() -> bool { true }
+
+/// `OpenZonePortal.placement` 의 기본값 — Border 로 마을 외곽 입구처럼 자연스럽게.
+fn default_zone_portal_placement() -> PortalPlacement { PortalPlacement::Border }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct QuestSpawn {
@@ -782,6 +795,7 @@ pub fn execute_actions(
     kill_npc: &mut EventWriter<KillNpcEvent>,
     open_portal: &mut EventWriter<SpawnQuestPortalEvent>,
     close_portal: &mut EventWriter<CloseQuestPortalEvent>,
+    open_zone_portal: &mut EventWriter<crate::modules::zone::SpawnZonePortalEvent>,
     despawn_item: &mut EventWriter<DespawnWorldItemEvent>,
     spawn_guards: &mut EventWriter<SpawnGuardEvent>,
     spawn_monster: &mut EventWriter<SpawnMonsterEvent>,
@@ -854,6 +868,17 @@ pub fn execute_actions(
                     format!("포탈이 닫혔다 — {}.", zone)
                 ));
                 info!("퀘스트 포탈 닫기: {}", zone);
+            }
+            QuestAction::OpenZonePortal { target, placement } => {
+                open_zone_portal.send(crate::modules::zone::SpawnZonePortalEvent {
+                    target: target.clone(),
+                    placement: placement.clone(),
+                    quest_id: quest_id.to_string(),
+                });
+                log.send(crate::modules::ui::LogMessage(
+                    format!("{}(으)로 가는 포탈이 열렸다.", target.display_name())
+                ));
+                info!("정적 zone 포탈 열기: {:?}", target);
             }
             QuestAction::DespawnWorldItem(item_id) => {
                 despawn_item.send(DespawnWorldItemEvent(item_id.clone()));
@@ -2109,6 +2134,7 @@ mod tests {
         mut kill_npc: EventWriter<KillNpcEvent>,
         mut open_portal: EventWriter<SpawnQuestPortalEvent>,
         mut close_portal: EventWriter<CloseQuestPortalEvent>,
+        mut open_zone_portal: EventWriter<crate::modules::zone::SpawnZonePortalEvent>,
         mut despawn_item: EventWriter<DespawnWorldItemEvent>,
         mut spawn_guards: EventWriter<SpawnGuardEvent>,
         mut spawn_monster: EventWriter<SpawnMonsterEvent>,
@@ -2120,6 +2146,7 @@ mod tests {
         execute_actions(
             &input.actions, &input.quest_id, input.trigger_pos, &mut state, &mut inventory,
             &mut log, &mut kill_npc, &mut open_portal, &mut close_portal,
+            &mut open_zone_portal,
             &mut despawn_item, &mut spawn_guards, &mut spawn_monster, &mut explode,
             &mut place_traps, &quest_items, &mut deferred,
         );
@@ -2137,6 +2164,7 @@ mod tests {
             .add_event::<KillNpcEvent>()
             .add_event::<SpawnQuestPortalEvent>()
             .add_event::<CloseQuestPortalEvent>()
+            .add_event::<crate::modules::zone::SpawnZonePortalEvent>()
             .add_event::<DespawnWorldItemEvent>()
             .add_event::<SpawnGuardEvent>()
             .add_event::<SpawnMonsterEvent>()
@@ -2267,6 +2295,33 @@ mod tests {
         app.update();
         assert_eq!(app.world.resource::<Events<CloseQuestPortalEvent>>().len(), 1);
         assert_eq!(count_log_messages(&mut app), 1);
+    }
+
+    #[test]
+    fn OpenZonePortal액션은_정적zone_포탈스폰_이벤트와_로그를_발생시킨다() {
+        // 정적 zone(MountainVillage) 으로 가는 portal 액션 → SpawnZonePortalEvent.
+        let mut app = execute_actions_app(vec![QuestAction::OpenZonePortal {
+            target: ZoneId::MountainVillage,
+            placement: PortalPlacement::Border,
+        }]);
+        app.update();
+        let events = app.world.resource::<Events<crate::modules::zone::SpawnZonePortalEvent>>();
+        assert_eq!(events.len(), 1, "정적 zone portal 이벤트 1건");
+        assert_eq!(count_log_messages(&mut app), 1, "로그 1건");
+    }
+
+    #[test]
+    fn OpenZonePortal액션의_기본_placement는_Border이다() {
+        // RON 의 placement 필드 누락 시 #[serde(default = "default_zone_portal_placement")] → Border.
+        let ron = r#"OpenZonePortal(target: SeasideHarbor)"#;
+        let parsed: QuestAction = ron::de::from_str(ron).expect("placement 생략 호환");
+        match parsed {
+            QuestAction::OpenZonePortal { target, placement } => {
+                assert_eq!(target, ZoneId::SeasideHarbor);
+                assert!(matches!(placement, PortalPlacement::Border));
+            }
+            _ => panic!("OpenZonePortal 아님"),
+        }
     }
 
     #[test]
