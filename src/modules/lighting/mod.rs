@@ -364,9 +364,12 @@ impl Plugin for LightingPlugin {
                 // 광량 계산은 플레이어 이동 완료 후, 디밍은 그 뒤에.
                 update_light_map.after(PlayerSystemSet::MovementComplete),
                 // 가시성(update_tile_visibility, ExecuteRegen 이후)을 깐 뒤 광량 디밍을 얹는다.
+                // 또 update_fov 의 brightness 컴포넌트 mut 결과가 같은 frame 에 반영되도록
+                // FovUpdate 의 *후* 로 명시 — 누락 시 임의 순서로 1 frame 지연 발생.
                 apply_light_dimming
                     .after(update_light_map)
-                    .after(MapSystemSet::ExecuteRegen),
+                    .after(MapSystemSet::ExecuteRegen)
+                    .after(PlayerSystemSet::FovUpdate),
             ));
     }
 }

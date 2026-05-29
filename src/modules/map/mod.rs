@@ -464,7 +464,11 @@ impl Plugin for MapPlugin {
                     .in_set(MapSystemSet::ExecuteRegen),
                 execute_apply
                     .in_set(MapSystemSet::ExecuteRegen),
-                update_tile_visibility.after(MapSystemSet::ExecuteRegen),
+                // update_fov 가 시야 갱신 후에 Visibility 토글해야 — visible/revealed
+                // 의 최신 상태를 반영. 누락 시 1 frame 지연.
+                update_tile_visibility
+                    .after(MapSystemSet::ExecuteRegen)
+                    .after(crate::modules::player::PlayerSystemSet::FovUpdate),
                 increment_global_turn,
                 handle_explosion,
                 apply_tile_changes.after(handle_explosion),
